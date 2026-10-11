@@ -2,6 +2,7 @@ pub mod hosts;
 pub mod profiles;
 pub mod secrets;
 pub mod settings;
+pub mod transfer;
 
 use linascp_core::error::{CoreError, Result};
 

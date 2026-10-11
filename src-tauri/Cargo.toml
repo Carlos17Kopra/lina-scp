@@ -23,6 +23,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 tracing = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }
 secrecy = "0.10"
+tauri-plugin-dialog = "2.8"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 tempfile = "3"
