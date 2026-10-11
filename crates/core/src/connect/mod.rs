@@ -1,6 +1,8 @@
 //! SSH connection pipeline: [JumpHost] -> Tcp -> HostKey -> Auth -> Channel -> Shell.
 
+pub mod auth;
 pub mod classify;
+pub mod handler;
 pub mod prompt;
 
 use std::path::PathBuf;
@@ -9,6 +11,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 pub use classify::{classify_io, classify_resolve_error, map_russh_error, network_error, sanitize_log_line};
+pub use handler::{ClientHandler, HandlerError, HostKeyAction, decide_host_key};
 pub use prompt::{EmitFn, HostKeyDecision, KbdPrompt, Prompt, PromptAnswer, PromptBroker};
 
 use crate::error::CoreError;
