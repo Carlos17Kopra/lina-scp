@@ -15,5 +15,5 @@ pub use known_hosts::{HostKeyInfo, HostKeyStatus, KnownHosts, fingerprints};
 pub use model::*;
 pub use paths::AppPaths;
 pub use secrets::{KeyringSecretStore, MemorySecretStore, SecretKind, SecretOwner, SecretStore};
-pub use sshconfig::{import_ssh_config, merge_hosts};
+pub use sshconfig::{INCLUDE_LINE, Mirror, import_ssh_config, merge_hosts};
 pub use store::Store;
