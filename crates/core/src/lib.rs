@@ -2,6 +2,7 @@
 
 pub mod connect;
 pub mod error;
+pub mod export;
 mod fsutil;
 pub mod known_hosts;
 pub mod model;
@@ -12,6 +13,10 @@ pub mod sshconfig;
 pub mod store;
 
 pub use error::{CoreError, NetworkKind, Result};
+pub use export::{
+    Conflict, ExportOptions, FORMAT_VERSION, ImportItem, ImportPreview, ImportReport, ItemKind, Resolution,
+    export_data, import_apply, import_preview,
+};
 pub use known_hosts::{HostKeyInfo, HostKeyStatus, KnownHosts, fingerprints};
 pub use model::*;
 pub use paths::AppPaths;
