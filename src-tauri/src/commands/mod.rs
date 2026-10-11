@@ -1,6 +1,8 @@
+pub mod connect;
 pub mod hosts;
 pub mod profiles;
 pub mod secrets;
+pub mod sessions;
 pub mod settings;
 
 use linascp_core::error::{CoreError, Result};
