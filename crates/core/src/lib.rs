@@ -3,6 +3,7 @@
 pub mod error;
 pub mod model;
 pub mod paths;
+pub mod session;
 
 pub use error::{CoreError, NetworkKind, Result};
 pub use model::*;
