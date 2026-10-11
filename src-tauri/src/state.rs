@@ -20,14 +20,18 @@ pub struct AppState {
     pub paths: AppPaths,
     pub store: Arc<Store>,
     pub secrets: Arc<dyn SecretStore>,
-    pub sessions: SessionManager,
+    /// `Arc`-wrapped (not just the usual `&AppState` borrow) so a session's own output sink
+    /// can carry a cheap, 'static-owned handle for self-cleanup on exit/error — see
+    /// `commands::sessions::cleanup_fn`.
+    pub sessions: Arc<SessionManager>,
     /// Global prompt broker; prompts are published through each call's own emit
     /// (`ask_cancellable`), so its constructor emit is a no-op.
     pub broker: Arc<PromptBroker>,
     /// Running connection attempts keyed by the UI-generated connect id.
     pub connects: Mutex<HashMap<Uuid, CancellationToken>>,
-    /// Output pumps of open sessions (needed by `session_ack` / `session_close`).
-    pub outputs: Mutex<HashMap<SessionId, Arc<OutputPump>>>,
+    /// Output pumps of open sessions (needed by `session_ack` / `session_close`). `Arc`-wrapped
+    /// for the same self-cleanup reason as `sessions`.
+    pub outputs: Arc<Mutex<HashMap<SessionId, Arc<OutputPump>>>>,
 }
 
 impl AppState {
@@ -36,10 +40,10 @@ impl AppState {
             paths,
             store: Arc::new(store),
             secrets,
-            sessions: SessionManager::default(),
+            sessions: Arc::new(SessionManager::default()),
             broker: Arc::new(PromptBroker::new(Arc::new(|_event: ConnectEvent| {}))),
             connects: Mutex::new(HashMap::new()),
-            outputs: Mutex::new(HashMap::new()),
+            outputs: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

@@ -21,6 +21,14 @@ pub enum SessionEventDto {
 
 pub(crate) type EventSender = Arc<dyn Fn(SessionEventDto) + Send + Sync>;
 
+/// Removes a session from `AppState` once it is no longer running. Captured by that session's
+/// own output sink (see `make_sink`), which can be invoked from a background thread/task long
+/// after the command that created it returned — so this closure owns cheap, `Arc`-cloned
+/// handles to just the two maps it needs, never a borrow of `AppState` itself or a Tauri
+/// `AppHandle` (which would make it easy to accidentally create a reference cycle back into
+/// the session it is attached to).
+pub(crate) type Cleanup = Arc<dyn Fn() + Send + Sync>;
+
 pub(crate) fn channel_event_sender(channel: Channel<SessionEventDto>) -> EventSender {
     Arc::new(move |event: SessionEventDto| {
         if let Err(error) = channel.send(event) {
@@ -29,24 +37,59 @@ pub(crate) fn channel_event_sender(channel: Channel<SessionEventDto>) -> EventSe
     })
 }
 
-/// Core `OutputSink` that feeds the pump and reports exit/error after flushing pending output.
-pub(crate) fn make_sink(pump: Arc<OutputPump>, send_event: EventSender) -> OutputSink {
+/// Core `OutputSink` that feeds the pump, reports exit/error after flushing pending output,
+/// and removes the session from `AppState` (self-cleanup) so a session that ends on its own —
+/// the shell exits, the SSH connection drops — is not kept alive until an explicit
+/// `session_close` call.
+pub(crate) fn make_sink(pump: Arc<OutputPump>, send_event: EventSender, cleanup: Cleanup) -> OutputSink {
     Arc::new(move |event: SessionEvent| match event {
         SessionEvent::Output(bytes) => pump.push(&bytes),
         SessionEvent::Exit { code } => {
             pump.close();
+            cleanup();
             send_event(SessionEventDto::Exit { code });
         }
         SessionEvent::Error(error) => {
             pump.close();
+            cleanup();
             send_event(SessionEventDto::Error { error });
         }
+    })
+}
+
+/// Builds the self-cleanup closure for session `id` ahead of time (the id is minted before the
+/// session itself exists, precisely so this closure — handed to the session's sink — can
+/// already know what to remove once it eventually stops running).
+pub(crate) fn cleanup_fn(state: &AppState, id: SessionId) -> Cleanup {
+    let sessions = state.sessions.clone();
+    let outputs = state.outputs.clone();
+    Arc::new(move || {
+        sessions.remove(id);
+        lock(&outputs).remove(&id);
     })
 }
 
 pub(crate) fn register(state: &AppState, id: SessionId, session: Arc<dyn Session>, pump: Arc<OutputPump>) {
     state.sessions.insert(id, session);
     lock(&state.outputs).insert(id, pump);
+}
+
+/// Removes session `id` from both maps, returning whatever was present. Shared by the explicit
+/// `session_close` path and by `heal_if_already_exited`'s race-closing re-check.
+pub(crate) fn remove_session(state: &AppState, id: SessionId) -> (Option<Arc<dyn Session>>, Option<Arc<OutputPump>>) {
+    (state.sessions.remove(id), lock(&state.outputs).remove(&id))
+}
+
+/// Closes the narrow window between spawning/connecting a session and registering it: if the
+/// session already exited by the time we get here (the sink already ran `cleanup`, which found
+/// nothing yet to remove because `register` had not run), the entry `register` just inserted
+/// would otherwise never be cleaned up again. `OutputPump::close` is always the first thing the
+/// sink does on `Exit`/`Error`, strictly before `cleanup`, so `pump.is_closed()` is a reliable
+/// (mutex-synchronized) signal that cleanup has run or is about to.
+pub(crate) fn heal_if_already_exited(state: &AppState, id: SessionId, pump: &OutputPump) {
+    if pump.is_closed() {
+        remove_session(state, id);
+    }
 }
 
 fn get_session(state: &AppState, id: SessionId) -> Result<Arc<dyn Session>> {
@@ -60,9 +103,11 @@ pub(crate) fn open_local(
     pump: Arc<OutputPump>,
     send_event: EventSender,
 ) -> Result<SessionId> {
-    let session = LocalPtySession::spawn(cols, rows, make_sink(pump.clone(), send_event))?;
     let id = Uuid::new_v4();
-    register(state, id, Arc::new(session), pump);
+    let sink = make_sink(pump.clone(), send_event, cleanup_fn(state, id));
+    let session = LocalPtySession::spawn(cols, rows, sink)?;
+    register(state, id, Arc::new(session), pump.clone());
+    heal_if_already_exited(state, id, &pump);
     Ok(id)
 }
 
@@ -82,11 +127,9 @@ pub(crate) fn ack(state: &AppState, id: SessionId, bytes: u32) {
     }
 }
 
-/// Closing an unknown session is not an error.
+/// Closing an unknown (or already self-closed) session is not an error.
 pub(crate) async fn close(state: &AppState, id: SessionId) -> Result<()> {
-    let session = state.sessions.get(id);
-    state.sessions.remove(id);
-    let pump = lock(&state.outputs).remove(&id);
+    let (session, pump) = remove_session(state, id);
     if let Some(pump) = pump {
         pump.close();
     }
@@ -137,6 +180,7 @@ pub async fn session_close(state: State<'_, AppState>, session_id: SessionId) ->
 mod tests {
     use super::*;
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     type Bytes = Arc<Mutex<Vec<u8>>>;
@@ -155,27 +199,46 @@ mod tests {
         (Arc::new(move |event: SessionEventDto| sink.lock().unwrap().push(event)), events)
     }
 
+    /// A `Cleanup` that just counts its calls, for tests that only care whether `make_sink`
+    /// invokes it (the end-to-end removal itself is covered by
+    /// `a_session_that_exits_on_its_own_is_removed_from_both_maps`).
+    fn counting_cleanup() -> (Cleanup, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        (
+            Arc::new(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }),
+            calls,
+        )
+    }
+
     #[test]
     fn sink_routes_output_and_flushes_before_exit() {
         let (pump, bytes) = collecting_pump();
         let (send, events) = collecting_events();
-        let sink = make_sink(pump.clone(), send);
+        let (cleanup, calls) = counting_cleanup();
+        let sink = make_sink(pump.clone(), send, cleanup);
 
         sink(SessionEvent::Output(b"hello".to_vec()));
         assert!(bytes.lock().unwrap().is_empty(), "small output waits for the flush tick");
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "plain output must not trigger cleanup");
 
         sink(SessionEvent::Exit { code: Some(0) });
         assert_eq!(*bytes.lock().unwrap(), b"hello".to_vec());
         assert!(pump.is_closed());
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "exit must trigger cleanup exactly once");
         assert!(matches!(events.lock().unwrap().as_slice(), [SessionEventDto::Exit { code: Some(0) }]));
     }
 
     #[test]
-    fn sink_reports_session_errors() {
+    fn sink_reports_session_errors_and_cleans_up() {
         let (pump, _bytes) = collecting_pump();
         let (send, events) = collecting_events();
-        make_sink(pump, send)(SessionEvent::Error(CoreError::Cancelled));
+        let (cleanup, calls) = counting_cleanup();
+        make_sink(pump, send, cleanup)(SessionEvent::Error(CoreError::Cancelled));
         assert!(matches!(events.lock().unwrap().as_slice(), [SessionEventDto::Error { error: CoreError::Cancelled }]));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -223,5 +286,31 @@ mod tests {
         close(&state, id).await.unwrap();
         assert!(state.sessions.get(id).is_none());
         assert!(state.outputs.lock().unwrap().get(&id).is_none());
+    }
+
+    /// I2: a session that exits on its own (nobody ever calls `session_close`) must still be
+    /// removed from both `AppState` maps, so the (for SSH: `russh`) connection is not kept
+    /// alive forever.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_session_that_exits_on_its_own_is_removed_from_both_maps() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::for_tests(dir.path());
+        let (pump, _bytes) = collecting_pump();
+        pump.start_ticker();
+        let (send, events) = collecting_events();
+
+        let id = open_local(&state, 80, 24, pump, send).unwrap();
+        write(&state, id, b"exit 0\n").await.unwrap();
+
+        let mut removed = false;
+        for _ in 0..200 {
+            if state.sessions.get(id).is_none() && state.outputs.lock().unwrap().get(&id).is_none() {
+                removed = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(removed, "a session that exited on its own must be removed from both maps");
+        assert!(matches!(events.lock().unwrap().as_slice(), [SessionEventDto::Exit { .. }]));
     }
 }
