@@ -1,8 +1,9 @@
 pub mod commands;
 pub mod dto;
+pub mod startup;
 pub mod state;
 
-use commands::{hosts, profiles, secrets, settings};
+use commands::{hosts, profiles, secrets, settings, transfer};
 
 /// Where the generated TypeScript bindings live (committed to git).
 pub const BINDINGS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../ui/src/ipc/bindings.ts");
@@ -24,6 +25,10 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             secrets::secret_delete,
             settings::settings_get,
             settings::settings_set,
+            transfer::export_file,
+            transfer::import_preview,
+            transfer::import_apply,
+            transfer::ssh_config_reload,
         ])
         .dangerously_cast_bigints_to_number()
 }
@@ -33,6 +38,8 @@ pub fn export_bindings(builder: &tauri_specta::Builder<tauri::Wry>) -> Result<()
 }
 
 pub fn run() {
+    // Opening the store first is deliberate: the compat-rendering flag must be known
+    // before any thread exists and before WebKit is initialised.
     let state = match state::AppState::init() {
         Ok(state) => state,
         Err(error) => {
@@ -40,12 +47,18 @@ pub fn run() {
             std::process::exit(1);
         }
     };
+    startup::apply_webkit_workarounds(&state.store);
+    let _log_guard = startup::init_logging(&state.paths.log_dir());
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "LinaSCP starting");
+
     let builder = specta_builder();
     #[cfg(debug_assertions)]
     if let Err(error) = export_bindings(&builder) {
-        eprintln!("LinaSCP: failed to export TypeScript bindings: {error}");
+        tracing::warn!(%error, "failed to export TypeScript bindings");
     }
+
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(state)
         .invoke_handler(builder.invoke_handler())
         .run(tauri::generate_context!())
@@ -62,5 +75,9 @@ mod tests {
         assert!(ts.contains("export type CoreError ="));
         assert!(ts.contains("export type Settings ="));
         assert!(ts.contains("export type SecretOwner ="));
+        assert!(ts.contains(
+            "exportFile: (path: string, includeSecrets: boolean, includeKeyFiles: boolean, passphrase: string | null)"
+        ));
+        assert!(ts.contains("sshConfigReload: () =>"));
     }
 }

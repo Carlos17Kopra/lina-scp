@@ -17,6 +17,11 @@ export const commands = {
 	secretDelete: (owner: SecretOwner, kind: SecretKind) => typedError<null, CoreError>(__TAURI_INVOKE("secret_delete", { owner, kind })),
 	settingsGet: () => typedError<Settings, CoreError>(__TAURI_INVOKE("settings_get")),
 	settingsSet: (settings: Settings) => typedError<Settings, CoreError>(__TAURI_INVOKE("settings_set", { settings })),
+	exportFile: (path: string, includeSecrets: boolean, includeKeyFiles: boolean, passphrase: string | null) => typedError<null, CoreError>(__TAURI_INVOKE("export_file", { path, includeSecrets, includeKeyFiles, passphrase })),
+	importPreview: (path: string) => typedError<ImportPreview, CoreError>(__TAURI_INVOKE("import_preview", { path })),
+	importApply: (path: string, passphrase: string | null, resolutions: { [key in string]: Resolution }) => typedError<ImportReport, CoreError>(__TAURI_INVOKE("import_apply", { path, passphrase, resolutions })),
+	/**  Re-reads `~/.ssh/config` (it is read on every list call; this is the explicit "Neu einlesen"). */
+	sshConfigReload: () => typedError<Host[], CoreError>(__TAURI_INVOKE("ssh_config_reload")),
 };
 
 /* Types */
@@ -27,6 +32,8 @@ export type AuthConfig = {
 };
 
 export type AuthMethod = "password" | "key" | "agent" | "keyboardInteractive";
+
+export type Conflict = "sameId" | "sameName";
 
 /**
  *  The single error type of `linascp-core`.
@@ -79,6 +86,26 @@ export type HostAuth = { kind: "profile"; profileId: string } | { kind: "custom"
 
 export type HostSource = "linascp" | "sshConfig";
 
+export type ImportItem = {
+	id: string,
+	name: string,
+	kind: ItemKind,
+	conflict: Conflict | null,
+};
+
+export type ImportPreview = {
+	items: ImportItem[],
+	hasSecrets: boolean,
+};
+
+export type ImportReport = {
+	imported: number,
+	skipped: number,
+	secretsRestored: number,
+};
+
+export type ItemKind = "host" | "profile" | "group";
+
 export type LoginProfile = {
 	id: string,
 	name: string,
@@ -103,6 +130,8 @@ export type ProfileWithUsage = {
 	profile: LoginProfile,
 	usedBy: number,
 };
+
+export type Resolution = "skip" | "replace" | "duplicate";
 
 export type SecretKind = "password" | "passphrase";
 
