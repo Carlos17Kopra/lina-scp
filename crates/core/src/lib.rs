@@ -3,7 +3,9 @@
 pub mod error;
 pub mod model;
 pub mod paths;
+pub mod sshconfig;
 
 pub use error::{CoreError, NetworkKind, Result};
 pub use model::*;
 pub use paths::AppPaths;
+pub use sshconfig::{import_ssh_config, merge_hosts};
