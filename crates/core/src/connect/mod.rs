@@ -4,21 +4,30 @@ pub mod auth;
 pub mod classify;
 pub mod handler;
 pub mod prompt;
+pub mod ssh_session;
 
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
+use russh::client;
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::TcpStream;
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 pub use classify::{classify_io, classify_resolve_error, map_russh_error, network_error, sanitize_log_line};
 pub use handler::{ClientHandler, HandlerError, HostKeyAction, decide_host_key};
 pub use prompt::{EmitFn, HostKeyDecision, KbdPrompt, Prompt, PromptAnswer, PromptBroker};
+pub use ssh_session::SshSession;
 
-use crate::error::CoreError;
+use crate::error::{CoreError, NetworkKind, Result};
 use crate::known_hosts::KnownHosts;
 use crate::model::{Host, LoginProfile};
 use crate::secrets::SecretStore;
-use crate::session::SessionId;
+use crate::session::{OutputSink, SessionId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
@@ -98,6 +107,341 @@ pub fn plan_steps(req: &ConnectRequest) -> Vec<Step> {
     steps
 }
 
+/// Byte stream an SSH handshake can run over (TCP or a jump tunnel).
+trait Transport: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> Transport for T {}
+
+const TERM: &str = "xterm-256color";
+
+/// Run `fut` with a deadline of `timeout_s` seconds (0 = no deadline).
+/// The deadline is disarmed for good the first time `disarm` fires, so a
+/// step that notifies it (e.g. once the server's host key has arrived,
+/// before a possibly slow user prompt) is only bounded up to that point.
+/// Passing a `Notify` that is never triggered yields a plain, full timeout.
+async fn with_setup_timeout<T>(
+    timeout_s: u32,
+    disarm: Arc<Notify>,
+    timeout_message: impl FnOnce() -> String,
+    fut: impl Future<Output = Result<T>>,
+) -> Result<T> {
+    if timeout_s == 0 {
+        return fut.await;
+    }
+    tokio::pin!(fut);
+    let sleep = tokio::time::sleep(Duration::from_secs(u64::from(timeout_s)));
+    tokio::pin!(sleep);
+    let mut armed = true;
+    loop {
+        tokio::select! {
+            result = &mut fut => return result,
+            () = &mut sleep, if armed => {
+                return Err(network_error(NetworkKind::Timeout, timeout_message()));
+            }
+            () = disarm.notified() => armed = false,
+        }
+    }
+}
+
+/// Shared pipeline context for one connect attempt.
+struct Pipeline {
+    known_hosts: Arc<KnownHosts>,
+    secrets: Arc<dyn SecretStore>,
+    agent_sock: Option<PathBuf>,
+    broker: Arc<PromptBroker>,
+    emit: EmitFn,
+    cancel: CancellationToken,
+}
+
+/// An authenticated connection to the target (plus jump connection).
+struct Established {
+    handle: client::Handle<ClientHandler>,
+    jump: Option<client::Handle<ClientHandler>>,
+}
+
+impl Pipeline {
+    fn new(deps: ConnectDeps, broker: Arc<PromptBroker>, emit: EmitFn, cancel: CancellationToken) -> Self {
+        Self {
+            known_hosts: Arc::new(deps.known_hosts),
+            secrets: deps.secrets,
+            agent_sock: deps.agent_sock,
+            broker,
+            emit,
+            cancel,
+        }
+    }
+
+    fn log(&self, line: impl Into<String>) {
+        (self.emit)(log_line(line));
+    }
+
+    /// Run one step: emits Started/Done/Failed and aborts on cancellation.
+    async fn step<T, F>(&self, step: Step, fut: F) -> Result<T>
+    where
+        F: Future<Output = Result<T>>,
+    {
+        (self.emit)(ConnectEvent::StepStarted { step });
+        let result = tokio::select! {
+            biased;
+            _ = self.cancel.cancelled() => Err(CoreError::Cancelled),
+            r = fut => r,
+        };
+        match &result {
+            Ok(_) => (self.emit)(ConnectEvent::StepDone { step }),
+            Err(error) => (self.emit)(ConnectEvent::StepFailed { step, error: error.clone() }),
+        }
+        result
+    }
+
+    /// Resolve and connect with the host's timeout (0 = no timeout).
+    async fn tcp_connect(&self, host: &Host) -> Result<TcpStream> {
+        let address = host.address.clone();
+        let port = host.port;
+        let connect = async {
+            self.log(format!("debug1: Connecting to {address} port {port}."));
+            let addrs: Vec<_> = tokio::net::lookup_host((address.as_str(), port))
+                .await
+                .map_err(|e| {
+                    network_error(classify_resolve_error(&e), format!("Could not resolve hostname {address}: {e}"))
+                })?
+                .collect();
+            if addrs.is_empty() {
+                return Err(network_error(
+                    NetworkKind::Dns,
+                    format!("Could not resolve hostname {address}: no addresses"),
+                ));
+            }
+            let mut last_error = None;
+            for addr in addrs {
+                match TcpStream::connect(addr).await {
+                    Ok(stream) => {
+                        let _ = stream.set_nodelay(true);
+                        self.log(format!("debug1: Connection established to {addr}."));
+                        return Ok(stream);
+                    }
+                    Err(e) => {
+                        self.log(format!("debug1: connect to {addr} failed: {e}"));
+                        last_error = Some(e);
+                    }
+                }
+            }
+            let e = last_error.expect("at least one address was tried");
+            Err(network_error(classify_io(&e), format!("connect to host {address} port {port}: {e}")))
+        };
+        if host.timeout_s == 0 {
+            return connect.await;
+        }
+        match tokio::time::timeout(Duration::from_secs(u64::from(host.timeout_s)), connect).await {
+            Ok(result) => result,
+            Err(_) => Err(network_error(
+                NetworkKind::Timeout,
+                format!("connect to host {address} port {port}: Connection timed out after {}s", host.timeout_s),
+            )),
+        }
+    }
+
+    fn client_config(host: &Host) -> Arc<client::Config> {
+        Arc::new(client::Config {
+            keepalive_interval: (host.keepalive_s > 0).then(|| Duration::from_secs(u64::from(host.keepalive_s))),
+            keepalive_max: 3,
+            nodelay: true,
+            ..Default::default()
+        })
+    }
+
+    /// SSH handshake incl. host key verification over `stream`. Bounded by
+    /// `host.timeout_s` only up to the moment the server's host key reaches
+    /// the handler; time spent in a host-key prompt (or the rest of kex
+    /// after that) is not counted.
+    async fn handshake(&self, host: &Host, stream: Box<dyn Transport>) -> Result<client::Handle<ClientHandler>> {
+        let key_seen = Arc::new(Notify::new());
+        let handler = ClientHandler::new(
+            host.address.clone(),
+            host.port,
+            self.known_hosts.clone(),
+            self.broker.clone(),
+            self.emit.clone(),
+            self.cancel.clone(),
+            key_seen.clone(),
+        );
+        let config = Self::client_config(host);
+        with_setup_timeout(
+            host.timeout_s,
+            key_seen,
+            || {
+                format!(
+                    "connect to host {} port {}: connection timed out during SSH handshake",
+                    host.address, host.port
+                )
+            },
+            async { client::connect_stream(config, stream, handler).await.map_err(CoreError::from) },
+        )
+        .await
+    }
+
+    async fn authenticate(&self, handle: &mut client::Handle<ClientHandler>, target: &ConnectTarget) -> Result<()> {
+        let user = auth::effective_user(target)?;
+        let (auth_config, owner) = auth::resolve_auth(target)?;
+        let ctx = auth::AuthContext {
+            user,
+            host: target.host.address.clone(),
+            auth: auth_config,
+            owner,
+            secrets: self.secrets.clone(),
+            agent_sock: self.agent_sock.as_deref(),
+            broker: &self.broker,
+            emit: &self.emit,
+            cancel: &self.cancel,
+        };
+        let mut authenticator = auth::HandleAuthenticator { handle };
+        auth::authenticate(&mut authenticator, &ctx).await
+    }
+
+    /// Full connection to the jump host (own host key check and auth).
+    async fn connect_jump(&self, jump: &ConnectTarget) -> Result<client::Handle<ClientHandler>> {
+        self.log(format!("debug1: Connecting to jump host {}", jump.host.address));
+        let stream = self.tcp_connect(&jump.host).await?;
+        let mut handle = self.handshake(&jump.host, Box::new(stream)).await?;
+        self.authenticate(&mut handle, jump).await?;
+        Ok(handle)
+    }
+
+    /// Steps JumpHost? -> Tcp -> HostKey -> Auth.
+    async fn establish(&self, req: &ConnectRequest) -> Result<Established> {
+        let jump = match &req.jump {
+            Some(jump_target) => Some(self.step(Step::JumpHost, self.connect_jump(jump_target)).await?),
+            None => None,
+        };
+        let host = &req.target.host;
+        let stream: Box<dyn Transport> = self
+            .step(Step::Tcp, async {
+                match &jump {
+                    Some(jump_handle) => {
+                        self.log(format!(
+                            "debug1: Opening direct-tcpip channel to {}:{} via jump host",
+                            host.address, host.port
+                        ));
+                        let open = jump_handle.channel_open_direct_tcpip(
+                            host.address.clone(),
+                            u32::from(host.port),
+                            "127.0.0.1",
+                            0,
+                        );
+                        let channel = with_setup_timeout(
+                            host.timeout_s,
+                            Arc::new(Notify::new()),
+                            || {
+                                format!(
+                                    "jump host could not connect to {}:{}: timed out after {}s",
+                                    host.address, host.port, host.timeout_s
+                                )
+                            },
+                            async {
+                                open.await.map_err(|e| {
+                                    network_error(
+                                        NetworkKind::Other,
+                                        format!("jump host could not connect to {}:{}: {e}", host.address, host.port),
+                                    )
+                                })
+                            },
+                        )
+                        .await?;
+                        Ok(Box::new(channel.into_stream()) as Box<dyn Transport>)
+                    }
+                    None => Ok(Box::new(self.tcp_connect(host).await?) as Box<dyn Transport>),
+                }
+            })
+            .await?;
+        let mut handle = self.step(Step::HostKey, self.handshake(host, stream)).await?;
+        self.step(Step::Auth, self.authenticate(&mut handle, &req.target)).await?;
+        Ok(Established { handle, jump })
+    }
+
+    /// Steps Channel -> Shell; returns the running session.
+    async fn open_shell(&self, req: &ConnectRequest, est: Established, sink: OutputSink) -> Result<SshSession> {
+        let host = &req.target.host;
+        let channel = self
+            .step(Step::Channel, async {
+                self.log("debug1: Requesting session channel");
+                let channel = est.handle.channel_open_session().await.map_err(map_russh_error)?;
+                self.log(format!("debug1: Requesting PTY {TERM} {}x{}", req.cols, req.rows));
+                channel
+                    .request_pty(false, TERM, u32::from(req.cols), u32::from(req.rows), 0, 0, &[])
+                    .await
+                    .map_err(map_russh_error)?;
+                for var in &host.env {
+                    self.log(format!("debug1: Sending env {}", var.key));
+                    channel.set_env(false, var.key.clone(), var.value.clone()).await.map_err(map_russh_error)?;
+                }
+                Ok(channel)
+            })
+            .await?;
+        self.step(Step::Shell, async {
+            self.log("debug1: Requesting shell");
+            channel.request_shell(false).await.map_err(map_russh_error)?;
+            if let Some(command) = host.start_command.as_deref().filter(|c| !c.trim().is_empty()) {
+                self.log("debug1: Sending start command");
+                channel.data(format!("{command}\n").as_bytes()).await.map_err(map_russh_error)?;
+            }
+            Ok(())
+        })
+        .await?;
+        Ok(SshSession::start(channel, est.handle, est.jump, sink))
+    }
+}
+
+async fn disconnect(est: Established) {
+    let _ = est.handle.disconnect(russh::Disconnect::ByApplication, "", "en").await;
+    if let Some(jump) = est.jump {
+        let _ = jump.disconnect(russh::Disconnect::ByApplication, "", "en").await;
+    }
+}
+
+/// Run the full pipeline and return the interactive session.
+/// The caller registers the session and emits `ConnectEvent::Connected`.
+pub async fn connect_ssh(
+    req: ConnectRequest,
+    deps: ConnectDeps,
+    broker: Arc<PromptBroker>,
+    emit: Arc<dyn Fn(ConnectEvent) + Send + Sync>,
+    sink: OutputSink,
+    cancel: CancellationToken,
+) -> Result<SshSession> {
+    emit(ConnectEvent::Steps { steps: plan_steps(&req) });
+    let pipeline = Pipeline::new(deps, broker, emit.clone(), cancel);
+    let result = async {
+        let est = pipeline.establish(&req).await?;
+        pipeline.open_shell(&req, est, sink).await
+    }
+    .await;
+    if let Err(error) = &result {
+        emit(ConnectEvent::Failed { error: error.clone() });
+    }
+    result
+}
+
+/// "Verbindung testen": run until authentication succeeded, then disconnect.
+pub async fn test_connection(
+    req: ConnectRequest,
+    deps: ConnectDeps,
+    broker: Arc<PromptBroker>,
+    emit: Arc<dyn Fn(ConnectEvent) + Send + Sync>,
+    cancel: CancellationToken,
+) -> Result<()> {
+    let steps = plan_steps(&req).into_iter().filter(|s| !matches!(s, Step::Channel | Step::Shell)).collect();
+    emit(ConnectEvent::Steps { steps });
+    let pipeline = Pipeline::new(deps, broker, emit.clone(), cancel);
+    match pipeline.establish(&req).await {
+        Ok(est) => {
+            disconnect(est).await;
+            Ok(())
+        }
+        Err(error) => {
+            emit(ConnectEvent::Failed { error: error.clone() });
+            Err(error)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,5 +493,175 @@ mod tests {
         let json = serde_json::to_value(ConnectEvent::Failed { error: CoreError::Cancelled }).unwrap();
         assert_eq!(json["kind"], "failed");
         assert!(json["error"].is_object());
+    }
+}
+
+#[cfg(test)]
+mod pipeline_tests {
+    use super::*;
+    use crate::secrets::MemorySecretStore;
+    use std::sync::Mutex;
+
+    struct Recorder {
+        events: Arc<Mutex<Vec<ConnectEvent>>>,
+        emit: EmitFn,
+    }
+
+    fn recorder() -> Recorder {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let e2 = events.clone();
+        let emit: EmitFn = Arc::new(move |event| e2.lock().unwrap().push(event));
+        Recorder { events, emit }
+    }
+
+    fn deps(dir: &std::path::Path) -> ConnectDeps {
+        ConnectDeps {
+            known_hosts: KnownHosts::new(dir.join("known_hosts")),
+            secrets: Arc::new(MemorySecretStore::new()),
+            agent_sock: None,
+        }
+    }
+
+    fn request(address: &str, port: u16) -> ConnectRequest {
+        let mut host = Host::new("t", address);
+        host.port = port;
+        host.timeout_s = 5;
+        ConnectRequest { target: ConnectTarget { host, profile: None }, jump: None, cols: 80, rows: 24 }
+    }
+
+    fn noop_sink() -> OutputSink {
+        Arc::new(|_| {})
+    }
+
+    async fn run(req: ConnectRequest, cancel: CancellationToken) -> (Result<SshSession>, Vec<ConnectEvent>) {
+        let dir = tempfile::tempdir().unwrap();
+        let rec = recorder();
+        let broker = Arc::new(PromptBroker::new(Arc::new(|_| {})));
+        let result = connect_ssh(req, deps(dir.path()), broker, rec.emit.clone(), noop_sink(), cancel).await;
+        let events = rec.events.lock().unwrap().clone();
+        (result, events)
+    }
+
+    fn free_port() -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    }
+
+    #[tokio::test]
+    async fn refused_port_is_classified_and_reported() {
+        let (result, events) = run(request("127.0.0.1", free_port()), CancellationToken::new()).await;
+        assert!(matches!(result, Err(CoreError::Network { kind: NetworkKind::Refused, .. })));
+        assert!(matches!(&events[0], ConnectEvent::Steps { steps } if steps[0] == Step::Tcp));
+        assert!(matches!(events[1], ConnectEvent::StepStarted { step: Step::Tcp }));
+        assert!(events.iter().any(|e| matches!(
+            e,
+            ConnectEvent::StepFailed { step: Step::Tcp, error: CoreError::Network { kind: NetworkKind::Refused, .. } }
+        )));
+        assert!(matches!(events.last(), Some(ConnectEvent::Failed { .. })));
+    }
+
+    #[tokio::test]
+    async fn unresolvable_host_is_dns_error() {
+        let (result, _) = run(request("nonexistent.invalid", 22), CancellationToken::new()).await;
+        assert!(matches!(result, Err(CoreError::Network { kind: NetworkKind::Dns, .. })));
+    }
+
+    #[tokio::test]
+    async fn cancelled_token_aborts_pipeline() {
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let (result, events) = run(request("127.0.0.1", free_port()), cancel).await;
+        assert!(matches!(result, Err(CoreError::Cancelled)));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ConnectEvent::StepFailed { step: Step::Tcp, error: CoreError::Cancelled }))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_connection_reports_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let rec = recorder();
+        let broker = Arc::new(PromptBroker::new(Arc::new(|_| {})));
+        let result = test_connection(
+            request("127.0.0.1", free_port()),
+            deps(dir.path()),
+            broker,
+            rec.emit.clone(),
+            CancellationToken::new(),
+        )
+        .await;
+        assert!(matches!(result, Err(CoreError::Network { kind: NetworkKind::Refused, .. })));
+        let events = rec.events.lock().unwrap();
+        assert!(matches!(
+            &events[0],
+            ConnectEvent::Steps { steps } if steps == &vec![Step::Tcp, Step::HostKey, Step::Auth]
+        ));
+    }
+
+    fn request_with_timeout(address: &str, port: u16, timeout_s: u32) -> ConnectRequest {
+        let mut req = request(address, port);
+        req.target.host.timeout_s = timeout_s;
+        req
+    }
+
+    /// A server that accepts the TCP connection but never sends the SSH
+    /// identification banner must not hang the `HostKey` step forever: the
+    /// handshake has to fail with a `Timeout` once `host.timeout_s` elapses.
+    #[tokio::test]
+    async fn handshake_without_banner_times_out() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                // Hold the connection open without ever writing a banner.
+                let _ = stream;
+                tokio::time::sleep(Duration::from_secs(30)).await;
+            }
+        });
+        let started = tokio::time::Instant::now();
+        let (result, events) =
+            run(request_with_timeout(&addr.ip().to_string(), addr.port(), 1), CancellationToken::new()).await;
+        assert!(started.elapsed() < Duration::from_secs(5), "must fail close to the 1s timeout, not hang");
+        assert!(matches!(result, Err(CoreError::Network { kind: NetworkKind::Timeout, .. })));
+        assert!(events.iter().any(|e| matches!(
+            e,
+            ConnectEvent::StepFailed {
+                step: Step::HostKey,
+                error: CoreError::Network { kind: NetworkKind::Timeout, .. }
+            }
+        )));
+        assert_eq!(events.iter().filter(|e| matches!(e, ConnectEvent::Failed { .. })).count(), 1);
+        assert!(matches!(events.last(), Some(ConnectEvent::Failed { .. })));
+    }
+
+    /// `timeout_s == 0` must keep meaning "no timeout" for the handshake
+    /// deadline helper too (not just for `tcp_connect`).
+    #[tokio::test]
+    async fn setup_timeout_zero_means_no_timeout() {
+        let disarm = Arc::new(Notify::new());
+        let fut = with_setup_timeout(0, disarm, || "unused".to_string(), std::future::pending::<Result<()>>());
+        let outcome = tokio::time::timeout(Duration::from_millis(50), fut).await;
+        assert!(outcome.is_err(), "with timeout_s = 0 the deadline helper must never resolve on its own");
+    }
+
+    /// Once `disarm` has fired (host key received), the remaining wait must
+    /// no longer be bounded by the deadline, even though it outlives it.
+    /// This stands in for "time spent in the host-key prompt is excluded"
+    /// without needing a real prompt or network server.
+    #[tokio::test]
+    async fn setup_timeout_is_disarmed_once_signalled() {
+        let disarm = Arc::new(Notify::new());
+        let d2 = disarm.clone();
+        let fut = async move {
+            d2.notify_one();
+            // Outlives the 1s deadline; must still succeed because the
+            // signal above disarmed it first.
+            tokio::time::sleep(Duration::from_millis(1200)).await;
+            Ok::<(), CoreError>(())
+        };
+        let result = with_setup_timeout(1, disarm, || "must not fire".to_string(), fut).await;
+        assert!(result.is_ok(), "deadline must stay disarmed once the signal has fired");
     }
 }

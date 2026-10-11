@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use russh::client;
 use russh::keys::{PublicKey, PublicKeyOrCertificate};
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use super::classify::map_russh_error;
@@ -91,9 +92,14 @@ pub struct ClientHandler {
     broker: Arc<PromptBroker>,
     emit: EmitFn,
     cancel: CancellationToken,
+    /// Notified as soon as the server's host key reaches `check_server_key`,
+    /// so the caller can stop counting its setup timeout against the
+    /// (possibly slow) host-key prompt that follows.
+    key_seen: Arc<Notify>,
 }
 
 impl ClientHandler {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         host: String,
         port: u16,
@@ -101,8 +107,9 @@ impl ClientHandler {
         broker: Arc<PromptBroker>,
         emit: EmitFn,
         cancel: CancellationToken,
+        key_seen: Arc<Notify>,
     ) -> Self {
-        Self { host, port, known_hosts, broker, emit, cancel }
+        Self { host, port, known_hosts, broker, emit, cancel, key_seen }
     }
 
     async fn verify(&self, key: &PublicKey) -> Result<()> {
@@ -144,6 +151,9 @@ impl client::Handler for ClientHandler {
         &mut self,
         server_public_key: &PublicKeyOrCertificate,
     ) -> std::result::Result<bool, Self::Error> {
+        // The server's key has now arrived; a caller-side setup timeout must
+        // stop counting from here (the host-key prompt below can be slow).
+        self.key_seen.notify_one();
         match server_public_key {
             PublicKeyOrCertificate::PublicKey { key, .. } => {
                 self.verify(key).await.map_err(HandlerError::Core)?;
