@@ -1,0 +1,17 @@
+# Test-only sshd configuration for LinaSCP integration tests.
+Port 22
+HostKey /etc/ssh/ssh_host_ed25519_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+HostKey /etc/ssh/ssh_host_rsa_key
+UsePAM yes
+PasswordAuthentication yes
+KbdInteractiveAuthentication yes
+PubkeyAuthentication yes
+AuthorizedKeysFile /etc/ssh/authorized_keys/%u
+AllowTcpForwarding yes
+AcceptEnv LANG LC_* LINASCP_*
+PrintMotd no
+Subsystem sftp /usr/lib/openssh/sftp-server
+
+Match User kbduser
+    AuthenticationMethods keyboard-interactive
