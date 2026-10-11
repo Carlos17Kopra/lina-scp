@@ -21,6 +21,18 @@ use crate::store::{self, Store};
 
 pub const FORMAT_VERSION: u32 = 1;
 
+/// Fixed scrypt work factor (log2 N) used to encrypt the secrets block, instead of age's
+/// default of calibrating to the exporting machine's speed (~1s locally): a file made on a
+/// fast desktop must still decrypt on a slower laptop, since `age::scrypt::Identity`
+/// rejects stanzas whose work factor exceeds its own calibrated maximum. ~256 MiB / ~1s on
+/// modern CPUs.
+const SCRYPT_WORK_FACTOR: u8 = 18;
+
+/// Max scrypt work factor accepted on decrypt. Must stay >= `SCRYPT_WORK_FACTOR` so every
+/// file we produce is always accepted regardless of the importing machine's speed, while
+/// absurdly expensive (hostile) factors are still refused.
+const SCRYPT_MAX_WORK_FACTOR: u8 = 20;
+
 /// Settings that travel with an export. `ssh_mode` is excluded on purpose: switching it
 /// has side effects on `~/.ssh` that need the user's confirmation.
 const EXPORTED_SETTINGS: &[&str] = &[store::THEME, store::TERMINAL_RENDERER, store::TERMINAL_FONT_SIZE];
@@ -465,7 +477,10 @@ fn clear_has_secret(doc: &mut ExportDoc) {
 }
 
 fn encrypt(plaintext: &[u8], passphrase: &SecretString) -> Result<String> {
-    let encryptor = age::Encryptor::with_user_passphrase(passphrase.clone());
+    let mut recipient = age::scrypt::Recipient::new(passphrase.clone());
+    recipient.set_work_factor(SCRYPT_WORK_FACTOR);
+    let encryptor = age::Encryptor::with_recipients(iter::once(&recipient as &dyn age::Recipient))
+        .map_err(|e| CoreError::internal(e.to_string()))?;
     let mut armored = Vec::new();
     let armor = ArmoredWriter::wrap_output(&mut armored, Format::AsciiArmor)?;
     let mut writer = encryptor.wrap_output(armor)?;
@@ -474,16 +489,31 @@ fn encrypt(plaintext: &[u8], passphrase: &SecretString) -> Result<String> {
     String::from_utf8(armored).map_err(|e| CoreError::internal(e.to_string()))
 }
 
+/// `ExcessiveWork` means the stanza's work factor exceeds what we accept (either a hostile
+/// file or, in principle, a future higher `SCRYPT_WORK_FACTOR`); anything else means the
+/// passphrase (or file) was wrong.
+///
+/// We build our own message from `required`/`target` instead of formatting `e` directly:
+/// `age`'s own `Display` for `ExcessiveWork` computes `1 << (required - target)` and panics
+/// on overflow in debug builds whenever `target` (this machine's own calibrated work
+/// factor) happens to exceed `required` (the file's work factor) — exactly the case a fast
+/// machine hits when checking an import encrypted at our fixed, lower `SCRYPT_WORK_FACTOR`.
+fn map_decrypt_error(e: age::DecryptError) -> CoreError {
+    match e {
+        age::DecryptError::ExcessiveWork { required, .. } => CoreError::config(format!(
+            "export file cannot be decrypted on this machine: it was encrypted with scrypt \
+             work factor 2^{required}, above the maximum this machine accepts"
+        )),
+        _ => CoreError::config("wrong passphrase"),
+    }
+}
+
 fn decrypt_payload(block: &str, passphrase: &SecretString) -> Result<SecretPayload> {
     let decryptor = age::Decryptor::new(ArmoredReader::new(block.as_bytes()))
         .map_err(|e| CoreError::config(format!("invalid secrets block: {e}")))?;
-    let identity = age::scrypt::Identity::new(passphrase.clone());
-    let mut reader = decryptor.decrypt(iter::once(&identity as &dyn age::Identity)).map_err(|e| match e {
-        age::DecryptError::ExcessiveWork { .. } => {
-            CoreError::config(format!("export file cannot be decrypted on this machine: {e}"))
-        }
-        _ => CoreError::config("wrong passphrase"),
-    })?;
+    let mut identity = age::scrypt::Identity::new(passphrase.clone());
+    identity.set_max_work_factor(SCRYPT_MAX_WORK_FACTOR);
+    let mut reader = decryptor.decrypt(iter::once(&identity as &dyn age::Identity)).map_err(map_decrypt_error)?;
     let mut plaintext = Vec::new();
     reader.read_to_end(&mut plaintext)?;
     serde_json::from_slice(&plaintext).map_err(|e| CoreError::config(format!("invalid secrets block: {e}")))

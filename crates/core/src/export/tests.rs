@@ -248,3 +248,43 @@ fn duplicate_gets_new_ids_suffix_and_remapped_secrets() {
     let secret = src.secrets.get(SecretOwner::Profile(dup_profile.id), SecretKind::Password).unwrap().unwrap();
     assert_eq!(secret.expose_secret(), "s3cret");
 }
+
+/// `encrypt` must use a fixed scrypt work factor (not one calibrated to this machine's
+/// speed), so a file produced on a fast machine still decrypts on a slow one. We prove it
+/// by round-tripping, then showing an identity capped at exactly `SCRYPT_WORK_FACTOR`
+/// accepts the stanza while one capped one step lower refuses it as `ExcessiveWork`, which
+/// `decrypt_payload` maps to the "cannot be decrypted on this machine" config error.
+#[test]
+fn encrypt_uses_fixed_work_factor_decryptable_regardless_of_machine_speed() {
+    let passphrase = pass("whatever");
+    let block = encrypt(b"plaintext payload", &passphrase).unwrap();
+
+    let mut identity = age::scrypt::Identity::new(passphrase.clone());
+    identity.set_max_work_factor(SCRYPT_WORK_FACTOR);
+    let decryptor = age::Decryptor::new(age::armor::ArmoredReader::new(block.as_bytes())).unwrap();
+    let mut reader = decryptor.decrypt(iter::once(&identity as &dyn age::Identity)).unwrap();
+    let mut plaintext = Vec::new();
+    reader.read_to_end(&mut plaintext).unwrap();
+    assert_eq!(plaintext, b"plaintext payload");
+
+    let mut too_strict = age::scrypt::Identity::new(passphrase);
+    too_strict.set_max_work_factor(SCRYPT_WORK_FACTOR - 1);
+    let decryptor = age::Decryptor::new(age::armor::ArmoredReader::new(block.as_bytes())).unwrap();
+    let Err(err) = decryptor.decrypt(iter::once(&too_strict as &dyn age::Identity)) else {
+        panic!("expected decryption to be refused for exceeding the work factor cap");
+    };
+    assert!(matches!(err, age::DecryptError::ExcessiveWork { required, .. } if required == SCRYPT_WORK_FACTOR));
+    assert!(matches!(map_decrypt_error(err), CoreError::Config { .. }));
+}
+
+/// `decrypt_payload` must accept a file produced with our fixed work factor regardless of
+/// how fast this machine is, i.e. `SCRYPT_MAX_WORK_FACTOR >= SCRYPT_WORK_FACTOR`.
+#[test]
+fn decrypt_payload_accepts_the_fixed_work_factor() {
+    let passphrase = pass("whatever");
+    let payload = SecretPayload { secrets: BTreeMap::from([("a".to_string(), "b".to_string())]), ..Default::default() };
+    let json = serde_json::to_vec(&payload).unwrap();
+    let block = encrypt(&json, &passphrase).unwrap();
+    let decoded = decrypt_payload(&block, &passphrase).unwrap();
+    assert_eq!(decoded.secrets.get("a").map(String::as_str), Some("b"));
+}
