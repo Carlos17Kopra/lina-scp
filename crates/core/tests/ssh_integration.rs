@@ -7,8 +7,8 @@ mod support;
 use std::sync::Arc;
 
 use linascp_core::connect::{
-    ConnectDeps, ConnectRequest, ConnectTarget, HostKeyDecision, Prompt, PromptAnswer, SshSession, connect_ssh,
-    test_connection,
+    ConnectDeps, ConnectEvent, ConnectRequest, ConnectTarget, HostKeyDecision, Prompt, PromptAnswer, SshSession, Step,
+    connect_ssh, test_connection,
 };
 use linascp_core::error::{CoreError, NetworkKind, Result};
 use linascp_core::known_hosts::{HostKeyStatus, KnownHosts};
@@ -278,4 +278,16 @@ async fn test_connection_stops_after_auth() {
     test_connection(request(h, None), env.deps(None), p.broker.clone(), p.emit.clone(), CancellationToken::new())
         .await
         .expect("test connection succeeds");
+
+    // `test_connection` must stop after Auth: no Channel/Shell step is planned or started.
+    let events = p.events.lock().unwrap().clone();
+    assert!(events.iter().any(|e| matches!(e, ConnectEvent::Steps { steps } if steps.contains(&Step::Auth))));
+    assert!(!events.iter().any(|e| matches!(
+        e,
+        ConnectEvent::Steps { steps } if steps.contains(&Step::Channel) || steps.contains(&Step::Shell)
+    )));
+    assert!(!events.iter().any(|e| matches!(
+        e,
+        ConnectEvent::StepStarted { step: Step::Channel } | ConnectEvent::StepStarted { step: Step::Shell }
+    )));
 }

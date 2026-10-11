@@ -102,14 +102,16 @@ impl Container {
         }
         cmd.arg(IMAGE);
         let id = run(&mut cmd);
-        let mapping = run(Command::new("docker").args(["port", &id, "22/tcp"]));
-        let port = mapping
+        // Construct the guard right after the container exists, so a panic in the
+        // fallible steps below still runs `Drop` (`docker rm -f`) instead of leaking it.
+        let mut container = Self { id, name, port: 0 };
+        let mapping = run(Command::new("docker").args(["port", &container.id, "22/tcp"]));
+        container.port = mapping
             .lines()
             .next()
             .and_then(|l| l.rsplit(':').next())
             .and_then(|p| p.parse().ok())
             .unwrap_or_else(|| panic!("cannot parse port mapping {mapping:?}"));
-        let container = Self { id, name, port };
         container.wait_ready();
         container
     }
@@ -155,13 +157,16 @@ impl Agent {
             .stderr(Stdio::null())
             .spawn()
             .expect("spawn ssh-agent");
+        // Construct the guard right after the child is spawned, so a panic in the
+        // fallible steps below still runs `Drop` (kills the child) instead of orphaning it.
+        let agent = Self { child, _dir: dir, socket };
         let deadline = Instant::now() + Duration::from_secs(10);
-        while !socket.exists() {
+        while !agent.socket.exists() {
             assert!(Instant::now() < deadline, "ssh-agent socket did not appear");
             std::thread::sleep(Duration::from_millis(50));
         }
-        run(Command::new("ssh-add").env("SSH_AUTH_SOCK", &socket).arg(key).stderr(Stdio::null()));
-        Self { child, _dir: dir, socket }
+        run(Command::new("ssh-add").env("SSH_AUTH_SOCK", &agent.socket).arg(key).stderr(Stdio::null()));
+        agent
     }
 }
 
