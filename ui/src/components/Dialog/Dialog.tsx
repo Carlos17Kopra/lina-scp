@@ -58,6 +58,20 @@ export function Dialog({
     return () => previous?.focus();
   }, [open, initialFocusRef]);
 
+  // Keep focus inside the panel: pull it back when it lands outside any modal (e.g. on <body> or the page behind).
+  useEffect(() => {
+    if (!open) return undefined;
+    const onFocusIn = (event: FocusEvent) => {
+      const panel = panelRef.current;
+      const target = event.target;
+      if (!panel || !(target instanceof Element)) return;
+      if (panel.contains(target) || target.closest('[aria-modal="true"]')) return;
+      (focusables(panel)[0] ?? panel).focus();
+    };
+    document.addEventListener("focusin", onFocusIn);
+    return () => document.removeEventListener("focusin", onFocusIn);
+  }, [open]);
+
   if (!open) return null;
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -89,7 +103,13 @@ export function Dialog({
   };
 
   return (
-    <div className={styles.backdrop}>
+    <div
+      className={styles.backdrop}
+      onMouseDown={(event) => {
+        // A click on the backdrop padding must not blur the panel.
+        if (event.target === event.currentTarget) event.preventDefault();
+      }}
+    >
       <div
         ref={panelRef}
         role={role}

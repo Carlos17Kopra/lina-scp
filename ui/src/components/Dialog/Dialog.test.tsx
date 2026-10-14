@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it } from "vitest";
@@ -62,6 +62,32 @@ describe("Dialog", () => {
   it("closes via the close button", async () => {
     const user = await openDialog();
     await user.click(screen.getByRole("button", { name: "Schließen" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("keeps focus in the dialog on backdrop mousedown", async () => {
+    const user = await openDialog();
+    const backdrop = screen.getByRole("dialog").parentElement as HTMLElement;
+    await user.pointer({ keys: "[MouseLeft>]", target: backdrop });
+    expect(screen.getByRole("dialog")).toContainElement(document.activeElement as HTMLElement);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("returns focus into the dialog when it lands outside, and Escape still closes", async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <button type="button">Daneben</button>
+        <Harness />
+      </>,
+    );
+    await user.click(screen.getByRole("button", { name: "Öffnen" }));
+    act(() => {
+      screen.getByRole("button", { name: "Daneben" }).focus();
+    });
+    expect(screen.getByRole("dialog")).toContainElement(document.activeElement as HTMLElement);
+    await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
