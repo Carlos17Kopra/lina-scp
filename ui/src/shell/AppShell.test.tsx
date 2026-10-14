@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../components";
 import * as api from "../ipc/api";
 import { useHostsStore } from "../stores/hosts";
+import { pushNotice, useNoticeStore } from "../stores/notices";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../stores/settings";
 import { type ModalState, useUiStore } from "../stores/ui";
 import { AppShell } from "./AppShell";
@@ -29,6 +30,7 @@ beforeEach(() => {
   useUiStore.setState(useUiStore.getInitialState(), true);
   useHostsStore.setState(useHostsStore.getInitialState(), true);
   useSettingsStore.setState(useSettingsStore.getInitialState(), true);
+  useNoticeStore.setState(useNoticeStore.getInitialState(), true);
 });
 
 describe("AppShell", () => {
@@ -75,7 +77,6 @@ describe("AppShell", () => {
       [{ type: "firstRun" }, "Willkommen bei LinaSCP"],
       [{ type: "export" }, "Exportieren"],
       [{ type: "import" }, "Importieren"],
-      [{ type: "connect" }, "Verbindung"],
     ];
     for (const [modal, title] of cases) {
       act(() => useUiStore.getState().openModal(modal));
@@ -83,6 +84,9 @@ describe("AppShell", () => {
     }
     await userEvent.click(screen.getByRole("button", { name: "Schließen" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    // Without an active connect flow the connect overlay renders nothing.
+    act(() => useUiStore.getState().openModal({ type: "connect" }));
+    expect(screen.queryByRole("region", { name: /Verbindung zu/ })).not.toBeInTheDocument();
   });
 
   it("reports load failures as an error toast", async () => {
@@ -90,5 +94,13 @@ describe("AppShell", () => {
     vi.mocked(api.settingsGet).mockRejectedValue({ type: "store", message: "database is locked" });
     renderShell();
     expect(await screen.findByRole("alert")).toHaveTextContent("Daten konnten nicht geladen werden");
+  });
+
+  it("shows store notices as toasts", async () => {
+    mockBackend();
+    renderShell();
+    act(() => pushNotice({ tone: "amber", message: "Verbindung abgebrochen – der Host-Key wurde nicht akzeptiert." }));
+    expect(await screen.findByText("Verbindung abgebrochen – der Host-Key wurde nicht akzeptiert.")).toBeInTheDocument();
+    expect(useNoticeStore.getState().notices).toEqual([]);
   });
 });

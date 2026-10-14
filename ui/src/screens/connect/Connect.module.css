@@ -1,0 +1,400 @@
+.overlay {
+  position: fixed;
+  inset: 0 0 0 64px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.tabBar {
+  display: flex;
+  align-items: stretch;
+  min-height: 48px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--bd);
+  background: var(--s1);
+}
+
+.tab {
+  --tab-tone: var(--accent);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  background: var(--bg);
+  box-shadow: inset 0 2px 0 var(--tab-tone);
+  font-size: 13px;
+}
+
+.tab[data-tone="amber"] {
+  --tab-tone: var(--amber);
+}
+
+.tab[data-tone="red"] {
+  --tab-tone: var(--red);
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tab-tone);
+}
+
+.spin {
+  color: var(--accent);
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.content {
+  display: flex;
+  flex: 1;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 40px 16px;
+  overflow-y: auto;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: 100%;
+  max-width: 560px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.pulse {
+  position: relative;
+  display: grid;
+  flex: 0 0 60px;
+  place-items: center;
+  height: 60px;
+}
+
+.pulse::before {
+  position: absolute;
+  inset: 0;
+  border-radius: 16px;
+  background: var(--accent-soft);
+  animation: pulse 1.6s ease-out infinite;
+  content: "";
+}
+
+@keyframes pulse {
+  from {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.7);
+  }
+}
+
+.avatar {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 60px;
+  height: 60px;
+  border-radius: 16px;
+  background: var(--raised);
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.title {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.subtitle {
+  margin-top: 2px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.logToggle {
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.logToggle:hover {
+  color: var(--text);
+}
+
+.log {
+  max-height: 180px;
+  margin: 8px 0 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--bd);
+  border-radius: 8px;
+  background: var(--s1);
+  color: var(--text2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.actions,
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: 100%;
+  max-width: 620px;
+  padding: 28px;
+  border: 1px solid var(--bd-strong);
+  border-radius: 16px;
+  background: var(--dlg);
+}
+
+.cardDanger {
+  max-width: 660px;
+  border-color: var(--red-bd);
+}
+
+.cardNarrow {
+  max-width: 560px;
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 600px;
+}
+
+.icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+}
+
+.iconLarge {
+  width: 52px;
+  height: 52px;
+}
+
+.iconAmber {
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.iconRed {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.iconRed .spin {
+  color: var(--red);
+}
+
+.cardTitle {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.dangerTitle {
+  color: var(--red-text);
+}
+
+.text {
+  color: var(--text2);
+  line-height: 1.55;
+}
+
+.code {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.fingerprint {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--bd);
+  border-radius: 12px;
+  background: var(--s1);
+}
+
+.fingerprintHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  align-self: stretch;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.fingerprintValue {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.compare {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.keyBox {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--bd);
+  border-radius: 12px;
+  background: var(--s1);
+}
+
+.keyBoxNew {
+  border-color: var(--red-bd);
+  background: var(--red-bg2);
+}
+
+.caption {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.captionRed {
+  color: var(--red);
+}
+
+.keyValue {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.details summary {
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.pre {
+  margin: 10px 0 0;
+  padding: 12px;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--s1);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.causes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  color: var(--text2);
+  list-style: none;
+}
+
+.causes li::before {
+  color: var(--muted);
+  content: "– ";
+}
+
+.errorPre {
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--bd);
+  border-radius: 8px;
+  background: var(--s1);
+  color: var(--red-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.methods {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 4px 14px;
+  border: 1px solid var(--bd);
+  border-radius: 10px;
+  background: var(--s1);
+  font-size: 13px;
+  list-style: none;
+}
+
+.methods li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.methods li + li {
+  border-top: 1px solid var(--bd);
+}
+
+.methodRed {
+  color: var(--red);
+}
+
+.methodMuted {
+  color: var(--muted);
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}

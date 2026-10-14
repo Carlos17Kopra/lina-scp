@@ -12,6 +12,7 @@ import styles from "./AppShell.module.css";
 import { ModalLayer } from "./ModalLayer";
 import { Rail } from "./Rail";
 import { useGlobalShortcuts } from "./useGlobalShortcuts";
+import { useNoticeToasts } from "./useNoticeToasts";
 
 /**
  * Rail + the three views + modal layer. All views stay mounted (inactive ones are `hidden`)
@@ -29,6 +30,7 @@ export function AppShell() {
   const toast = useToast();
 
   useGlobalShortcuts();
+  useNoticeToasts();
 
   useEffect(() => {
     const report = (error: unknown) =>
