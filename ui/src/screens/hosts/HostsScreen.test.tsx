@@ -170,6 +170,34 @@ describe("HostsScreen", () => {
     expect(api.hostSave).not.toHaveBeenCalled();
   });
 
+  it("ignores a second Quick Connect submit while the save is pending", async () => {
+    vi.mocked(api.newId).mockReturnValue("q-1");
+    let resolveSave: (host: api.Host) => void = () => undefined;
+    vi.mocked(api.hostSave).mockImplementation(
+      (host) =>
+        new Promise<api.Host>((resolve) => {
+          resolveSave = resolve;
+          void host;
+        }),
+    );
+    renderScreen();
+    const quick = screen.getByRole("textbox", { name: "Quick Connect" });
+    await userEvent.type(quick, "deploy@10.0.0.5{Enter}{Enter}");
+    expect(api.hostSave).toHaveBeenCalledTimes(1);
+    await act(async () => resolveSave(makeHost({ id: "q-1" })));
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps the Quick Connect text and shows the save error when saving fails", async () => {
+    vi.mocked(api.hostSave).mockRejectedValue(new Error("boom"));
+    renderScreen();
+    const quick = screen.getByRole("textbox", { name: "Quick Connect" });
+    await userEvent.type(quick, "deploy@10.0.0.5{Enter}");
+    expect(await screen.findByText("Speichern fehlgeschlagen")).toBeInTheDocument();
+    expect(quick).toHaveValue("deploy@10.0.0.5");
+    expect(start).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed Quick Connect input", async () => {
     renderScreen();
     const quick = screen.getByRole("textbox", { name: "Quick Connect" });

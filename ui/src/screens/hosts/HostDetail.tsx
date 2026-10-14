@@ -3,6 +3,7 @@ import { useId, useState } from "react";
 import { Button, Chip, Dialog } from "../../components";
 import { t } from "../../i18n/de";
 import type { Host } from "../../ipc/api";
+import { DEFAULT_PORT } from "../../model/defaults";
 import { formatEndpoint, hostColorVar, hostProfile, initials, methodLabel } from "../../model/hostFormat";
 import { useHostsStore } from "../../stores/hosts";
 import styles from "./HostDetail.module.css";
@@ -37,7 +38,7 @@ function HostDetailPanel({ host }: { host: Host }) {
       : t.hosts.customAuth(methodLabel(auth.auth.method));
   const jump = host.jumpHostId ? (hosts.find((h) => h.id === host.jumpHostId)?.name ?? t.hosts.none) : t.hosts.none;
   const facts: Array<[string, string, boolean]> = [
-    [t.hosts.address, formatEndpoint(host.user, host.address, 22), true],
+    [t.hosts.address, formatEndpoint(host.user, host.address, DEFAULT_PORT), true],
     [t.hosts.port, String(host.port), true],
     [t.hosts.profile, profileText, false],
     [t.hosts.jumpHost, jump, false],

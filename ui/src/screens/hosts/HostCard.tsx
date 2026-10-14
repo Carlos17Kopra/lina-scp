@@ -26,8 +26,8 @@ export function HostCard({ host, selected, onSelect }: { host: Host; selected: b
         </span>
       </button>
       <div className={styles.chips}>
-        {host.protocolSsh ? <Chip tone="accent">SSH</Chip> : null}
-        {host.protocolSftp ? <Chip tone="amber">SFTP</Chip> : null}
+        {host.protocolSsh ? <Chip tone="accent">{t.hosts.filterSsh}</Chip> : null}
+        {host.protocolSftp ? <Chip tone="amber">{t.hosts.filterSftp}</Chip> : null}
         {host.source === "sshConfig" ? <Chip tone="neutral">{t.hosts.fromSshConfig}</Chip> : null}
         {host.tags.map((tag) => (
           <Chip key={tag} tone="neutral">

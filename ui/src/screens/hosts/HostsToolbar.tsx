@@ -19,6 +19,9 @@ export function HostsToolbar() {
   const searchRef = useRef<HTMLInputElement>(null);
   const [quick, setQuick] = useState("");
   const [quickInvalid, setQuickInvalid] = useState(false);
+  const [busy, setBusy] = useState(false);
+  /** Set synchronously so two submits in the same tick cannot both pass. */
+  const busyRef = useRef(false);
   const quickErrorId = useId();
 
   useEffect(() => {
@@ -29,17 +32,23 @@ export function HostsToolbar() {
 
   const submitQuick = async (event: FormEvent) => {
     event.preventDefault();
+    if (busyRef.current) return;
     const target = parseQuickConnect(quick);
     if (!target) {
       setQuickInvalid(true);
       return;
     }
     setQuickInvalid(false);
+    busyRef.current = true;
+    setBusy(true);
     try {
       await startQuickConnect(target);
       setQuick("");
     } catch (error) {
       toast.show({ tone: "red", message: t.shell.saveFailed, details: errorDetails(error) });
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
     }
   };
 
@@ -76,6 +85,8 @@ export function HostsToolbar() {
             setQuick(event.target.value);
             setQuickInvalid(false);
           }}
+          readOnly={busy}
+          aria-busy={busy || undefined}
           aria-invalid={quickInvalid ? true : undefined}
           aria-describedby={quickInvalid ? quickErrorId : undefined}
           spellCheck={false}

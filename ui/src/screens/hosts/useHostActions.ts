@@ -35,9 +35,12 @@ export function useHostActions(): HostActions {
   );
 }
 
-/** Reuses the quick-connect host of the same `user@host:port` or saves a new one, then connects via SSH. */
+/**
+ * Reuses the quick-connect host of the same `user@host:port` or saves a new one, then starts the SSH connection.
+ * Only the find-or-save step is awaited; connect errors belong to the connect flow.
+ */
 export async function startQuickConnect(target: QuickTarget): Promise<void> {
   const hosts = useHostsStore.getState();
   const host = findQuickConnectHost(hosts.hosts, target) ?? (await hosts.saveHost(quickConnectHost(target)));
-  await useConnectStore.getState().start(host.id, "ssh");
+  void useConnectStore.getState().start(host.id, "ssh");
 }
