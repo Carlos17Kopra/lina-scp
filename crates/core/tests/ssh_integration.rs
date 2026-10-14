@@ -161,6 +161,64 @@ async fn keyboard_interactive_auth() {
     );
 }
 
+/// F4: `AuthenticationMethods publickey,keyboard-interactive` — the key is accepted with partial
+/// success, then the keyboard-interactive round (PAM password prompt) completes the login.
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn key_then_keyboard_interactive_two_factor() {
+    let c = Container::start(None);
+    let env = Env::new();
+    let fx = support::fixture();
+    let h = host(c.port, "mfauser", AuthMethod::Key, Some(&fx.plain_key));
+    let p = prompter(|prompt| match prompt {
+        Prompt::KeyboardInteractive { prompts, .. } => {
+            PromptAnswer::Responses { values: prompts.iter().map(|_| "mfapass".to_string()).collect() }
+        }
+        other => trust_all(other),
+    });
+    let (session, output) = connect(&env, request(h, None), None, &p).await;
+    assert_shell(session.expect("connected with key + keyboard-interactive"), &output).await;
+    assert!(p.prompts().iter().any(|pr| matches!(pr, Prompt::KeyboardInteractive { .. })));
+    let events = p.events.lock().unwrap().clone();
+    assert!(events.iter().any(|e| matches!(e, ConnectEvent::StepDone { step: Step::Auth })));
+}
+
+/// F4: `AuthenticationMethods publickey,password` — the password round uses the stored password.
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn key_then_password_two_factor() {
+    let c = Container::start(None);
+    let env = Env::new();
+    let fx = support::fixture();
+    let h = host(c.port, "mfpwuser", AuthMethod::Key, Some(&fx.plain_key));
+    env.store_password(&h, "mfpwpass");
+    let p = prompter(trust_all);
+    let (session, output) = connect(&env, request(h, None), None, &p).await;
+    assert_shell(session.expect("connected with key + password"), &output).await;
+}
+
+/// F4: a wrong second factor after an accepted key -> an auth error naming the remaining method.
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn key_without_second_factor_reports_remaining_methods() {
+    let c = Container::start(None);
+    let env = Env::new();
+    let fx = support::fixture();
+    let h = host(c.port, "mfauser", AuthMethod::Key, Some(&fx.plain_key));
+    let p = prompter(|prompt| match prompt {
+        Prompt::KeyboardInteractive { .. } => PromptAnswer::Responses { values: vec!["wrong".into()] },
+        other => trust_all(other),
+    });
+    let (result, _) = connect(&env, request(h, None), None, &p).await;
+    match result {
+        Err(CoreError::Auth { rejected_methods, .. }) => {
+            assert!(rejected_methods.iter().any(|m| m == "keyboard-interactive"), "{rejected_methods:?}")
+        }
+        Err(other) => panic!("unexpected error {other:?}"),
+        Ok(_) => panic!("a wrong second factor must not authenticate"),
+    }
+}
+
 #[tokio::test]
 #[ignore = "requires docker"]
 async fn unknown_host_key_trust_writes_known_hosts() {

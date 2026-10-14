@@ -23,11 +23,18 @@ use crate::secrets::{SecretKind, SecretOwner, SecretStore};
 pub const MAX_ATTEMPTS: usize = 3;
 /// Upper bound for keyboard-interactive info request rounds.
 const MAX_KBD_ROUNDS: usize = 16;
+/// Upper bound for chained methods after partial success (`AuthenticationMethods a,b,c`).
+/// `MAX_ATTEMPTS` still applies per method.
+const MAX_METHOD_ROUNDS: usize = 4;
 
 /// Result of a single authentication request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthOutcome {
     Success,
+    /// Accepted, but the server requires more (partial success); `remaining` = methods to continue with.
+    Partial {
+        remaining: Vec<String>,
+    },
     /// Rejected; `remaining` = methods the server still accepts.
     Rejected {
         remaining: Vec<String>,
@@ -38,8 +45,47 @@ pub enum AuthOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KbdStep {
     Success,
-    Rejected { remaining: Vec<String> },
-    Info { name: String, instructions: String, prompts: Vec<KbdPrompt> },
+    /// Accepted with partial success; `remaining` = methods to continue with.
+    Partial {
+        remaining: Vec<String>,
+    },
+    Rejected {
+        remaining: Vec<String>,
+    },
+    Info {
+        name: String,
+        instructions: String,
+        prompts: Vec<KbdPrompt>,
+    },
+}
+
+/// How one method ended when it did not fail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MethodOutcome {
+    Done,
+    /// Partial success: continue with one of these methods.
+    Partial(Vec<String>),
+}
+
+/// Wire name of a method (as in `MethodSet` / `AuthenticationMethods`).
+fn wire_name(method: AuthMethod) -> &'static str {
+    match method {
+        AuthMethod::Password => "password",
+        AuthMethod::Key | AuthMethod::Agent => "publickey",
+        AuthMethod::KeyboardInteractive => "keyboard-interactive",
+    }
+}
+
+/// Next method after a partial success: keyboard-interactive, then password, then the configured
+/// publickey method (key file or agent). A method that already succeeded is not repeated.
+fn next_method(remaining: &[String], configured: AuthMethod, used: &[AuthMethod]) -> Option<AuthMethod> {
+    let mut candidates = vec![AuthMethod::KeyboardInteractive, AuthMethod::Password];
+    if matches!(configured, AuthMethod::Key | AuthMethod::Agent) {
+        candidates.push(configured);
+    }
+    candidates
+        .into_iter()
+        .find(|candidate| !used.contains(candidate) && remaining.iter().any(|m| m == wire_name(*candidate)))
 }
 
 /// Transport abstraction so the auth flow is testable without a server.
@@ -143,22 +189,55 @@ impl AuthContext<'_> {
     }
 }
 
-/// Run the configured method once (with retries where applicable).
-pub async fn authenticate(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -> Result<()> {
-    ctx.log(format!("debug1: Authenticating as '{}' using {:?}", ctx.user, ctx.auth.method));
-    let result = match ctx.auth.method {
+async fn run_method(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>, method: AuthMethod) -> Result<MethodOutcome> {
+    match method {
         AuthMethod::Password => password_flow(auth, ctx).await,
         AuthMethod::Key => key_flow(auth, ctx).await,
         AuthMethod::Agent => agent_flow(auth, ctx).await,
         AuthMethod::KeyboardInteractive => kbd_flow(auth, ctx).await,
-    };
-    if result.is_ok() {
-        ctx.log(format!("debug1: Authenticated as '{}'", ctx.user));
     }
-    result
 }
 
-async fn password_flow(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -> Result<()> {
+/// Run the configured method (with retries where applicable). On partial success (e.g.
+/// `AuthenticationMethods publickey,keyboard-interactive`) continue with the next method the
+/// server still accepts, see [`next_method`]; all of it stays within the Auth step.
+pub async fn authenticate(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -> Result<()> {
+    ctx.log(format!("debug1: Authenticating as '{}' using {:?}", ctx.user, ctx.auth.method));
+    let mut method = ctx.auth.method;
+    let mut used = Vec::new();
+    for _ in 0..MAX_METHOD_ROUNDS {
+        used.push(method);
+        match run_method(auth, ctx, method).await? {
+            MethodOutcome::Done => {
+                ctx.log(format!("debug1: Authenticated as '{}'", ctx.user));
+                return Ok(());
+            }
+            MethodOutcome::Partial(remaining) => {
+                ctx.log(format!(
+                    "debug1: Authenticated using {} with partial success; can continue: {}",
+                    wire_name(method),
+                    remaining.join(",")
+                ));
+                match next_method(&remaining, ctx.auth.method, &used) {
+                    Some(next) => method = next,
+                    None => {
+                        return Err(auth_error(
+                            remaining,
+                            wire_name(method),
+                            "server requires a further authentication method that is not configured",
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    Err(CoreError::Auth {
+        rejected_methods: vec![wire_name(method).to_string()],
+        message: "too many authentication rounds".to_string(),
+    })
+}
+
+async fn password_flow(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -> Result<MethodOutcome> {
     let mut stored = ctx.stored_secret(SecretKind::Password).await;
     let mut remaining = Vec::new();
     for attempt in 0..MAX_ATTEMPTS {
@@ -174,7 +253,14 @@ async fn password_flow(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -> R
                 if save {
                     ctx.save_secret(SecretKind::Password, password).await;
                 }
-                return Ok(());
+                return Ok(MethodOutcome::Done);
+            }
+            AuthOutcome::Partial { remaining } => {
+                // The password itself was accepted.
+                if save {
+                    ctx.save_secret(SecretKind::Password, password).await;
+                }
+                return Ok(MethodOutcome::Partial(remaining));
             }
             AuthOutcome::Rejected { remaining: r } => {
                 ctx.log("debug1: Password authentication rejected".to_string());
@@ -227,35 +313,38 @@ async fn load_key(ctx: &AuthContext<'_>, key_path: &str) -> Result<PrivateKey> {
     })
 }
 
-async fn key_flow(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -> Result<()> {
+async fn key_flow(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -> Result<MethodOutcome> {
     let key_path =
         ctx.auth.key_path.clone().ok_or_else(|| CoreError::Config { message: "no key file configured".to_string() })?;
     let key = load_key(ctx, &key_path).await?;
     ctx.log(format!("debug1: Offering public key: {key_path}"));
     match auth.publickey(&ctx.user, key).await? {
-        AuthOutcome::Success => Ok(()),
+        AuthOutcome::Success => Ok(MethodOutcome::Done),
+        AuthOutcome::Partial { remaining } => Ok(MethodOutcome::Partial(remaining)),
         AuthOutcome::Rejected { remaining } => Err(auth_error(remaining, "publickey", "public key was rejected")),
     }
 }
 
-async fn agent_flow(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -> Result<()> {
+async fn agent_flow(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -> Result<MethodOutcome> {
     let socket = ctx.agent_sock.ok_or_else(|| CoreError::Auth {
         rejected_methods: vec!["publickey".to_string()],
         message: "no ssh-agent available (SSH_AUTH_SOCK not set)".to_string(),
     })?;
     match auth.agent(&ctx.user, socket).await? {
-        AuthOutcome::Success => Ok(()),
+        AuthOutcome::Success => Ok(MethodOutcome::Done),
+        AuthOutcome::Partial { remaining } => Ok(MethodOutcome::Partial(remaining)),
         AuthOutcome::Rejected { remaining } => {
             Err(auth_error(remaining, "publickey", "no agent identity was accepted"))
         }
     }
 }
 
-async fn kbd_flow(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -> Result<()> {
+async fn kbd_flow(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -> Result<MethodOutcome> {
     let mut step = auth.kbd_start(&ctx.user).await?;
     for _ in 0..MAX_KBD_ROUNDS {
         match step {
-            KbdStep::Success => return Ok(()),
+            KbdStep::Success => return Ok(MethodOutcome::Done),
+            KbdStep::Partial { remaining } => return Ok(MethodOutcome::Partial(remaining)),
             KbdStep::Rejected { remaining } => {
                 return Err(auth_error(
                     remaining,
@@ -305,7 +394,10 @@ pub struct HandleAuthenticator<'a> {
 fn outcome(result: client::AuthResult) -> AuthOutcome {
     match result {
         client::AuthResult::Success => AuthOutcome::Success,
-        client::AuthResult::Failure { remaining_methods, .. } => {
+        client::AuthResult::Failure { remaining_methods, partial_success: true } => {
+            AuthOutcome::Partial { remaining: method_names(&remaining_methods) }
+        }
+        client::AuthResult::Failure { remaining_methods, partial_success: false } => {
             AuthOutcome::Rejected { remaining: method_names(&remaining_methods) }
         }
     }
@@ -314,7 +406,10 @@ fn outcome(result: client::AuthResult) -> AuthOutcome {
 fn kbd_step(response: KeyboardInteractiveAuthResponse) -> KbdStep {
     match response {
         KeyboardInteractiveAuthResponse::Success => KbdStep::Success,
-        KeyboardInteractiveAuthResponse::Failure { remaining_methods, .. } => {
+        KeyboardInteractiveAuthResponse::Failure { remaining_methods, partial_success: true } => {
+            KbdStep::Partial { remaining: method_names(&remaining_methods) }
+        }
+        KeyboardInteractiveAuthResponse::Failure { remaining_methods, partial_success: false } => {
             KbdStep::Rejected { remaining: method_names(&remaining_methods) }
         }
         KeyboardInteractiveAuthResponse::InfoRequest { name, instructions, prompts } => KbdStep::Info {
@@ -364,7 +459,8 @@ impl Authenticator for HandleAuthenticator<'_> {
                     }
                 })?;
             last = outcome(result);
-            if last == AuthOutcome::Success {
+            // Success or partial success: this identity was accepted.
+            if !matches!(last, AuthOutcome::Rejected { .. }) {
                 break;
             }
         }
@@ -409,6 +505,10 @@ NKGOvMLy4gKjk9jA==
         password_results: VecDeque<AuthOutcome>,
         passwords_seen: Vec<String>,
         publickey_calls: usize,
+        /// Scripted publickey results; `Success` once exhausted.
+        publickey_results: VecDeque<AuthOutcome>,
+        /// Order in which methods were tried.
+        calls: Vec<&'static str>,
         kbd_steps: VecDeque<KbdStep>,
         kbd_responses: Vec<Vec<String>>,
     }
@@ -416,17 +516,20 @@ NKGOvMLy4gKjk9jA==
     #[async_trait::async_trait]
     impl Authenticator for FakeAuth {
         async fn password(&mut self, _user: &str, password: &SecretString) -> Result<AuthOutcome> {
+            self.calls.push("password");
             self.passwords_seen.push(password.expose_secret().to_string());
             Ok(self.password_results.pop_front().expect("scripted result"))
         }
         async fn publickey(&mut self, _user: &str, _key: PrivateKey) -> Result<AuthOutcome> {
+            self.calls.push("publickey");
             self.publickey_calls += 1;
-            Ok(AuthOutcome::Success)
+            Ok(self.publickey_results.pop_front().unwrap_or(AuthOutcome::Success))
         }
         async fn agent(&mut self, _user: &str, _socket: &Path) -> Result<AuthOutcome> {
             Ok(AuthOutcome::Rejected { remaining: vec!["publickey".into()] })
         }
         async fn kbd_start(&mut self, _user: &str) -> Result<KbdStep> {
+            self.calls.push("keyboard-interactive");
             Ok(self.kbd_steps.pop_front().expect("scripted step"))
         }
         async fn kbd_respond(&mut self, responses: Vec<String>) -> Result<KbdStep> {
@@ -672,6 +775,116 @@ NKGOvMLy4gKjk9jA==
             CoreError::Auth { rejected_methods, .. } => assert_eq!(rejected_methods, vec!["keyboard-interactive"]),
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    fn partial(methods: &[&str]) -> AuthOutcome {
+        AuthOutcome::Partial { remaining: methods.iter().map(|m| m.to_string()).collect() }
+    }
+
+    fn key_file() -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("id_ed25519");
+        std::fs::write(&key_path, ENCRYPTED_KEY).unwrap();
+        let path = key_path.display().to_string();
+        (dir, path)
+    }
+
+    fn code_prompt() -> KbdStep {
+        KbdStep::Info {
+            name: "2FA".into(),
+            instructions: String::new(),
+            prompts: vec![KbdPrompt { text: "Verification code: ".into(), echo: false }],
+        }
+    }
+
+    #[tokio::test]
+    async fn key_with_partial_success_continues_with_keyboard_interactive() {
+        let (_dir, key) = key_file();
+        let h = Harness::new(vec![secret("secret", false), PromptAnswer::Responses { values: vec!["123456".into()] }]);
+        let mut fake = FakeAuth {
+            publickey_results: VecDeque::from([partial(&["password", "keyboard-interactive"])]),
+            kbd_steps: VecDeque::from([code_prompt(), KbdStep::Success]),
+            ..Default::default()
+        };
+        authenticate(&mut fake, &h.ctx(AuthMethod::Key, Some(key))).await.unwrap();
+        // keyboard-interactive is preferred over password when both remain.
+        assert_eq!(fake.calls, vec!["publickey", "keyboard-interactive"]);
+        assert_eq!(fake.kbd_responses, vec![vec!["123456".to_string()]]);
+        assert!(matches!(h.prompts()[1], Prompt::KeyboardInteractive { .. }));
+    }
+
+    #[tokio::test]
+    async fn key_with_partial_success_continues_with_password_and_keeps_its_retries() {
+        let (_dir, key) = key_file();
+        let h = Harness::new(vec![secret("secret", false), secret("wrong", false), secret("right", true)]);
+        let mut fake = FakeAuth {
+            publickey_results: VecDeque::from([partial(&["password"])]),
+            password_results: VecDeque::from([rejected(&["password"]), AuthOutcome::Success]),
+            ..Default::default()
+        };
+        authenticate(&mut fake, &h.ctx(AuthMethod::Key, Some(key))).await.unwrap();
+        assert_eq!(fake.calls, vec!["publickey", "password", "password"]);
+        assert!(matches!(h.prompts()[2], Prompt::Password { retry: true, .. }));
+        assert_eq!(h.secrets.get(h.owner, SecretKind::Password).unwrap().unwrap().expose_secret(), "right");
+    }
+
+    #[tokio::test]
+    async fn password_with_partial_success_continues_with_the_configured_key_only() {
+        // Configured: password. publickey remains but no key/agent is configured -> fails with
+        // the server's remaining methods.
+        let h = Harness::new(vec![secret("pw", false)]);
+        let mut fake = FakeAuth { password_results: VecDeque::from([partial(&["publickey"])]), ..Default::default() };
+        let err = authenticate(&mut fake, &h.ctx(AuthMethod::Password, None)).await.unwrap_err();
+        match err {
+            CoreError::Auth { rejected_methods, .. } => assert_eq!(rejected_methods, vec!["publickey"]),
+            other => panic!("unexpected {other:?}"),
+        }
+        assert_eq!(fake.publickey_calls, 0);
+    }
+
+    #[tokio::test]
+    async fn partial_success_with_unsupported_remaining_method_is_an_auth_error() {
+        let (_dir, key) = key_file();
+        let h = Harness::new(vec![secret("secret", false)]);
+        let mut fake = FakeAuth { publickey_results: VecDeque::from([partial(&["hostbased"])]), ..Default::default() };
+        let err = authenticate(&mut fake, &h.ctx(AuthMethod::Key, Some(key))).await.unwrap_err();
+        match err {
+            CoreError::Auth { rejected_methods, .. } => assert_eq!(rejected_methods, vec!["hostbased"]),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn chained_partial_successes_never_repeat_a_method() {
+        let (_dir, key) = key_file();
+        let h = Harness::new(vec![
+            secret("secret", false),
+            PromptAnswer::Responses { values: vec!["1".into()] },
+            secret("pw", false),
+        ]);
+        let mut fake = FakeAuth {
+            publickey_results: VecDeque::from([partial(&["keyboard-interactive"])]),
+            kbd_steps: VecDeque::from([code_prompt(), KbdStep::Partial { remaining: vec!["password".into()] }]),
+            password_results: VecDeque::from([partial(&["publickey", "keyboard-interactive", "password"])]),
+            ..Default::default()
+        };
+        let err = authenticate(&mut fake, &h.ctx(AuthMethod::Key, Some(key))).await.unwrap_err();
+        assert!(matches!(err, CoreError::Auth { .. }));
+        assert_eq!(fake.calls, vec!["publickey", "keyboard-interactive", "password"]);
+    }
+
+    #[test]
+    fn next_method_order_and_configuration() {
+        let remaining = |m: &[&str]| m.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let all = remaining(&["publickey", "password", "keyboard-interactive"]);
+        assert_eq!(next_method(&all, AuthMethod::Key, &[]), Some(AuthMethod::KeyboardInteractive));
+        assert_eq!(next_method(&all, AuthMethod::Key, &[AuthMethod::KeyboardInteractive]), Some(AuthMethod::Password));
+        assert_eq!(
+            next_method(&all, AuthMethod::Agent, &[AuthMethod::KeyboardInteractive, AuthMethod::Password]),
+            Some(AuthMethod::Agent)
+        );
+        assert_eq!(next_method(&remaining(&["publickey"]), AuthMethod::Password, &[AuthMethod::Password]), None);
+        assert_eq!(next_method(&remaining(&["publickey"]), AuthMethod::Key, &[AuthMethod::Key]), None);
     }
 
     struct LockedKeyring;

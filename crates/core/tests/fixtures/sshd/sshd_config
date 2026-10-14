@@ -15,3 +15,10 @@ Subsystem sftp /usr/lib/openssh/sftp-server
 
 Match User kbduser
     AuthenticationMethods keyboard-interactive
+
+# Two-factor: key first, then a keyboard-interactive (PAM password) or password round.
+Match User mfauser
+    AuthenticationMethods publickey,keyboard-interactive
+
+Match User mfpwuser
+    AuthenticationMethods publickey,password
