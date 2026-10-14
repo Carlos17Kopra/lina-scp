@@ -1,9 +1,11 @@
 pub mod commands;
 pub mod dto;
+pub mod output;
 pub mod startup;
 pub mod state;
+mod util;
 
-use commands::{hosts, profiles, secrets, settings, transfer};
+use commands::{connect, hosts, profiles, secrets, sessions, settings, transfer};
 
 /// Where the generated TypeScript bindings live (committed to git).
 pub const BINDINGS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../ui/src/ipc/bindings.ts");
@@ -25,6 +27,15 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             secrets::secret_delete,
             settings::settings_get,
             settings::settings_set,
+            connect::connect_ssh,
+            connect::connect_answer,
+            connect::connect_cancel,
+            connect::connect_test,
+            sessions::session_open_local,
+            sessions::session_write,
+            sessions::session_resize,
+            sessions::session_ack,
+            sessions::session_close,
             transfer::export_file,
             transfer::import_preview,
             transfer::import_apply,
@@ -75,6 +86,10 @@ mod tests {
         assert!(ts.contains("export type CoreError ="));
         assert!(ts.contains("export type Settings ="));
         assert!(ts.contains("export type SecretOwner ="));
+        assert!(ts.contains("sessionAck: (sessionId: string, bytes: number)"));
+        assert!(ts.contains("output: Channel<ArrayBuffer>"));
+        assert!(ts.contains("connectAnswer: (promptId: number, answer: PromptAnswer)"));
+        assert!(ts.contains("export type SessionEventDto ="));
         assert!(ts.contains(
             "exportFile: (path: string, includeSecrets: boolean, includeKeyFiles: boolean, passphrase: string | null)"
         ));

@@ -1,25 +1,50 @@
 //! Application state shared by all Tauri commands.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
+use linascp_core::connect::{ConnectEvent, PromptBroker};
 use linascp_core::error::Result;
 use linascp_core::model::Host;
 use linascp_core::paths::AppPaths;
 use linascp_core::secrets::{KeyringSecretStore, SecretStore};
-use linascp_core::session::SessionManager;
+use linascp_core::session::{SessionId, SessionManager};
 use linascp_core::sshconfig::{import_ssh_config, merge_hosts};
 use linascp_core::store::Store;
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+
+use crate::output::OutputPump;
 
 pub struct AppState {
     pub paths: AppPaths,
     pub store: Arc<Store>,
     pub secrets: Arc<dyn SecretStore>,
-    pub sessions: SessionManager,
+    /// `Arc`-wrapped (not just the usual `&AppState` borrow) so a session's own output sink
+    /// can carry a cheap, 'static-owned handle for self-cleanup on exit/error — see
+    /// `commands::sessions::cleanup_fn`.
+    pub sessions: Arc<SessionManager>,
+    /// Global prompt broker; prompts are published through each call's own emit
+    /// (`ask_cancellable`), so its constructor emit is a no-op.
+    pub broker: Arc<PromptBroker>,
+    /// Running connection attempts keyed by the UI-generated connect id.
+    pub connects: Mutex<HashMap<Uuid, CancellationToken>>,
+    /// Output pumps of open sessions (needed by `session_ack` / `session_close`). `Arc`-wrapped
+    /// for the same self-cleanup reason as `sessions`.
+    pub outputs: Arc<Mutex<HashMap<SessionId, Arc<OutputPump>>>>,
 }
 
 impl AppState {
     pub fn new(paths: AppPaths, store: Store, secrets: Arc<dyn SecretStore>) -> Self {
-        Self { paths, store: Arc::new(store), secrets, sessions: SessionManager::default() }
+        Self {
+            paths,
+            store: Arc::new(store),
+            secrets,
+            sessions: Arc::new(SessionManager::default()),
+            broker: Arc::new(PromptBroker::new(Arc::new(|_event: ConnectEvent| {}))),
+            connects: Mutex::new(HashMap::new()),
+            outputs: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     /// Production state: XDG paths, on-disk SQLite store, OS keyring.
