@@ -1,6 +1,5 @@
-/* Shellport Design-Tokens
-   Dunkel ist Standard. Hell aktiviert sich über die Klasse .light am App-Root.
-   Gewählter Modus wird im Mockup unter localStorage-Key "shellport-theme" ("dark" | "light") gespeichert. */
+/* LinaSCP design tokens (from the design package)
+   Dark is the default. Light is enabled via the .light class on the app root. */
 
 .app {
   color-scheme: dark;

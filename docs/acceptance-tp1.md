@@ -1,7 +1,7 @@
 # Abnahme Teilprojekt 1 – manuelle Checkliste
 
 Grundlage: Spec `docs/superpowers/specs/2026-10-11-linascp-tp1-design.md` (Abschnitt 12) und die
-TP1-Screens des Design-Pakets (`shellport-design.zip`, „Shellport“ = LinaSCP). Jeden Screen in
+TP1-Screens des Design-Pakets (`*-design.zip` im Repo-Root). Jeden Screen in
 **Hell** und **Dunkel** prüfen (Theme-Schalter unten in der Rail). Datum, Gerät und Build notieren.
 
 - Datum: ____________ · Gerät/GPU: ____________ · Build: `LinaSCP_0.1.0` (deb / AppImage / dev)
