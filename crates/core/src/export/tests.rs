@@ -9,11 +9,21 @@ fn pass(s: &str) -> SecretString {
 }
 
 fn no_secrets() -> ExportOptions {
-    ExportOptions { include_secrets: false, include_key_files: false, passphrase: None }
+    ExportOptions {
+        include_secrets: false,
+        include_key_files: false,
+        passphrase: None,
+        home: PathBuf::from("/nonexistent"),
+    }
 }
 
 fn with_secrets(passphrase: &str, key_files: bool) -> ExportOptions {
-    ExportOptions { include_secrets: true, include_key_files: key_files, passphrase: Some(pass(passphrase)) }
+    ExportOptions {
+        include_secrets: true,
+        include_key_files: key_files,
+        passphrase: Some(pass(passphrase)),
+        home: PathBuf::from("/nonexistent"),
+    }
 }
 
 struct Source {
@@ -68,7 +78,7 @@ fn source(key_path: Option<&Path>) -> Source {
 #[test]
 fn roundtrip_without_secrets_into_empty_store() {
     let src = source(None);
-    let bytes = export_data(&src.store, &src.secrets, &no_secrets()).unwrap();
+    let bytes = export_data(&src.store, &src.secrets, &no_secrets()).unwrap().bytes;
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["formatVersion"], 1);
     assert!(json.get("secrets").is_none());
@@ -99,9 +109,11 @@ fn roundtrip_without_secrets_into_empty_store() {
 #[test]
 fn export_with_secrets_requires_passphrase() {
     let src = source(None);
-    let opts = ExportOptions { include_secrets: true, include_key_files: false, passphrase: None };
+    let opts =
+        ExportOptions { include_secrets: true, include_key_files: false, passphrase: None, home: PathBuf::new() };
     assert!(matches!(export_data(&src.store, &src.secrets, &opts), Err(CoreError::Config { .. })));
-    let opts = ExportOptions { include_secrets: false, include_key_files: true, passphrase: None };
+    let opts =
+        ExportOptions { include_secrets: false, include_key_files: true, passphrase: None, home: PathBuf::new() };
     assert!(matches!(export_data(&src.store, &src.secrets, &opts), Err(CoreError::Config { .. })));
 }
 
@@ -112,7 +124,7 @@ fn roundtrip_with_secrets_and_key_files() {
     fs::write(&key_src, b"PRIVATE KEY DATA").unwrap();
     let src = source(Some(&key_src));
 
-    let bytes = export_data(&src.store, &src.secrets, &with_secrets("correct horse", true)).unwrap();
+    let bytes = export_data(&src.store, &src.secrets, &with_secrets("correct horse", true)).unwrap().bytes;
     let text = String::from_utf8_lossy(&bytes);
     assert!(text.contains("-----BEGIN AGE ENCRYPTED FILE-----"));
     assert!(!text.contains("s3cret") && !text.contains("PRIVATE KEY DATA"));
@@ -142,7 +154,7 @@ fn roundtrip_with_secrets_and_key_files() {
 #[test]
 fn wrong_passphrase_is_config_error_and_imports_nothing() {
     let src = source(None);
-    let bytes = export_data(&src.store, &src.secrets, &with_secrets("right", false)).unwrap();
+    let bytes = export_data(&src.store, &src.secrets, &with_secrets("right", false)).unwrap().bytes;
     let dst = Store::open_in_memory().unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let err = import_apply(&bytes, Some(&pass("wrong")), &HashMap::new(), &dst, &MemorySecretStore::new(), tmp.path())
@@ -162,7 +174,7 @@ fn invalid_file_is_config_error() {
 #[test]
 fn preview_detects_same_id_before_same_name() {
     let src = source(None);
-    let bytes = export_data(&src.store, &src.secrets, &no_secrets()).unwrap();
+    let bytes = export_data(&src.store, &src.secrets, &no_secrets()).unwrap().bytes;
     // Importing into the source store: every item conflicts by id.
     let preview = import_preview(&bytes, &src.store).unwrap();
     assert!(preview.items.iter().all(|i| i.conflict == Some(Conflict::SameId)));
@@ -179,7 +191,7 @@ fn preview_detects_same_id_before_same_name() {
 #[test]
 fn conflicts_default_to_skip() {
     let src = source(None);
-    let bytes = export_data(&src.store, &src.secrets, &no_secrets()).unwrap();
+    let bytes = export_data(&src.store, &src.secrets, &no_secrets()).unwrap().bytes;
     let mut changed = src.host.clone();
     changed.address = "changed".into();
     src.store.save_host(&changed).unwrap();
@@ -194,7 +206,7 @@ fn conflicts_default_to_skip() {
 #[test]
 fn replace_same_id_overwrites() {
     let src = source(None);
-    let bytes = export_data(&src.store, &src.secrets, &no_secrets()).unwrap();
+    let bytes = export_data(&src.store, &src.secrets, &no_secrets()).unwrap().bytes;
     let mut changed = src.host.clone();
     changed.address = "changed".into();
     src.store.save_host(&changed).unwrap();
@@ -210,7 +222,7 @@ fn replace_same_id_overwrites() {
 #[test]
 fn replace_same_name_keeps_existing_id() {
     let src = source(None);
-    let bytes = export_data(&src.store, &src.secrets, &no_secrets()).unwrap();
+    let bytes = export_data(&src.store, &src.secrets, &no_secrets()).unwrap().bytes;
     let dst = Store::open_in_memory().unwrap();
     let existing = Host::new("web", "elsewhere");
     dst.save_host(&existing).unwrap();
@@ -229,7 +241,7 @@ fn replace_same_name_keeps_existing_id() {
 #[test]
 fn duplicate_gets_new_ids_suffix_and_remapped_secrets() {
     let src = source(None);
-    let bytes = export_data(&src.store, &src.secrets, &with_secrets("pw", false)).unwrap();
+    let bytes = export_data(&src.store, &src.secrets, &with_secrets("pw", false)).unwrap().bytes;
     let resolutions = HashMap::from([(src.profile.id, Resolution::Duplicate), (src.host.id, Resolution::Duplicate)]);
     let tmp = tempfile::tempdir().unwrap();
 
@@ -287,4 +299,72 @@ fn decrypt_payload_accepts_the_fixed_work_factor() {
     let block = encrypt(&json, &passphrase).unwrap();
     let decoded = decrypt_payload(&block, &passphrase).unwrap();
     assert_eq!(decoded.secrets.get("a").map(String::as_str), Some("b"));
+}
+
+#[test]
+fn key_file_with_tilde_path_is_expanded_against_home() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    fs::create_dir_all(home.join(".ssh")).unwrap();
+    fs::write(home.join(".ssh/id_tilde"), b"TILDE KEY DATA").unwrap();
+    let src = source(Some(Path::new("~/.ssh/id_tilde")));
+
+    let mut opts = with_secrets("correct horse", true);
+    opts.home = home;
+    let output = export_data(&src.store, &src.secrets, &opts).unwrap();
+    assert!(output.report.skipped_keys.is_empty(), "nothing skipped: {:?}", output.report.skipped_keys);
+
+    let dst = Store::open_in_memory().unwrap();
+    let key_dir = tmp.path().join("imported");
+    import_apply(
+        &output.bytes,
+        Some(&pass("correct horse")),
+        &HashMap::new(),
+        &dst,
+        &MemorySecretStore::new(),
+        &key_dir,
+    )
+    .unwrap();
+    let key_host = dst.list_hosts().unwrap().into_iter().find(|h| h.name == "keyhost").unwrap();
+    let HostAuth::Custom { auth } = &key_host.auth else { panic!("expected custom auth") };
+    let new_path = PathBuf::from(auth.key_path.clone().unwrap());
+    assert_eq!(new_path, key_dir.join("id_tilde"));
+    assert_eq!(fs::read(&new_path).unwrap(), b"TILDE KEY DATA");
+}
+
+#[test]
+fn missing_key_file_is_reported_and_does_not_fail_the_export() {
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = tmp.path().join("id_gone");
+    let src = source(Some(&missing));
+
+    let output = export_data(&src.store, &src.secrets, &with_secrets("correct horse", true)).unwrap();
+    assert_eq!(output.report.skipped_keys, vec![missing.to_string_lossy().into_owned()]);
+
+    // The rest of the export (entries and secrets) is still complete.
+    let dst = Store::open_in_memory().unwrap();
+    let report = import_apply(
+        &output.bytes,
+        Some(&pass("correct horse")),
+        &HashMap::new(),
+        &dst,
+        &MemorySecretStore::new(),
+        tmp.path(),
+    )
+    .unwrap();
+    assert_eq!(report.imported, 4);
+    assert_eq!(report.secrets_restored, 2);
+}
+
+#[test]
+fn unreadable_key_file_is_reported() {
+    let tmp = tempfile::tempdir().unwrap();
+    // A directory cannot be read as a file: stands in for any read error (permissions are
+    // not reliable when the tests run as root).
+    let unreadable = tmp.path().join("id_dir");
+    fs::create_dir(&unreadable).unwrap();
+    let src = source(Some(&unreadable));
+
+    let output = export_data(&src.store, &src.secrets, &with_secrets("correct horse", true)).unwrap();
+    assert_eq!(output.report.skipped_keys, vec![unreadable.to_string_lossy().into_owned()]);
 }

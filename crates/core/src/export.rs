@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{CoreError, Result};
 use crate::fsutil;
 use crate::model::{AuthConfig, AuthMethod, Group, Host, HostAuth, Id, LoginProfile, now_unix};
+use crate::paths::expand_tilde;
 use crate::secrets::{SecretKind, SecretOwner, SecretStore, account_name, parse_account_name};
 use crate::store::{self, Store};
 
@@ -43,6 +44,23 @@ pub struct ExportOptions {
     pub include_secrets: bool,
     pub include_key_files: bool,
     pub passphrase: Option<SecretString>,
+    /// Home directory a leading `~/` in a key path is expanded against.
+    pub home: PathBuf,
+}
+
+/// What an export left out without failing.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportReport {
+    /// Key paths (as configured) whose files were missing or unreadable and are not embedded.
+    pub skipped_keys: Vec<String>,
+}
+
+/// The serialized export plus its report.
+#[derive(Debug)]
+pub struct ExportOutput {
+    pub bytes: Vec<u8>,
+    pub report: ExportReport,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -117,7 +135,7 @@ struct SecretPayload {
 }
 
 /// Serializes the whole store. Files containing secrets must be written with mode 0600.
-pub fn export_data(store: &Store, secrets: &dyn SecretStore, opts: &ExportOptions) -> Result<Vec<u8>> {
+pub fn export_data(store: &Store, secrets: &dyn SecretStore, opts: &ExportOptions) -> Result<ExportOutput> {
     if opts.include_key_files && !opts.include_secrets {
         return Err(CoreError::config("key files can only be exported together with secrets"));
     }
@@ -131,13 +149,15 @@ pub fn export_data(store: &Store, secrets: &dyn SecretStore, opts: &ExportOption
         }
     }
 
+    let mut report = ExportReport::default();
     let secrets_block = if opts.include_secrets {
         let passphrase = opts
             .passphrase
             .as_ref()
             .filter(|p| !p.expose_secret().is_empty())
             .ok_or_else(|| CoreError::config("passphrase required to export secrets"))?;
-        let payload = collect_secrets(&hosts, &profiles, secrets, opts.include_key_files)?;
+        let payload =
+            collect_secrets(&hosts, &profiles, secrets, opts.include_key_files.then_some(&opts.home), &mut report)?;
         let json = serde_json::to_vec(&payload).map_err(|e| CoreError::internal(e.to_string()))?;
         Some(encrypt(&json, passphrase)?)
     } else {
@@ -153,7 +173,8 @@ pub fn export_data(store: &Store, secrets: &dyn SecretStore, opts: &ExportOption
         settings,
         secrets: secrets_block,
     };
-    serde_json::to_vec_pretty(&doc).map_err(|e| CoreError::internal(e.to_string()))
+    let bytes = serde_json::to_vec_pretty(&doc).map_err(|e| CoreError::internal(e.to_string()))?;
+    Ok(ExportOutput { bytes, report })
 }
 
 pub fn import_preview(bytes: &[u8], store: &Store) -> Result<ImportPreview> {
@@ -369,7 +390,8 @@ fn collect_secrets(
     hosts: &[Host],
     profiles: &[LoginProfile],
     secrets: &dyn SecretStore,
-    include_key_files: bool,
+    key_files_home: Option<&PathBuf>,
+    report: &mut ExportReport,
 ) -> Result<SecretPayload> {
     let mut payload = SecretPayload::default();
     let owners =
@@ -381,7 +403,7 @@ fn collect_secrets(
             }
         }
     }
-    if include_key_files {
+    if let Some(home) = key_files_home {
         let auths = hosts
             .iter()
             .filter_map(|h| match &h.auth {
@@ -391,15 +413,19 @@ fn collect_secrets(
             .chain(profiles.iter().map(|p| &p.auth));
         for auth in auths {
             let Some(path) = key_path(auth) else { continue };
-            if payload.key_files.contains_key(path) {
+            if payload.key_files.contains_key(path) || report.skipped_keys.iter().any(|p| p == path) {
                 continue;
             }
-            match fs::read(path) {
+            // Keyed by the configured path: import rewrites exactly that value.
+            match fs::read(expand_tilde(path, home)) {
                 Ok(content) => {
                     payload.key_files.insert(path.to_string(), B64.encode(content));
                 }
-                Err(err) if err.kind() == ErrorKind::NotFound => {}
-                Err(err) => return Err(err.into()),
+                // Missing or unreadable keys are reported, not fatal: the rest of the export stays useful.
+                Err(err) => {
+                    tracing::warn!(kind = ?err.kind(), "key file not exported");
+                    report.skipped_keys.push(path.to_string());
+                }
             }
         }
     }

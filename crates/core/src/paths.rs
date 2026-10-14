@@ -3,6 +3,15 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{CoreError, Result};
 
+/// Expand a leading `~/` (or a bare `~`) against `home`; other paths are returned unchanged.
+pub fn expand_tilde(path: &str, home: &Path) -> PathBuf {
+    match path.strip_prefix("~/") {
+        Some(rest) => home.join(rest),
+        None if path == "~" => home.to_path_buf(),
+        None => PathBuf::from(path),
+    }
+}
+
 /// All filesystem locations used by LinaSCP.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppPaths {
@@ -73,6 +82,15 @@ fn absolute_or(value: Option<OsString>, fallback: PathBuf) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expand_tilde_uses_home() {
+        let home = Path::new("/home/u");
+        assert_eq!(expand_tilde("~/.ssh/id", home), PathBuf::from("/home/u/.ssh/id"));
+        assert_eq!(expand_tilde("~", home), PathBuf::from("/home/u"));
+        assert_eq!(expand_tilde("/etc/key", home), PathBuf::from("/etc/key"));
+        assert_eq!(expand_tilde("~other/key", home), PathBuf::from("~other/key"));
+    }
 
     #[test]
     fn for_root_places_everything_below_root() {

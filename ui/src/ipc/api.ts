@@ -8,6 +8,7 @@ import { commands } from "./bindings";
 import type {
   ConnectEvent,
   CoreError,
+  ExportReport,
   Group,
   Host,
   ImportPreview,
@@ -29,6 +30,7 @@ export type {
   ConnectEvent,
   CoreError,
   EnvVar,
+  ExportReport,
   ForwardKind,
   Group,
   Host,
@@ -186,8 +188,8 @@ export function exportFile(
   includeSecrets: boolean,
   includeKeyFiles: boolean,
   passphrase: string | null,
-): Promise<void> {
-  return unwrapVoid(commands.exportFile(path, includeSecrets, includeKeyFiles, passphrase));
+): Promise<ExportReport> {
+  return unwrap(commands.exportFile(path, includeSecrets, includeKeyFiles, passphrase));
 }
 export function importPreview(path: string): Promise<ImportPreview> {
   return unwrap(commands.importPreview(path));

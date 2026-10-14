@@ -1,6 +1,6 @@
 //! Execution of the configured SSH authentication method.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use russh::MethodSet;
@@ -16,6 +16,7 @@ use super::prompt::{EmitFn, KbdPrompt, Prompt, PromptAnswer, PromptBroker};
 use super::{ConnectTarget, log_line};
 use crate::error::{CoreError, Result};
 use crate::model::{AuthConfig, AuthMethod, HostAuth};
+use crate::paths::expand_tilde;
 use crate::secrets::{SecretKind, SecretOwner, SecretStore};
 
 /// Maximum password / passphrase attempts before giving up.
@@ -87,15 +88,6 @@ pub fn resolve_auth(target: &ConnectTarget) -> Result<(AuthConfig, SecretOwner)>
             Some(profile) if profile.id == *profile_id => Ok((profile.auth.clone(), SecretOwner::Profile(profile.id))),
             _ => Err(CoreError::Config { message: format!("login profile {profile_id} not found") }),
         },
-    }
-}
-
-/// Expand a leading `~/` against `home`.
-pub fn expand_tilde(path: &str, home: &Path) -> PathBuf {
-    match path.strip_prefix("~/") {
-        Some(rest) => home.join(rest),
-        None if path == "~" => home.to_path_buf(),
-        None => PathBuf::from(path),
     }
 }
 
@@ -545,13 +537,6 @@ NKGOvMLy4gKjk9jA==
 
         let missing = ConnectTarget { host, profile: None };
         assert!(matches!(resolve_auth(&missing), Err(CoreError::Config { .. })));
-    }
-
-    #[test]
-    fn expand_tilde_uses_home() {
-        let home = Path::new("/home/u");
-        assert_eq!(expand_tilde("~/.ssh/id", home), PathBuf::from("/home/u/.ssh/id"));
-        assert_eq!(expand_tilde("/etc/key", home), PathBuf::from("/etc/key"));
     }
 
     #[tokio::test]

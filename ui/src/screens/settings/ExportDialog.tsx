@@ -17,6 +17,8 @@ export function ExportDialog() {
   const [repeat, setRepeat] = useState("");
   const [touched, setTouched] = useState({ passphrase: false, repeat: false });
   const [busy, setBusy] = useState(false);
+  /** Key paths the finished export could not include; the dialog then stays open to show them. */
+  const [skippedKeys, setSkippedKeys] = useState<string[] | null>(null);
   const errors = validateExport({ includeSecrets, passphrase, repeat });
   const invalid = Object.keys(errors).length > 0;
   const texts = t.settings.export;
@@ -34,9 +36,10 @@ export function ExportDialog() {
     const path = ensureExtension(chosen);
     setBusy(true);
     try {
-      await exportFile(path, includeSecrets, includeSecrets && includeKeys, includeSecrets ? passphrase : null);
+      const report = await exportFile(path, includeSecrets, includeSecrets && includeKeys, includeSecrets ? passphrase : null);
       toast.show({ tone: "green", message: texts.done(path) });
-      closeModal();
+      if (report.skippedKeys.length > 0) setSkippedKeys(report.skippedKeys);
+      else closeModal();
     } catch (error) {
       toast.show({ tone: "red", message: texts.failed, details: errorDetails(error) });
     } finally {
@@ -51,17 +54,35 @@ export function ExportDialog() {
       title={texts.title}
       onClose={closeModal}
       footer={
-        <>
-          <Button variant="ghost" onClick={closeModal}>
-            {t.common.cancel}
+        skippedKeys ? (
+          <Button variant="primary" onClick={closeModal}>
+            {t.settings.done}
           </Button>
-          <Button variant="primary" disabled={invalid || busy} onClick={() => void run()}>
-            {texts.submit}
-          </Button>
-        </>
+        ) : (
+          <>
+            <Button variant="ghost" onClick={closeModal}>
+              {t.common.cancel}
+            </Button>
+            <Button variant="primary" disabled={invalid || busy} onClick={() => void run()}>
+              {texts.submit}
+            </Button>
+          </>
+        )
       }
     >
       <div className={styles.sections}>
+        {skippedKeys ? (
+          <div role="status" aria-label={texts.skippedTitle} className={styles.confirm}>
+            <span>{texts.skipped(skippedKeys.length)}</span>
+            <ul className={styles.skippedKeys}>
+              {skippedKeys.map((path) => (
+                <li key={path} className="mono">
+                  {path}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         <p className={styles.hint}>{texts.intro}</p>
         <Checkbox label={texts.includeSecrets} hint={texts.includeSecretsHint} checked={includeSecrets} onChange={setIncludeSecrets} />
         {includeSecrets ? (

@@ -28,7 +28,7 @@ export const commands = {
 	sessionResize: (sessionId: string, cols: number, rows: number) => typedError<null, CoreError>(__TAURI_INVOKE("session_resize", { sessionId, cols, rows })),
 	sessionAck: (sessionId: string, bytes: number) => typedError<null, CoreError>(__TAURI_INVOKE("session_ack", { sessionId, bytes })),
 	sessionClose: (sessionId: string) => typedError<null, CoreError>(__TAURI_INVOKE("session_close", { sessionId })),
-	exportFile: (path: string, includeSecrets: boolean, includeKeyFiles: boolean, passphrase: string | null) => typedError<null, CoreError>(__TAURI_INVOKE("export_file", { path, includeSecrets, includeKeyFiles, passphrase })),
+	exportFile: (path: string, includeSecrets: boolean, includeKeyFiles: boolean, passphrase: string | null) => typedError<ExportReport, CoreError>(__TAURI_INVOKE("export_file", { path, includeSecrets, includeKeyFiles, passphrase })),
 	importPreview: (path: string) => typedError<ImportPreview, CoreError>(__TAURI_INVOKE("import_preview", { path })),
 	importApply: (path: string, passphrase: string | null, resolutions: { [key in string]: Resolution }) => typedError<ImportReport, CoreError>(__TAURI_INVOKE("import_apply", { path, passphrase, resolutions })),
 	/**  Re-reads `~/.ssh/config` (it is read on every list call; this is the explicit "Neu einlesen"). */
@@ -62,6 +62,12 @@ export type CoreError = { type: "network"; kind: NetworkKind; message: string } 
 export type EnvVar = {
 	key: string,
 	value: string,
+};
+
+/**  What an export left out without failing. */
+export type ExportReport = {
+	/**  Key paths (as configured) whose files were missing or unreadable and are not embedded. */
+	skippedKeys: string[],
 };
 
 export type ForwardKind = "local" | "remote" | "dynamic";

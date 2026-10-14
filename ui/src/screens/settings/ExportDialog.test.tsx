@@ -23,7 +23,7 @@ const submit = () => screen.getByRole("button", { name: "Exportieren …" });
 
 beforeEach(() => {
   useUiStore.setState(useUiStore.getInitialState(), true);
-  vi.mocked(api.exportFile).mockResolvedValue(undefined);
+  vi.mocked(api.exportFile).mockResolvedValue({ skippedKeys: [] });
   vi.mocked(dialog.save).mockResolvedValue("/home/u/backup");
 });
 
@@ -60,6 +60,24 @@ describe("ExportDialog", () => {
     await waitFor(() =>
       expect(api.exportFile).toHaveBeenCalledWith("/home/u/backup.linascp", true, true, "kurz-aber-jetzt-lang"),
     );
+  });
+
+  it("lists key files that could not be included", async () => {
+    vi.mocked(api.exportFile).mockResolvedValue({ skippedKeys: ["~/.ssh/id_gone", "/keys/unreadable"] });
+    renderDialog();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Geheimnisse einschließen" }));
+    await userEvent.type(screen.getByLabelText("Passphrase"), "lang-genug-1");
+    await userEvent.type(screen.getByLabelText("Passphrase wiederholen"), "lang-genug-1");
+    await userEvent.click(screen.getByRole("checkbox", { name: "Private Schlüsseldateien einschließen" }));
+    await userEvent.click(submit());
+    const notice = await screen.findByRole("status", { name: "Nicht eingeschlossene Schlüsseldateien" });
+    expect(notice).toHaveTextContent("2 Schlüsseldateien fehlen oder sind nicht lesbar");
+    expect(notice).toHaveTextContent("~/.ssh/id_gone");
+    expect(notice).toHaveTextContent("/keys/unreadable");
+    // The dialog stays open so the notice can be read; closing is explicit.
+    expect(useUiStore.getState().modal).toEqual({ type: "export" });
+    await userEvent.click(screen.getByRole("button", { name: "Fertig" }));
+    expect(useUiStore.getState().modal).toBeNull();
   });
 
   it("does nothing when the save dialog is cancelled", async () => {

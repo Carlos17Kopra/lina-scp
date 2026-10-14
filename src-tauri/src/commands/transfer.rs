@@ -5,7 +5,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use linascp_core::error::{CoreError, Result};
-use linascp_core::export::{self as core_export, ExportOptions, ImportPreview, ImportReport, Resolution};
+use linascp_core::export::{self as core_export, ExportOptions, ExportReport, ImportPreview, ImportReport, Resolution};
 use linascp_core::model::{Host, Id};
 use secrecy::SecretString;
 use tauri::State;
@@ -29,14 +29,16 @@ pub(crate) async fn export_to(
     include_secrets: bool,
     include_key_files: bool,
     passphrase: Option<String>,
-) -> Result<()> {
+) -> Result<ExportReport> {
     let store = state.store.clone();
     let secrets = state.secrets.clone();
+    let home = state.paths.home.clone();
     blocking(move || {
         let options =
-            ExportOptions { include_secrets, include_key_files, passphrase: passphrase.map(SecretString::from) };
-        let bytes = core_export::export_data(&store, secrets.as_ref(), &options)?;
-        write_private(&path, &bytes)
+            ExportOptions { include_secrets, include_key_files, passphrase: passphrase.map(SecretString::from), home };
+        let output = core_export::export_data(&store, secrets.as_ref(), &options)?;
+        write_private(&path, &output.bytes)?;
+        Ok(output.report)
     })
     .await
 }
@@ -84,7 +86,7 @@ pub async fn export_file(
     include_secrets: bool,
     include_key_files: bool,
     passphrase: Option<String>,
-) -> Result<()> {
+) -> Result<ExportReport> {
     export_to(&state, non_empty_path(path)?, include_secrets, include_key_files, passphrase).await
 }
 

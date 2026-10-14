@@ -437,6 +437,9 @@ export const t = {
       filter: "LinaSCP-Export",
       done: (path: string) => `Export gespeichert: ${path}`,
       failed: "Export fehlgeschlagen",
+      skippedTitle: "Nicht eingeschlossene Schlüsseldateien",
+      skipped: (count: number) =>
+        `${count === 1 ? "1 Schlüsseldatei fehlt oder ist nicht lesbar" : `${count} Schlüsseldateien fehlen oder sind nicht lesbar`} und wurde${count === 1 ? "" : "n"} nicht eingeschlossen. Alle übrigen Daten wurden exportiert.`,
     },
     import: {
       title: "Importieren",
