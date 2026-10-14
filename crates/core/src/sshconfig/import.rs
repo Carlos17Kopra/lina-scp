@@ -36,7 +36,9 @@ pub fn import_ssh_config(path: &Path) -> Result<Vec<Host>> {
 /// Stored hosts win over imported hosts with the same name. Result is sorted by name
 /// (case-insensitive).
 pub fn merge_hosts(stored: Vec<Host>, imported: Vec<Host>) -> Vec<Host> {
-    let names: HashSet<String> = stored.iter().map(|h| h.name.clone()).collect();
+    // A stored name also hides the imported alias it is mirrored as (see `Mirror::render`).
+    let names: HashSet<String> =
+        stored.iter().flat_map(|h| [h.name.clone(), super::mirror::host_alias(&h.name)]).collect();
     let mut merged = stored;
     merged.extend(imported.into_iter().filter(|h| !names.contains(&h.name)));
     merged.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.name.cmp(&b.name)));
@@ -241,5 +243,16 @@ mod review_focus_tests {
 
         let hosts = import_ssh_config(&path).expect("Include/Match must not break the import");
         assert!(hosts.iter().any(|h| h.name == "main" && h.address == "10.0.0.1"));
+    }
+
+    #[test]
+    fn stored_host_hides_the_imported_alias_it_is_mirrored_as() {
+        let stored = vec![Host::new("O'Reilly server", "a.example")];
+        let mut mirrored = Host::new("O-Reilly-server", "a.example");
+        mirrored.source = HostSource::SshConfig;
+        let other = Host::new("other", "o.example");
+        let merged = merge_hosts(stored, vec![mirrored, other]);
+        let names: Vec<_> = merged.iter().map(|h| h.name.as_str()).collect();
+        assert_eq!(names, vec!["O'Reilly server", "other"]);
     }
 }

@@ -1,6 +1,7 @@
 //! Mirror mode: LinaSCP hosts are written to `~/.ssh/config.d/linascp.conf`,
 //! which is included from the top of `~/.ssh/config`.
 
+use std::collections::HashSet;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -29,6 +30,7 @@ impl Mirror {
     /// validation, or whose alias would be an ssh_config pattern, is skipped and logged.
     pub fn render(hosts: &[Host], profiles: &[LoginProfile]) -> String {
         let mut out = format!("{HEADER}\n");
+        let mut aliases = HashSet::new();
         for host in hosts.iter().filter(|h| h.source == HostSource::Linascp) {
             let profile = match &host.auth {
                 HostAuth::Profile { profile_id } => profiles.iter().find(|p| p.id == *profile_id),
@@ -37,6 +39,10 @@ impl Mirror {
             let jump = host.jump_host_id.and_then(|id| hosts.iter().find(|h| h.id == id));
             if let Some(reason) = skip_reason(host, profile, jump) {
                 tracing::warn!(host_id = %host.id, reason, "host not written to the ssh mirror file");
+                continue;
+            }
+            if !aliases.insert(host_alias(&host.name)) {
+                tracing::warn!(host_id = %host.id, "host alias already used by an earlier host, not written to the ssh mirror file");
                 continue;
             }
             let auth: Option<&AuthConfig> = match &host.auth {
@@ -144,25 +150,21 @@ fn skip_reason(host: &Host, profile: Option<&LoginProfile>, jump: Option<&Host>)
     if profile.is_some_and(|p| validate_profile(p).is_err()) {
         return Some("invalid login profile field");
     }
-    if !is_alias(&host.name) {
-        return Some("name is not a plain ssh_config alias");
+    if host_alias(&host.name).is_empty() {
+        return Some("name yields an empty ssh_config alias");
     }
-    if jump.is_some_and(|j| !is_safe_text(&j.name) || !is_alias(&j.name)) {
+    if jump.is_some_and(|j| !is_safe_text(&j.name) || host_alias(&j.name).is_empty()) {
         return Some("invalid jump host name");
     }
     None
 }
 
-/// The rendered alias must name exactly this host: non-empty and free of the pattern
-/// characters `*`, `?`, `!` and `,` (e.g. a host named `*` would apply to every ssh connection).
-fn is_alias(name: &str) -> bool {
-    let alias = host_alias(name);
-    !alias.is_empty() && !alias.contains(['*', '?', '!', ','])
-}
-
-/// ssh_config `Host` aliases cannot contain whitespace.
-fn host_alias(name: &str) -> String {
-    name.split_whitespace().collect::<Vec<_>>().join("-")
+/// The `Host` alias derived from a display name: every character outside `[A-Za-z0-9._-]`
+/// becomes `-`. That keeps the alias a plain word for OpenSSH (no quotes, escapes, comment
+/// or pattern characters) while the display name itself stays unrestricted.
+/// Also used to match imported ssh-config aliases against stored host names.
+pub(crate) fn host_alias(name: &str) -> String {
+    name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '-' }).collect()
 }
 
 fn quote(value: &str) -> String {
@@ -298,11 +300,11 @@ mod review_focus_tests {
     use crate::model::Host;
 
     #[test]
-    fn render_sanitizes_whitespace_and_keeps_unicode_names() {
+    fn render_sanitizes_whitespace_and_non_ascii_names() {
         let mut host = Host::new("Kunde Müller  Shop", "shop.example.de");
         host.user = Some("deploy".into());
         let out = Mirror::render(&[host], &[]);
-        assert!(out.contains("Host Kunde-Müller-Shop\n"), "{out}");
+        assert!(out.contains("Host Kunde-M-ller--Shop\n"), "{out}");
         assert!(out.contains("HostName shop.example.de"), "{out}");
     }
 }
@@ -356,10 +358,150 @@ mod injection_tests {
     }
 
     #[test]
-    fn render_skips_host_names_that_would_become_patterns() {
+    fn pattern_characters_in_names_never_reach_the_host_line() {
         let wildcard = Host::new("*", "attacker.example");
-        let negated = Host::new("!corp", "attacker.example");
+        let negated = Host::new("!corp", "attacker.example2");
         let out = Mirror::render(&[wildcard, negated], &[]);
-        assert!(!out.contains("attacker.example"), "{out}");
+        assert!(out.contains("Host -\n") && out.contains("Host -corp\n"), "{out}");
+        assert!(!out.lines().any(|l| l.starts_with("Host") && l.contains(['*', '?', '!', ','])), "{out}");
+    }
+
+    #[test]
+    fn render_skips_hosts_with_values_openssh_would_misparse() {
+        let mut quote_user = Host::new("q-user", "a.example");
+        quote_user.user = Some("o'brien".into());
+        let quote_addr = Host::new("q-addr", "o'x.example");
+        let hash_addr = Host::new("h-addr", "#x.example");
+        let mut bslash_key = Host::new("b-key", "b.example");
+        bslash_key.auth = HostAuth::Custom {
+            auth: AuthConfig { method: AuthMethod::Key, key_path: Some("/keys/dir\\".into()), has_secret: false },
+        };
+        let out = Mirror::render(&[quote_user, quote_addr, hash_addr, bslash_key], &[]);
+        assert_eq!(out, format!("{HEADER}\n"), "{out}");
+    }
+
+    #[test]
+    fn alias_maps_everything_outside_the_safe_set_to_dash() {
+        assert_eq!(host_alias("O'Reilly server"), "O-Reilly-server");
+        assert_eq!(host_alias("Web Server 1"), "Web-Server-1");
+        assert_eq!(host_alias("a.b_c-d"), "a.b_c-d");
+        assert_eq!(host_alias("Team #1 *"), "Team--1--");
+        assert_eq!(host_alias("Müller"), "M-ller");
+    }
+
+    #[test]
+    fn render_skips_later_host_with_colliding_alias() {
+        let first = Host::new("a b", "first.example");
+        let second = Host::new("a-b", "second.example");
+        let third = Host::new("a'b", "third.example");
+        let out = Mirror::render(&[first, second, third], &[]);
+        assert!(out.contains("first.example"), "{out}");
+        assert!(!out.contains("second.example") && !out.contains("third.example"), "{out}");
+        assert_eq!(out.matches("Host a-b\n").count(), 1, "{out}");
+    }
+
+    #[test]
+    fn proxyjump_uses_sanitized_alias_of_jump_host() {
+        let mut jump = Host::new("O'Reilly jump", "jump.example");
+        jump.id = crate::model::Id::new_v4();
+        let mut target = Host::new("target", "t.example");
+        target.jump_host_id = Some(jump.id);
+        let out = Mirror::render(&[jump, target], &[]);
+        assert!(out.contains("    ProxyJump O-Reilly-jump\n"), "{out}");
+    }
+}
+
+/// Runs the real `ssh -G` against rendered configs. Uses `-F <temp file>` only, so the user's
+/// own `~/.ssh` is never read or written; `-G` prints the effective config and never connects.
+#[cfg(test)]
+mod openssh_tests {
+    use super::*;
+    use std::process::{Command, Stdio};
+
+    fn ssh_available() -> bool {
+        Command::new("ssh").arg("-V").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok()
+    }
+
+    fn ssh_g(conf: &Path, alias: &str) -> (bool, String, String) {
+        let out = Command::new("ssh")
+            .args(["-G", "-F"])
+            .arg(conf)
+            .args(["-o", "UserKnownHostsFile=/dev/null", "--", alias])
+            .stdin(Stdio::null())
+            .output()
+            .expect("run ssh");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    }
+
+    fn field<'a>(stdout: &'a str, key: &str) -> Option<&'a str> {
+        stdout.lines().find_map(|l| l.strip_prefix(key).and_then(|r| r.strip_prefix(' ')))
+    }
+
+    #[test]
+    fn openssh_accepts_rendered_tricky_display_names() {
+        if !ssh_available() {
+            eprintln!("NOTE: `ssh` not on PATH, skipping openssh_accepts_rendered_tricky_display_names");
+            return;
+        }
+        let names = ["O'Reilly server", "Kunde Müller Shop", "Team #1 box", "star * host", "back\\slash ?!,"];
+        let mut hosts: Vec<Host> = Vec::new();
+        for (i, name) in names.iter().enumerate() {
+            let mut h = Host::new(name, &format!("host{i}.example"));
+            h.user = Some(format!("user{i}"));
+            hosts.push(h);
+        }
+        let mut jump = Host::new("O'Reilly jump", "jump.example");
+        jump.id = crate::model::Id::new_v4();
+        hosts.push(jump.clone());
+        let mut via = Host::new("via 'jump'", "via.example");
+        via.jump_host_id = Some(jump.id);
+        hosts.push(via);
+
+        let rendered = Mirror::render(&hosts, &[]);
+        let tmp = tempfile::tempdir().unwrap();
+        let conf = tmp.path().join("linascp.conf");
+        fs::write(&conf, &rendered).unwrap();
+
+        for (i, host) in hosts.iter().take(names.len()).enumerate() {
+            let alias = host_alias(&host.name);
+            let (ok, stdout, stderr) = ssh_g(&conf, &alias);
+            assert!(ok, "ssh -G {alias} failed: {stderr}\n{rendered}");
+            assert_eq!(field(&stdout, "hostname"), Some(format!("host{i}.example").as_str()), "{alias}");
+            assert_eq!(field(&stdout, "user"), Some(format!("user{i}").as_str()), "{alias}");
+        }
+        let (ok, stdout, stderr) = ssh_g(&conf, &host_alias("via 'jump'"));
+        assert!(ok, "{stderr}\n{rendered}");
+        assert_eq!(field(&stdout, "hostname"), Some("via.example"));
+        assert_eq!(field(&stdout, "proxyjump"), Some("O-Reilly-jump"));
+    }
+
+    /// RED evidence kept as a regression test: the pre-R22 rendering (`Host O'Reilly-server`,
+    /// `User o'brien`) is rejected by OpenSSH, which is why the sanitising exists.
+    #[test]
+    fn openssh_rejects_the_legacy_unsanitised_rendering() {
+        if !ssh_available() {
+            eprintln!("NOTE: `ssh` not on PATH, skipping openssh_rejects_the_legacy_unsanitised_rendering");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        for (i, legacy) in [
+            "Host O'Reilly-server\n    HostName h.example\n",
+            "Host ok\n    HostName h.example\n    User o'brien\n",
+            "Host ok\n    HostName h.example\n    IdentityFile \"/keys/dir with space\\\"\n",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let conf = tmp.path().join(format!("legacy{i}.conf"));
+            fs::write(&conf, legacy).unwrap();
+            let alias = if i == 0 { "O'Reilly-server" } else { "ok" };
+            let (ok, _stdout, stderr) = ssh_g(&conf, alias);
+            assert!(!ok, "legacy rendering {i} unexpectedly accepted:\n{legacy}");
+            eprintln!("legacy {i}: {}", stderr.trim());
+        }
     }
 }

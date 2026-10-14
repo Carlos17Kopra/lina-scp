@@ -258,6 +258,7 @@ export const t = {
     errors: {
       required: "Pflichtfeld",
       address: "Die Adresse darf keine Leerzeichen enthalten",
+      unsafeValue: (field: string) => `${field} darf kein ' oder \\ enthalten und nicht mit # beginnen`,
       port: "Port muss zwischen 1 und 65535 liegen",
       nonNegative: "Ganze Zahl ≥ 0 eingeben",
       env: (line: number) => `Zeile ${line}: Format KEY=VALUE`,

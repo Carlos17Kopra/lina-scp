@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { makeHost, makeProfile } from "../../test/fixtures";
 import { hostToDraft, NEW_GROUP, profileToDraft } from "./drafts";
-import { envError, errorTabs, hasErrors, isNonNegativeInt, validateHost, validatePort, validateProfile } from "./validate";
+import { envError, errorTabs, hasErrors, isNonNegativeInt, isSafeValue, validateHost, validatePort, validateProfile } from "./validate";
 
 const valid = hostToDraft(makeHost());
 
@@ -24,6 +24,25 @@ describe("field rules", () => {
     expect(envError("LANG=C\n\nA_1=")).toBeUndefined();
     expect(envError("LANG=C\nkaputt")).toBe("Zeile 2: Format KEY=VALUE");
     expect(envError("1X=a")).toBe("Zeile 1: Format KEY=VALUE");
+  });
+});
+
+describe("ssh_config value rule", () => {
+  it("rejects apostrophe, backslash and a leading #", () => {
+    for (const bad of ["o'brien", "a\\b", "dir\\", "#x", "  #x"]) expect(isSafeValue(bad), bad).toBe(false);
+    for (const ok of ["o.brien", "a#b", "~/.ssh/id ed25519", ""]) expect(isSafeValue(ok), ok).toBe(true);
+  });
+
+  it("flags address, user and key paths in host and profile drafts", () => {
+    const msg = "darf kein ' oder \\ enthalten und nicht mit # beginnen";
+    expect(validateHost({ ...valid, address: "o'x.example" }).address).toContain(msg);
+    const custom = { ...valid, authSource: "custom" as const, user: "o'brien" };
+    expect(validateHost(custom).user).toContain(msg);
+    expect(validateHost({ ...custom, user: "x", auth: { ...custom.auth, method: "key", keyPath: "/k\\" } }).keyPath).toContain(msg);
+    const profile = profileToDraft(makeProfile());
+    expect(validateProfile({ ...profile, user: "#u" }).user).toContain(msg);
+    expect(validateProfile({ ...profile, auth: { ...profile.auth, method: "key", keyPath: "/k'" } }).keyPath).toContain(msg);
+    expect(validateHost({ ...valid, name: "O'Reilly #1" }).name).toBeUndefined();
   });
 });
 

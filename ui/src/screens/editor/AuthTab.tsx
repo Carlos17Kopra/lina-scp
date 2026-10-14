@@ -67,7 +67,14 @@ export function AuthTab({ draft, edit, fieldError, onEditProfile }: HostFormProp
         </>
       ) : (
         <>
-          <TextField label={t.editor.user} mono spellCheck={false} value={draft.user} onChange={(user) => edit({ user })} />
+          <TextField
+            label={t.editor.user}
+            mono
+            spellCheck={false}
+            value={draft.user}
+            onChange={(user) => edit({ user }, "user")}
+            error={fieldError("user")}
+          />
           <AuthMethodFields auth={draft.auth} onChange={(auth) => edit({ auth }, "keyPath")} keyPathError={fieldError("keyPath")} />
         </>
       )}

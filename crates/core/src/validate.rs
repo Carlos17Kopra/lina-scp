@@ -13,6 +13,22 @@ pub fn is_safe_text(value: &str) -> bool {
     !value.chars().any(|c| c.is_control() || c == '"')
 }
 
+/// True when `value` can be written as an ssh_config *value* token. On top of
+/// [`is_safe_text`]: OpenSSH (>= 8.7) treats `'` as a quote and `\` as an escape even in
+/// unquoted words, and a token starting with `#` starts a comment, so none of these may occur.
+pub fn is_safe_value(value: &str) -> bool {
+    is_safe_text(value) && !value.contains(['\'', '\\']) && !value.trim_start().starts_with('#')
+}
+
+fn check_value(field: &str, value: &str) -> Result<()> {
+    check_text(field, value)?;
+    if is_safe_value(value) {
+        Ok(())
+    } else {
+        Err(CoreError::config(format!("{field} darf kein ' oder \\ enthalten und nicht mit # beginnen")))
+    }
+}
+
 fn check_text(field: &str, value: &str) -> Result<()> {
     if is_safe_text(value) {
         Ok(())
@@ -25,7 +41,7 @@ fn check_text(field: &str, value: &str) -> Result<()> {
 
 fn check_auth(auth: &AuthConfig) -> Result<()> {
     match &auth.key_path {
-        Some(path) => check_text("Schlüsseldatei", path),
+        Some(path) => check_value("Schlüsseldatei", path),
         None => Ok(()),
     }
 }
@@ -33,7 +49,7 @@ fn check_auth(auth: &AuthConfig) -> Result<()> {
 /// Checks a host's own fields. A referenced login profile is checked by [`validate_profile`].
 pub fn validate_host(host: &Host) -> Result<()> {
     check_text("Name", &host.name)?;
-    check_text("Adresse", &host.address)?;
+    check_value("Adresse", &host.address)?;
     if host.address.chars().any(char::is_whitespace) {
         return Err(CoreError::config("Adresse darf keine Leerzeichen enthalten"));
     }
@@ -41,7 +57,7 @@ pub fn validate_host(host: &Host) -> Result<()> {
         return Err(CoreError::config("Port muss zwischen 1 und 65535 liegen"));
     }
     if let Some(user) = &host.user {
-        check_text("Benutzer", user)?;
+        check_value("Benutzer", user)?;
     }
     match &host.auth {
         HostAuth::Custom { auth } => check_auth(auth),
@@ -51,7 +67,7 @@ pub fn validate_host(host: &Host) -> Result<()> {
 
 /// Checks the profile fields that are written to ssh_config (user, key path).
 pub fn validate_profile(profile: &LoginProfile) -> Result<()> {
-    check_text("Benutzer", &profile.user)?;
+    check_value("Benutzer", &profile.user)?;
     check_auth(&profile.auth)
 }
 
@@ -104,6 +120,30 @@ mod tests {
         host.port = 0;
         assert!(matches!(validate_host(&host), Err(CoreError::Config { .. })));
         host.port = 1;
+        assert!(validate_host(&host).is_ok());
+    }
+
+    #[test]
+    fn value_fields_reject_quote_backslash_and_leading_hash() {
+        for bad in ["o'brien", "a\\b", "dir\\", "#comment", "  #x"] {
+            let mut host = Host::new("ok", "h.example");
+            host.address = bad.replace(' ', "");
+            assert!(validate_host(&host).is_err(), "address {bad:?}");
+            host.address = "h.example".into();
+            host.user = Some(bad.into());
+            assert!(validate_host(&host).is_err(), "user {bad:?}");
+            host.user = None;
+            host.auth = HostAuth::Custom { auth: key_auth(bad) };
+            assert!(validate_host(&host).is_err(), "key path {bad:?}");
+            assert!(validate_profile(&LoginProfile::new("p", bad, key_auth("/k"))).is_err(), "profile user {bad:?}");
+            assert!(validate_profile(&LoginProfile::new("p", "u", key_auth(bad))).is_err(), "profile key {bad:?}");
+        }
+    }
+
+    #[test]
+    fn display_names_may_contain_quotes_backslashes_and_hash() {
+        let mut host = Host::new("O'Reilly #1 \\ server", "h.example");
+        host.user = Some("a#b".into());
         assert!(validate_host(&host).is_ok());
     }
 }

@@ -4,6 +4,7 @@ import { type AuthDraft, type EditorTab, type HostDraft, NEW_GROUP, type Profile
 export type HostField =
   | "name"
   | "address"
+  | "user"
   | "port"
   | "newGroupName"
   | "profileId"
@@ -20,6 +21,7 @@ export type FieldErrors<F extends string> = Partial<Record<F, string>>;
 export const HOST_FIELD_TAB: Record<HostField, EditorTab> = {
   name: "general",
   address: "general",
+  user: "auth",
   port: "general",
   newGroupName: "general",
   profileId: "auth",
@@ -56,8 +58,16 @@ export function envError(text: string): string | undefined {
   return undefined;
 }
 
+/** Mirrors core `is_safe_value`: OpenSSH misparses `'`, `\\` and a leading `#` in config values. */
+export function isSafeValue(text: string): boolean {
+  return !/['\\]/.test(text) && !text.trimStart().startsWith("#");
+}
+
 function keyPathError(auth: AuthDraft): string | undefined {
-  return auth.method === "key" && !auth.keyPath.trim() ? t.editor.errors.keyPath : undefined;
+  if (auth.method !== "key") return undefined;
+  const path = auth.keyPath.trim();
+  if (!path) return t.editor.errors.keyPath;
+  return isSafeValue(path) ? undefined : t.editor.errors.unsafeValue("Schlüsseldatei");
 }
 
 export function validateHost(draft: HostDraft): FieldErrors<HostField> {
@@ -67,6 +77,7 @@ export function validateHost(draft: HostDraft): FieldErrors<HostField> {
   const address = draft.address.trim();
   if (!address) errors.address = t.editor.errors.required;
   else if (/\s/.test(address)) errors.address = t.editor.errors.address;
+  else if (!isSafeValue(address)) errors.address = t.editor.errors.unsafeValue("Adresse");
   const port = validatePort(draft.port);
   if (port) errors.port = port;
   if (draft.groupId === NEW_GROUP && !draft.newGroupName.trim()) errors.newGroupName = t.editor.errors.groupName;
@@ -74,6 +85,7 @@ export function validateHost(draft: HostDraft): FieldErrors<HostField> {
   if (draft.authSource === "custom") {
     const keyPath = keyPathError(draft.auth);
     if (keyPath) errors.keyPath = keyPath;
+    if (!isSafeValue(draft.user.trim())) errors.user = t.editor.errors.unsafeValue(t.editor.user);
   }
   if (!isNonNegativeInt(draft.keepalive)) errors.keepalive = nonNegative;
   if (!isNonNegativeInt(draft.timeout)) errors.timeout = nonNegative;
@@ -91,6 +103,7 @@ export function validateProfile(draft: ProfileDraft): FieldErrors<ProfileField> 
   const errors: FieldErrors<ProfileField> = {};
   if (!draft.name.trim()) errors.name = t.editor.errors.required;
   if (!draft.user.trim()) errors.user = t.editor.errors.required;
+  else if (!isSafeValue(draft.user.trim())) errors.user = t.editor.errors.unsafeValue(t.editor.user);
   const keyPath = keyPathError(draft.auth);
   if (keyPath) errors.keyPath = keyPath;
   return errors;
