@@ -1,0 +1,40 @@
+.iconButton {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.iconButton:hover:not(:disabled) {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.iconButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.sm {
+  width: 28px;
+  height: 28px;
+}
+
+.md {
+  width: 34px;
+  height: 34px;
+}
+
+.lg {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+}
