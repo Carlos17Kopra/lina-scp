@@ -142,6 +142,22 @@ pub(crate) async fn connect_ssh_inner(
     output: Channel<RawChunk>,
     session_events: Channel<SessionEventDto>,
 ) -> Result<SessionId> {
+    // Register first: a cancel issued while the host is looked up must not be lost.
+    let guard = register_connect(state, connect_id);
+    connect_ssh_registered(state, guard, host_id, cols, rows, emit, output, session_events).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn connect_ssh_registered(
+    state: &AppState,
+    guard: ConnectGuard<'_>,
+    host_id: Id,
+    cols: u16,
+    rows: u16,
+    emit: EmitFn,
+    output: Channel<RawChunk>,
+    session_events: Channel<SessionEventDto>,
+) -> Result<SessionId> {
     let host = match find_host(state, host_id) {
         Ok(host) => host,
         Err(error) => return fail(&emit, error),
@@ -150,11 +166,14 @@ pub(crate) async fn connect_ssh_inner(
         Ok(request) => request,
         Err(error) => return fail(&emit, error),
     };
+    if guard.is_cancelled() {
+        // Cancelled during the lookup: never start the pipeline (one terminal event).
+        return fail(&emit, CoreError::Cancelled);
+    }
 
     let session_id = Uuid::new_v4();
     let pump = OutputPump::for_channel(output);
     let sink = make_sink(pump.clone(), channel_event_sender(session_events), cleanup_fn(state, session_id));
-    let guard = register_connect(state, connect_id);
     let cancel = guard.token();
     let result =
         run_pipeline(request, connect_deps(state), state.broker.clone(), emit.clone(), sink, cancel.clone()).await;
@@ -214,11 +233,19 @@ pub async fn connect_cancel(state: State<'_, AppState>, connect_id: Uuid) -> Res
 }
 
 pub(crate) async fn connect_test_inner(state: &AppState, connect_id: Uuid, host: Host, emit: EmitFn) -> Result<()> {
+    // Register first: a cancel issued while the request is resolved must not be lost.
+    let guard = register_connect(state, connect_id);
+    connect_test_registered(state, guard, host, emit).await
+}
+
+async fn connect_test_registered(state: &AppState, guard: ConnectGuard<'_>, host: Host, emit: EmitFn) -> Result<()> {
     let request = match build_request(state, host, 80, 24) {
         Ok(request) => request,
         Err(error) => return fail(&emit, error),
     };
-    let guard = register_connect(state, connect_id);
+    if guard.is_cancelled() {
+        return fail(&emit, CoreError::Cancelled);
+    }
     let cancel = guard.token();
     // core's `test_connection` already emits `Failed` on error; nothing more to do here.
     let result = test_connection(request, connect_deps(state), state.broker.clone(), emit, cancel).await;
@@ -372,6 +399,83 @@ mod tests {
         let events = events.lock().unwrap();
         assert_eq!(events.len(), 1, "exactly one terminal event");
         assert!(matches!(events.as_slice(), [ConnectEvent::Failed { error: CoreError::Config { .. } }]));
+    }
+
+    fn recording_emit() -> (EmitFn, Arc<Mutex<Vec<ConnectEvent>>>) {
+        let events: Arc<Mutex<Vec<ConnectEvent>>> = Arc::default();
+        let sink = events.clone();
+        (Arc::new(move |e: ConnectEvent| sink.lock().unwrap().push(e)), events)
+    }
+
+    /// F9: a cancel that lands while the host is still being looked up must not be lost: the
+    /// pipeline never starts and exactly one terminal `Failed { Cancelled }` is emitted.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancel_before_lookup_emits_exactly_one_cancelled_failure() {
+        let (_dir, state) = setup();
+        let host = save_host(&state, Host::new("web", "192.0.2.10")).unwrap();
+        let (emit, events) = recording_emit();
+        let connect_id = Uuid::new_v4();
+
+        let guard = register_connect(&state, connect_id);
+        cancel_connect(&state, connect_id);
+        let result = connect_ssh_registered(
+            &state,
+            guard,
+            host.id,
+            80,
+            24,
+            emit,
+            Channel::new(|_| Ok(())),
+            Channel::new(|_| Ok(())),
+        )
+        .await;
+
+        assert!(matches!(result, Err(CoreError::Cancelled)));
+        let events = events.lock().unwrap();
+        assert!(
+            matches!(events.as_slice(), [ConnectEvent::Failed { error: CoreError::Cancelled }]),
+            "exactly one terminal event and no pipeline steps, got {events:?}"
+        );
+        assert!(state.connects.lock().unwrap().is_empty());
+    }
+
+    /// F9, `connect_test` variant.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn connect_test_cancel_before_resolve_emits_exactly_one_cancelled_failure() {
+        let (_dir, state) = setup();
+        let (emit, events) = recording_emit();
+        let connect_id = Uuid::new_v4();
+
+        let guard = register_connect(&state, connect_id);
+        cancel_connect(&state, connect_id);
+        let result = connect_test_registered(&state, guard, Host::new("web", "192.0.2.11"), emit).await;
+
+        assert!(matches!(result, Err(CoreError::Cancelled)));
+        let events = events.lock().unwrap();
+        assert!(
+            matches!(events.as_slice(), [ConnectEvent::Failed { error: CoreError::Cancelled }]),
+            "exactly one terminal event and no pipeline steps, got {events:?}"
+        );
+    }
+
+    /// F9: the token is registered before the lookup, so `connect_ssh_inner` leaves no entry behind
+    /// even when the lookup fails.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_lookup_unregisters_the_connect() {
+        let (_dir, state) = setup();
+        let (emit, _events) = recording_emit();
+        let _ = connect_ssh_inner(
+            &state,
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            80,
+            24,
+            emit,
+            Channel::new(|_| Ok(())),
+            Channel::new(|_| Ok(())),
+        )
+        .await;
+        assert!(state.connects.lock().unwrap().is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
