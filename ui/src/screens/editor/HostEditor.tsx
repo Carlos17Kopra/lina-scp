@@ -57,6 +57,8 @@ export function HostEditor({
       if (draft.groupId === NEW_GROUP) {
         const group = await store.saveGroup({ id: newId(), name: draft.newGroupName.trim(), sortOrder: store.groups.length });
         groupId = group.id;
+        // Keep the created group on a failed host save so a retry does not create it again.
+        onChange({ ...frame, draft: { ...draft, groupId: group.id, newGroupName: "" } });
       }
       const saved = await store.saveHost(draftToHost(draft, groupId));
       if (draft.authSource === "custom" && !(await storeSecrets({ kind: "host", id: saved.id }, draft.auth))) {

@@ -83,9 +83,6 @@ export function ConnectionTestPanel({
       detail = (
         <div className={styles.hostKey}>
           <span>{t.editor.hostKeyChanged}</span>
-          <Button size="sm" variant="inverted" onClick={() => onAnswer(promptId, { kind: "hostKey", decision: "reject" })}>
-            {t.common.cancel}
-          </Button>
         </div>
       );
     } else if (isInlinePrompt(prompt)) {

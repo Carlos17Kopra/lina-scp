@@ -200,6 +200,7 @@ export const t = {
     keyPathPlaceholder: "~/.ssh/id_ed25519",
     pickKey: "Datei wählen …",
     pickKeyTitle: "Privaten Schlüssel wählen",
+    pickKeyFailed: "Dateiauswahl fehlgeschlagen",
     passphrase: "Passphrase",
     passphrasePlaceholder: "Optional",
     agentInfo: "Schlüssel werden vom laufenden SSH-Agent bezogen (SSH_AUTH_SOCK).",

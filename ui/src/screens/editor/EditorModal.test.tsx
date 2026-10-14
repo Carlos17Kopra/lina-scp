@@ -2,6 +2,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../../components";
+import { open } from "@tauri-apps/plugin-dialog";
 import * as api from "../../ipc/api";
 import { useHostsStore } from "../../stores/hosts";
 import { type EditorTarget, useUiStore } from "../../stores/ui";
@@ -155,6 +156,29 @@ describe("EditorModal — host", () => {
     );
   });
 
+  it("reuses the created group when saving is retried after a failed host save", async () => {
+    vi.mocked(api.hostSave).mockRejectedValueOnce({ type: "store", message: "locked" });
+    renderEditor({ kind: "host", id: "h-web" });
+    await userEvent.selectOptions(screen.getByLabelText("Gruppe"), "__new__");
+    await userEvent.type(screen.getByLabelText("Name der neuen Gruppe"), "Kunden");
+    await userEvent.click(saveButton());
+    await waitFor(() => expect(api.hostSave).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Speichern fehlgeschlagen");
+    await userEvent.click(saveButton());
+    await waitFor(() => expect(api.hostSave).toHaveBeenCalledTimes(2));
+    expect(api.groupSave).toHaveBeenCalledTimes(1);
+    expect(api.hostSave).toHaveBeenLastCalledWith(expect.objectContaining({ groupId: "new-id" }));
+  });
+
+  it("reports a failing key file dialog as a toast", async () => {
+    vi.mocked(open).mockRejectedValueOnce(new Error("portal unavailable"));
+    renderEditor({ kind: "host", id: "h-web" });
+    await userEvent.click(screen.getByRole("tab", { name: "Authentifizierung" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Schlüssel" }));
+    await userEvent.click(screen.getByRole("button", { name: "Datei wählen …" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Dateiauswahl fehlgeschlagen");
+  });
+
   it("saves an ssh-config host as an overriding LinaSCP host", async () => {
     renderEditor({ kind: "host", id: "h-cfg" });
     expect(screen.getByText(/Dieser Host stammt aus ~\/\.ssh\/config/)).toBeInTheDocument();
@@ -293,6 +317,38 @@ describe("EditorModal — Verbindung testen", () => {
     expect(screen.queryByText("Unbekannter Host-Key: SHA256:abc")).not.toBeInTheDocument();
     await act(async () => finish());
     expect(screen.getByText("● Verbindung erfolgreich, Anmeldung möglich")).toBeInTheDocument();
+  });
+
+  it("auto-answers only the first passphrase prompt of a test run", async () => {
+    vi.mocked(api.connectTest).mockImplementation(() => {
+      emit({ kind: "steps", steps: ["tcp", "hostKey", "auth"] });
+      emit({ kind: "stepStarted", step: "auth" });
+      emit({ kind: "prompt", promptId: 1, prompt: { kind: "passphrase", keyPath: "~/.ssh/id_ops" } });
+      emit({ kind: "prompt", promptId: 2, prompt: { kind: "passphrase", keyPath: "~/.ssh/id_ops" } });
+      return new Promise<void>(() => undefined);
+    });
+    renderEditor({ kind: "host", id: "h-web" });
+    await userEvent.click(screen.getByRole("tab", { name: "Authentifizierung" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Schlüssel" }));
+    await userEvent.type(screen.getByLabelText("Privater Schlüssel"), "~/.ssh/id_ops");
+    await userEvent.type(screen.getByLabelText("Passphrase"), "wrong");
+    await userEvent.click(screen.getByRole("button", { name: "Verbindung testen" }));
+    expect(await screen.findByLabelText("Passphrase für ~/.ssh/id_ops")).toBeInTheDocument();
+    expect(api.connectAnswer).toHaveBeenCalledTimes(1);
+    expect(api.connectAnswer).toHaveBeenCalledWith(1, { kind: "secret", value: "wrong", save: false });
+  });
+
+  it("rejects a changed host key without user action", async () => {
+    const info = { algorithm: "ssh-ed25519", sha256: "SHA256:abc", md5: "MD5:aa" };
+    vi.mocked(api.connectTest).mockImplementation(() => {
+      emit({ kind: "steps", steps: ["tcp", "hostKey", "auth"] });
+      emit({ kind: "stepStarted", step: "hostKey" });
+      emit({ kind: "prompt", promptId: 5, prompt: { kind: "hostKeyChanged", host: "h", port: 22, stored: info, current: info } });
+      return new Promise<void>(() => undefined);
+    });
+    renderEditor({ kind: "host", id: "h-web" });
+    await userEvent.click(screen.getByRole("button", { name: "Verbindung testen" }));
+    await waitFor(() => expect(api.connectAnswer).toHaveBeenCalledWith(5, { kind: "hostKey", decision: "reject" }));
   });
 
   it("cancels a running test when the editor closes", async () => {
