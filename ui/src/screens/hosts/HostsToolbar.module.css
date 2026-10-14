@@ -1,0 +1,76 @@
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--bd);
+  background: var(--s1);
+}
+
+.field {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--bd-strong);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--muted);
+}
+
+.field:focus-within {
+  border-color: var(--accent);
+}
+
+.search {
+  flex: 1 1 260px;
+}
+
+.quick {
+  flex: 1 1 240px;
+}
+
+.invalid,
+.invalid:focus-within {
+  border-color: var(--red);
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.input::placeholder {
+  color: var(--muted2);
+}
+
+.input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.kbd {
+  padding: 1px 6px;
+  border: 1px solid var(--bd-strong);
+  border-radius: 6px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.error {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 12px;
+  color: var(--red);
+  font-size: 12px;
+}

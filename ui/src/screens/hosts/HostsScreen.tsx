@@ -1,7 +1,21 @@
 import { t } from "../../i18n/de";
-import { ScreenPlaceholder } from "../../shell/ScreenPlaceholder";
+import { HostDetail } from "./HostDetail";
+import { HostGrid } from "./HostGrid";
+import styles from "./HostsScreen.module.css";
+import { HostsSidebar } from "./HostsSidebar";
+import { HostsToolbar } from "./HostsToolbar";
 
-/** Stub — replaced by the host overview in Task 19 (must keep rendering an h1 "Server-Übersicht" or equivalent heading). */
+/** Server overview: groups/profiles sidebar, toolbar (search, Quick Connect), host grid, detail panel. */
 export function HostsScreen() {
-  return <ScreenPlaceholder title={t.stubs.hosts} />;
+  return (
+    <div className={styles.screen}>
+      <h1 className="visually-hidden">{t.hosts.title}</h1>
+      <HostsSidebar />
+      <div className={styles.main}>
+        <HostsToolbar />
+        <HostGrid />
+      </div>
+      <HostDetail />
+    </div>
+  );
 }
