@@ -45,6 +45,7 @@ export function ErrorAuth({
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
+    if (flow.submitting) return;
     if (!askPassword) {
       void retry();
       return;
@@ -112,12 +113,12 @@ export function ErrorAuth({
         </Button>
         <span className={styles.spacer} />
         {askPassword ? (
-          <Button variant="primary" type="submit" form={formId}>
-            {texts.retry}
+          <Button variant="primary" type="submit" form={formId} disabled={flow.submitting}>
+            {flow.submitting ? t.connect.error.connecting : texts.retry}
           </Button>
         ) : (
-          <Button variant="primary" onClick={() => submit()}>
-            {texts.retry}
+          <Button variant="primary" disabled={flow.submitting} onClick={() => submit()}>
+            {flow.submitting ? t.connect.error.connecting : texts.retry}
           </Button>
         )}
       </div>

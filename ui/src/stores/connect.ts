@@ -19,6 +19,7 @@ import {
   sessionClose,
   type Step,
 } from "../ipc/api";
+import { hostProfile } from "../model/hostFormat";
 import { applyConnectEvent, asCoreError, fireAndForget, type StepProgress } from "./connectProgress";
 import { useHostsStore } from "./hosts";
 import { pushNotice } from "./notices";
@@ -50,6 +51,8 @@ export interface ConnectFlow extends StepProgress {
   autoRetry: boolean;
   /** A retry after a network error is running; the error screen stays visible in its busy state. */
   retrying: boolean;
+  /** `retryWithPassword` is saving/starting; guards against double submits. */
+  submitting?: boolean;
   /** PTY size requested for the shell. */
   cols: number;
   rows: number;
@@ -95,10 +98,23 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
     ui.setView(view);
   };
 
+  /**
+   * The backend prompts with `host.address` and the effective user (host user, else profile user).
+   * Only the target's own prompt may receive the re-entered password, never a jump host's (fail closed).
+   */
+  const isTargetPrompt = (prompt: { host: string; user: string }) => {
+    const flow = get().active;
+    const host = useHostsStore.getState().hosts.find((h) => h.id === flow?.hostId);
+    if (!host) return false;
+    const profile = hostProfile(host, useHostsStore.getState().profiles);
+    const user = host.user?.trim() || profile?.user.trim();
+    return !!user && prompt.host === host.address && prompt.user === user;
+  };
+
   const onEvent = (connectId: string, event: ConnectEvent) => {
     if (!isCurrent(connectId)) return;
     if (event.kind === "prompt") {
-      if (event.prompt.kind === "password" && pendingPassword !== null) {
+      if (event.prompt.kind === "password" && pendingPassword !== null && isTargetPrompt(event.prompt)) {
         const value = pendingPassword;
         pendingPassword = null;
         fireAndForget(() => connectAnswer(event.promptId, { kind: "secret", value, save: false }));
@@ -234,6 +250,7 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
       clearRetryTimer();
       const flow = get().active;
       if (!flow) return;
+      if (!flow.failed || flow.retrying) fireAndForget(() => connectCancel(flow.connectId));
       const keepError = flow.failed?.error.type === "network";
       const next: ConnectFlow = {
         ...flow,
@@ -246,6 +263,7 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
         prompt: undefined,
         attempt: flow.attempt + 1,
         retrying: keepError,
+        submitting: undefined,
         failed: keepError ? flow.failed : undefined,
       };
       set({ active: next });
@@ -254,7 +272,8 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
 
     retryWithPassword: async (password, save) => {
       const flow = get().active;
-      if (!flow) return;
+      if (!flow || flow.submitting) return;
+      set({ active: { ...flow, submitting: true } });
       pendingPassword = password;
       if (save) {
         try {
@@ -262,6 +281,10 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
           pendingPassword = null;
         } catch {
           pushNotice({ tone: "amber", message: t.connect.secretFailed });
+        }
+        if (!isCurrent(flow.connectId)) {
+          pendingPassword = null;
+          return;
         }
       }
       await get().retry();

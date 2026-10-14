@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../../components";
@@ -257,5 +257,28 @@ describe("ConnectScreen — authentication errors", () => {
     expect(actions.retry).toHaveBeenCalledOnce();
     await userEvent.click(screen.getByRole("button", { name: "Host bearbeiten" }));
     expect(useUiStore.getState().modal).toEqual({ type: "editor", target: { kind: "host", id: "h-key" } });
+  });
+});
+
+describe("ConnectScreen — lifecycle", () => {
+  it("moves focus into the overlay so Escape cancels", async () => {
+    renderWith(flowFor("h-web", { steps: ["tcp"], current: "tcp" }));
+    expect(screen.getByRole("region", { name: "Verbindung zu web-prod-01" })).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    expect(actions.cancel).toHaveBeenCalledOnce();
+  });
+
+  it("cancels the flow when its host disappears", () => {
+    renderWith(flowFor("h-web", { steps: ["tcp"], current: "tcp" }));
+    act(() => useHostsStore.setState({ hosts: [bastion, shop, keyHost] }));
+    expect(actions.cancel).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("region", { name: /Verbindung zu/ })).not.toBeInTheDocument();
+  });
+
+  it("disables the retry button while a password retry is submitting", () => {
+    renderWith(
+      flowFor("h-shop", { submitting: true, failed: { step: "auth", error: { type: "auth", rejectedMethods: ["password"], message: "d" } } }),
+    );
+    expect(screen.getByRole("button", { name: "Verbinde …" })).toBeDisabled();
   });
 });

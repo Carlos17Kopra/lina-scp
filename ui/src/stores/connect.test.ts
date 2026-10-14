@@ -217,4 +217,57 @@ describe("connect store", () => {
     await expect(useConnectStore.getState().start("h-web", "ssh")).resolves.toBeUndefined();
     expect(flow()?.failed?.error).toEqual({ type: "internal", message: "invoke unavailable" });
   });
+  it("does not hand the re-entered password to a jump host's prompt", async () => {
+    void useConnectStore.getState().start("h-web", "ssh");
+    attempts[0]?.reject({ type: "auth", rejectedMethods: ["password"], message: "denied" });
+    await settle();
+    void useConnectStore.getState().retryWithPassword("neu", false);
+    await settle();
+    eventsOf(1)({ kind: "prompt", promptId: 20, prompt: { kind: "password", user: "admin", host: "bastion.example.net", retry: false } });
+    expect(api.connectAnswer).not.toHaveBeenCalled();
+    expect(flow()?.prompt?.promptId).toBe(20);
+    eventsOf(1)({ kind: "prompt", promptId: 21, prompt: { kind: "password", user: "deploy", host: "10.0.1.12", retry: false } });
+    expect(api.connectAnswer).toHaveBeenCalledExactlyOnceWith(21, { kind: "secret", value: "neu", save: false });
+  });
+
+  it("starts only one attempt for a double retryWithPassword", async () => {
+    void useConnectStore.getState().start("h-prof", "ssh");
+    attempts[0]?.reject({ type: "auth", rejectedMethods: ["password"], message: "denied" });
+    await settle();
+    void useConnectStore.getState().retryWithPassword("neu", true);
+    void useConnectStore.getState().retryWithPassword("neu", true);
+    expect(flow()?.submitting).toBe(true);
+    await settle();
+    expect(api.secretSet).toHaveBeenCalledTimes(1);
+    expect(api.connectSsh).toHaveBeenCalledTimes(2);
+    expect(flow()?.submitting).toBeUndefined();
+  });
+
+  it("does not retry after the flow ended while the password was being saved", async () => {
+    void useConnectStore.getState().start("h-prof", "ssh");
+    attempts[0]?.reject({ type: "auth", rejectedMethods: ["password"], message: "denied" });
+    await settle();
+    let release = () => {};
+    vi.mocked(api.secretSet).mockImplementation(() => new Promise<void>((resolve) => (release = resolve)));
+    const pending = useConnectStore.getState().retryWithPassword("neu", true);
+    await useConnectStore.getState().cancel();
+    release();
+    await pending;
+    expect(api.connectSsh).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a still-running attempt when retrying", async () => {
+    void useConnectStore.getState().start("h-web", "ssh");
+    void useConnectStore.getState().retry();
+    expect(api.connectCancel).toHaveBeenCalledWith("id-1");
+    expect(api.connectSsh).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cancel a finished attempt when retrying", async () => {
+    void useConnectStore.getState().start("h-web", "ssh");
+    attempts[0]?.reject({ type: "network", kind: "refused", message: "refused" });
+    await settle();
+    void useConnectStore.getState().retry();
+    expect(api.connectCancel).not.toHaveBeenCalled();
+  });
 });

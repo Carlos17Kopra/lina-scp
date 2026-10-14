@@ -398,3 +398,7 @@
   flex-direction: column;
   gap: 12px;
 }
+
+.overlay:focus {
+  outline: none;
+}

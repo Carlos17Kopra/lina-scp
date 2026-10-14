@@ -1,4 +1,4 @@
-import type { KeyboardEvent } from "react";
+import { type KeyboardEvent, useEffect, useRef } from "react";
 import { t } from "../../i18n/de";
 import type { HostKeyDecision } from "../../ipc/api";
 import { useConnectStore } from "../../stores/connect";
@@ -22,9 +22,25 @@ export function ConnectScreen() {
   const cancel = useConnectStore((state) => state.cancel);
   const answer = useConnectStore((state) => state.answer);
   const host = useHostsStore((state) => (flow ? state.hosts.find((h) => h.id === flow.hostId) : undefined));
-  if (!flow || !host) return null;
+  const overlay = useRef<HTMLElement>(null);
+  const view = flow ? connectView(flow) : null;
+  const hostMissing = !!flow && !host;
 
-  const view = connectView(flow);
+  // The host vanished (deleted / ssh-config reload): do not trap the user in an empty overlay.
+  useEffect(() => {
+    if (hostMissing) void cancel();
+  }, [hostMissing, cancel]);
+
+  // Keep keyboard focus inside the overlay so Escape cancels; dialogs with their own autofocus win.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-run when the shown screen changes
+  useEffect(() => {
+    const element = overlay.current;
+    if (element && !element.contains(document.activeElement)) element.focus();
+  }, [view, hostMissing]);
+
+  if (!flow || !host || !view) return null;
+
+
   const openEditor = (target: { kind: "host" | "profile"; id: string }) => {
     void cancel();
     useUiStore.getState().openModal({ type: "editor", target });
@@ -46,6 +62,7 @@ export function ConnectScreen() {
     const { prompt } = pending;
     body = (
       <HostKeyChangedDialog
+        key={pending.promptId}
         host={prompt.host}
         port={prompt.port}
         stored={prompt.stored}
@@ -61,7 +78,7 @@ export function ConnectScreen() {
   }
 
   return (
-    <section className={styles.overlay} aria-label={t.connect.label(host.name)} onKeyDown={onKeyDown}>
+    <section ref={overlay} tabIndex={-1} className={styles.overlay} aria-label={t.connect.label(host.name)} onKeyDown={onKeyDown}>
       <ConnectTabBar name={host.name} view={view} busy={flow.retrying} />
       <div className={styles.content}>{body}</div>
     </section>
