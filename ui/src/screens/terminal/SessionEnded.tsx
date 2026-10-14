@@ -1,7 +1,8 @@
 import { RefreshCw } from "lucide-react";
 import { useId } from "react";
-import { Button } from "../../components";
+import { Button, cx } from "../../components";
 import { t } from "../../i18n/de";
+import { errorMessage } from "../../ipc/errors";
 import { useConnectStore } from "../../stores/connect";
 import { type Tab, useSessionsStore } from "../../stores/sessions";
 import styles from "./SessionEnded.module.css";
@@ -25,6 +26,7 @@ export function SessionEnded({ tab }: { tab: Tab }) {
           {tab.status === "error" ? t.terminal.endedError : t.terminal.ended}
         </h2>
         <p className={styles.text}>{t.terminal.endedText(tab.title)}</p>
+        {tab.status === "error" && tab.error ? <p className={cx(styles.error, "mono")}>{errorMessage(tab.error)}</p> : null}
         <div className={styles.actions}>
           <Button onClick={() => void closeSession(tab.id)}>{t.common.close}</Button>
           {hostId ? (

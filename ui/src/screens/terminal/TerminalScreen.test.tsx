@@ -77,6 +77,13 @@ describe("TerminalScreen", () => {
     expect(start).toHaveBeenCalledWith("h-web", "ssh");
   });
 
+  it("shows the error of a session that ended with an error", () => {
+    seed([{ ...web, status: "error", error: { type: "io", message: "shell request refused" } }], "a");
+    render(<TerminalScreen />);
+    expect(screen.getByRole("heading", { name: "Sitzung mit Fehler beendet" })).toBeInTheDocument();
+    expect(screen.getByText("shell request refused")).toBeInTheDocument();
+  });
+
   it("offers only closing for ended local sessions", async () => {
     seed([{ ...local, status: "error" }], "b");
     render(<TerminalScreen />);

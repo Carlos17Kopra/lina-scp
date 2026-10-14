@@ -31,6 +31,16 @@
   font-size: 13px;
 }
 
+.error {
+  padding: 8px 10px;
+  border: 1px solid var(--red-bd);
+  border-radius: 8px;
+  background: var(--red-bg2);
+  color: var(--red-text);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .actions {
   display: flex;
   justify-content: flex-end;

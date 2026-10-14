@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { t } from "../i18n/de";
 import {
+  type CoreError,
   createEventChannel,
   createOutputStream,
   type Id,
@@ -12,7 +13,7 @@ import {
 } from "../ipc/api";
 import { errorDetails } from "../ipc/errors";
 import { pushNotice } from "./notices";
-import { sessionEventHandler } from "./sessionEvents";
+import { discardEarlySessionEvent, sessionEventHandler, sessionEventPatch, takeEarlySessionEvent } from "./sessionEvents";
 import { useSettingsStore } from "./settings";
 import { dropStream, registerStream } from "./streams";
 import { estimateTerminalSize } from "./terminalSize";
@@ -28,12 +29,14 @@ export interface Tab {
   hostId?: Id;
   sessionId?: SessionId;
   status: TabStatus;
+  /** Why the session ended, for `status: "error"`. */
+  error?: CoreError;
 }
 
 export interface SessionsState {
   tabs: Tab[];
   activeId: string | null;
-  /** Appends and activates the tab. */
+  /** Appends and activates the tab; applies a session event that arrived before it existed. */
   addTab(tab: Tab): void;
   /** Removes the tab; if it was active, activates the right neighbour, else the left one. */
   closeTab(id: string): void;
@@ -48,7 +51,11 @@ export interface SessionsState {
 export const useSessionsStore = create<SessionsState>()((set, get) => ({
   tabs: [],
   activeId: null,
-  addTab: (tab) => set((state) => ({ tabs: [...state.tabs, tab], activeId: tab.id })),
+  addTab: (tab) => {
+    const early = takeEarlySessionEvent(tab.id);
+    const added = early ? { ...tab, ...sessionEventPatch(early) } : tab;
+    set((state) => ({ tabs: [...state.tabs, added], activeId: added.id }));
+  },
   closeTab: (id) =>
     set((state) => {
       const index = state.tabs.findIndex((tab) => tab.id === id);
@@ -75,6 +82,7 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
       get().addTab({ id: tabId, title, kind: "local", sessionId, status: "connected" });
       useUiStore.getState().setView("terminal");
     } catch (error) {
+      discardEarlySessionEvent(tabId);
       pushNotice({ tone: "red", message: t.terminal.localFailed, details: errorDetails(error) });
     }
   },

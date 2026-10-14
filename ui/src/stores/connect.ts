@@ -23,7 +23,7 @@ import { hostProfile } from "../model/hostFormat";
 import { applyConnectEvent, asCoreError, fireAndForget, type StepProgress } from "./connectProgress";
 import { useHostsStore } from "./hosts";
 import { pushNotice } from "./notices";
-import { sessionEventHandler } from "./sessionEvents";
+import { discardEarlySessionEvent, sessionEventHandler } from "./sessionEvents";
 import { useSessionsStore } from "./sessions";
 import { useSettingsStore } from "./settings";
 import { registerStream } from "./streams";
@@ -173,18 +173,21 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
     const { connectId } = flow;
     // Everything that can throw (setup and invoke) lives inside the try: callers fire `start`/`retry`
     // with `void`, so a failure must surface as flow state, never as a rejected promise.
+    let tabId: string | null = null;
     try {
-      const tabId = newId();
+      tabId = newId();
       const stream = createOutputStream();
       const events = createEventChannel<ConnectEvent>((event) => onEvent(connectId, event));
       const sessionEvents = createEventChannel<SessionEventDto>(sessionEventHandler(tabId));
       const sessionId = await connectSsh(connectId, flow.hostId, flow.cols, flow.rows, events, stream.channel, sessionEvents);
       if (!isCurrent(connectId)) {
+        discardEarlySessionEvent(tabId);
         fireAndForget(() => sessionClose(sessionId));
         return;
       }
       onConnected(flow, sessionId, tabId, stream);
     } catch (error) {
+      if (tabId !== null) discardEarlySessionEvent(tabId);
       onFailure(connectId, asCoreError(error));
     }
   };

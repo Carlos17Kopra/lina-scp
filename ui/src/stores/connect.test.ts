@@ -4,6 +4,7 @@ import { makeHost, makeProfile, withUsage } from "../test/fixtures";
 import { MAX_ATTEMPTS, nextRetryDelay, useConnectStore } from "./connect";
 import { useHostsStore } from "./hosts";
 import { useNoticeStore } from "./notices";
+import { pendingSessionEventCount } from "./sessionEvents";
 import { useSessionsStore } from "./sessions";
 import { getStream } from "./streams";
 import { useUiStore } from "./ui";
@@ -94,6 +95,33 @@ describe("connect store", () => {
     expect(flow()).toBeNull();
     sessionEventsOf(0)({ kind: "exit", code: 0 });
     expect(useSessionsStore.getState().tabs[0]?.status).toBe("closed");
+  });
+
+  it("applies a session exit that arrived before the connect resolved", async () => {
+    const started = useConnectStore.getState().start("h-web", "ssh");
+    // e.g. ForceCommand/nologin: the shell ends while connect_ssh is still returning.
+    sessionEventsOf(0)({ kind: "exit", code: 1 });
+    attempts[0]?.resolve("s-1");
+    await started;
+    expect(useSessionsStore.getState().tabs).toMatchObject([{ id: "id-2", sessionId: "s-1", status: "closed" }]);
+    expect(pendingSessionEventCount()).toBe(0);
+  });
+
+  it("carries the error of an early session error into the tab", async () => {
+    const started = useConnectStore.getState().start("h-web", "ssh");
+    const error = { type: "io", message: "shell request refused" } as const;
+    sessionEventsOf(0)({ kind: "error", error });
+    attempts[0]?.resolve("s-1");
+    await started;
+    expect(useSessionsStore.getState().tabs).toMatchObject([{ id: "id-2", status: "error", error }]);
+  });
+
+  it("drops a buffered session event when the attempt fails", async () => {
+    const started = useConnectStore.getState().start("h-web", "ssh");
+    sessionEventsOf(0)({ kind: "exit", code: 0 });
+    attempts[0]?.reject({ type: "network", kind: "refused", message: "refused" });
+    await started;
+    expect(pendingSessionEventCount()).toBe(0);
   });
 
   it("shows network errors and retries automatically with backoff (max 3)", async () => {

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../ipc/api";
 import { useNoticeStore } from "./notices";
+import { pendingSessionEventCount } from "./sessionEvents";
 import { useSessionsStore } from "./sessions";
 import { getStream, registerStream } from "./streams";
 import { useUiStore } from "./ui";
@@ -41,6 +42,29 @@ describe("sessions store — local terminals", () => {
     expect(useSessionsStore.getState().activeId).toBe("t-2");
     sessionHandlers[0]?.({ kind: "exit", code: 0 });
     expect(useSessionsStore.getState().tabs[0]?.status).toBe("closed");
+  });
+
+  it("applies a session exit that arrived before the local terminal opened", async () => {
+    let resolve: (id: string) => void = () => {};
+    vi.mocked(api.sessionOpenLocal).mockReturnValue(new Promise((r) => (resolve = r)));
+    const opening = useSessionsStore.getState().openLocal();
+    // e.g. an invalid $SHELL: the child exits before session_open_local returns.
+    sessionHandlers[0]?.({ kind: "exit", code: 127 });
+    resolve("s-1");
+    await opening;
+    expect(useSessionsStore.getState().tabs).toMatchObject([{ id: "t-1", sessionId: "s-1", status: "closed" }]);
+    expect(pendingSessionEventCount()).toBe(0);
+  });
+
+  it("drops a buffered session event when the local terminal fails to open", async () => {
+    let reject: (error: unknown) => void = () => {};
+    vi.mocked(api.sessionOpenLocal).mockReturnValue(new Promise((_, r) => (reject = r)));
+    const opening = useSessionsStore.getState().openLocal();
+    sessionHandlers[0]?.({ kind: "exit", code: 1 });
+    reject({ type: "io", message: "no pty" });
+    await opening;
+    expect(useSessionsStore.getState().tabs).toEqual([]);
+    expect(pendingSessionEventCount()).toBe(0);
   });
 
   it("reports a failed start as a notice", async () => {
