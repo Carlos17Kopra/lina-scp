@@ -33,7 +33,7 @@ beforeEach(() => {
   useUiStore.setState(useUiStore.getInitialState(), true);
   vi.mocked(dialog.open).mockResolvedValue("/home/u/backup.linascp");
   vi.mocked(api.importPreview).mockResolvedValue(preview);
-  vi.mocked(api.importApply).mockResolvedValue({ imported: 2, skipped: 1, secretsRestored: 3 });
+  vi.mocked(api.importApply).mockResolvedValue({ imported: 2, skipped: 1, secretsRestored: 3, invalid: 0 });
   vi.mocked(api.hostsList).mockResolvedValue([]);
   vi.mocked(api.groupsList).mockResolvedValue([]);
   vi.mocked(api.profilesList).mockResolvedValue([]);

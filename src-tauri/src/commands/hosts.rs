@@ -1,6 +1,7 @@
 use linascp_core::error::{CoreError, Result};
 use linascp_core::model::{Group, Host, HostSource, Id};
 use linascp_core::secrets::SecretOwner;
+use linascp_core::validate::validate_host;
 use tauri::State;
 
 use super::secrets::purge_secrets;
@@ -9,6 +10,7 @@ use crate::state::AppState;
 
 /// Saves (upserts) a host; editing an ssh-config host turns it into an overriding LinaSCP host.
 pub(crate) fn save_host(state: &AppState, mut host: Host) -> Result<Host> {
+    validate_host(&host)?;
     host.source = HostSource::Linascp;
     state.store.save_host(&host)?;
     let saved = state
@@ -99,6 +101,21 @@ mod tests {
         save_host(&state, Host::new("solo", "192.0.2.30")).unwrap();
         let names: Vec<String> = state.merged_hosts().unwrap().into_iter().map(|h| h.name).collect();
         assert_eq!(names, vec!["solo".to_string()]);
+    }
+
+    /// F5: fields that would break out of their ssh_config line are rejected before anything is stored.
+    #[test]
+    fn save_rejects_newlines_and_quotes() {
+        let (_dir, state) = setup();
+        let mut newline = Host::new("evil", "192.0.2.41");
+        newline.user = Some("root\nProxyCommand touch /tmp/pwned".into());
+        assert!(matches!(save_host(&state, newline.clone()), Err(CoreError::Config { .. })));
+        let quote = Host::new("evil\"", "192.0.2.42");
+        assert!(matches!(save_host(&state, quote.clone()), Err(CoreError::Config { .. })));
+        let mut port = Host::new("port-zero", "192.0.2.43");
+        port.port = 0;
+        assert!(matches!(save_host(&state, port), Err(CoreError::Config { .. })));
+        assert!(state.store.list_hosts().unwrap().is_empty());
     }
 
     #[test]

@@ -36,7 +36,7 @@ export function defaultResolutions(preview: ImportPreview): Record<Id, Resolutio
 }
 
 export function reportMessage(report: ImportReport): string {
-  return t.settings.import.report(report.imported, report.skipped, report.secretsRestored);
+  return t.settings.import.report(report.imported, report.skipped, report.secretsRestored, report.invalid);
 }
 
 /** Core's import rejects a wrong passphrase with `Config { message: "wrong passphrase" }`. */

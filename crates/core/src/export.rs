@@ -1,7 +1,7 @@
 //! `.linascp` export/import: JSON document, secrets (and optionally key files) embedded
 //! as an ASCII-armored age block encrypted with a passphrase (scrypt).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
 use std::iter;
@@ -19,6 +19,7 @@ use crate::model::{AuthConfig, AuthMethod, Group, Host, HostAuth, Id, LoginProfi
 use crate::paths::expand_tilde;
 use crate::secrets::{SecretKind, SecretOwner, SecretStore, account_name, parse_account_name};
 use crate::store::{self, Store};
+use crate::validate::{validate_host, validate_profile};
 
 pub const FORMAT_VERSION: u32 = 1;
 
@@ -108,6 +109,9 @@ pub struct ImportReport {
     pub imported: u32,
     pub skipped: u32,
     pub secrets_restored: u32,
+    /// Hosts/profiles not imported because a field failed validation (e.g. a line break that
+    /// would inject ssh_config directives), including hosts using such a profile.
+    pub invalid: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -209,7 +213,7 @@ pub fn import_apply(
         _ => None,
     };
 
-    let mut report = ImportReport { imported: 0, skipped: 0, secrets_restored: 0 };
+    let mut report = ImportReport { imported: 0, skipped: 0, secrets_restored: 0, invalid: 0 };
     match &payload {
         Some(payload) => {
             let paths = write_key_files(&payload.key_files, key_dir)?;
@@ -229,6 +233,21 @@ pub fn import_apply(
     for h in &doc.hosts {
         plan.decide(&existing, resolutions, ItemKind::Host, h.id, &h.name);
     }
+    // Invalid entries are never written (nor their secrets restored); a host that uses a
+    // rejected profile or jump host from this file is rejected as well.
+    for p in doc.profiles.iter().filter(|p| validate_profile(p).is_err()) {
+        plan.reject(p.id);
+    }
+    for h in doc.hosts.iter().filter(|h| validate_host(h).is_err()) {
+        plan.reject(h.id);
+    }
+    for h in &doc.hosts {
+        let uses_rejected_profile = matches!(h.auth, HostAuth::Profile { profile_id } if plan.is_rejected(profile_id));
+        let uses_rejected_jump = h.jump_host_id.is_some_and(|j| plan.is_rejected(j));
+        if uses_rejected_profile || uses_rejected_jump {
+            plan.reject(h.id);
+        }
+    }
 
     for g in &doc.groups {
         match plan.action(g.id) {
@@ -245,6 +264,7 @@ pub fn import_apply(
                 store.save_profile(&LoginProfile { id, name, ..p.clone() })?;
                 report.imported += 1;
             }
+            Action::Skip if plan.is_rejected(p.id) => report.invalid += 1,
             Action::Skip => report.skipped += 1,
         }
     }
@@ -267,6 +287,7 @@ pub fn import_apply(
                 store.save_host(&host)?;
                 report.imported += 1;
             }
+            Action::Skip if plan.is_rejected(h.id) => report.invalid += 1,
             Action::Skip => report.skipped += 1,
         }
     }
@@ -345,6 +366,7 @@ enum Action {
 struct Plan {
     actions: HashMap<Id, Action>,
     id_map: HashMap<Id, Id>,
+    rejected: HashSet<Id>,
 }
 
 impl Plan {
@@ -374,6 +396,16 @@ impl Plan {
         };
         self.actions.insert(id, action);
         self.id_map.insert(id, mapped);
+    }
+
+    /// Never write `id` (failed validation).
+    fn reject(&mut self, id: Id) {
+        self.actions.insert(id, Action::Skip);
+        self.rejected.insert(id);
+    }
+
+    fn is_rejected(&self, id: Id) -> bool {
+        self.rejected.contains(&id)
     }
 
     fn action(&self, id: Id) -> Action {

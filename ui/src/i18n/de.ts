@@ -458,8 +458,8 @@ export const t = {
       passphraseHint: "Die Datei enthält verschlüsselte Geheimnisse. Ohne Passphrase werden nur die Einträge importiert.",
       wrongPassphrase: "Falsche Passphrase",
       submit: "Importieren",
-      report: (imported: number, skipped: number, secrets: number) =>
-        `Import abgeschlossen: ${imported} importiert, ${skipped} übersprungen${secrets > 0 ? `, ${secrets} Geheimnisse wiederhergestellt` : ""}`,
+      report: (imported: number, skipped: number, secrets: number, invalid = 0) =>
+        `Import abgeschlossen: ${imported} importiert, ${skipped} übersprungen${secrets > 0 ? `, ${secrets} Geheimnisse wiederhergestellt` : ""}${invalid > 0 ? `, ${invalid === 1 ? "1 ungültiger Eintrag" : `${invalid} ungültige Einträge`} nicht importiert` : ""}`,
       failed: "Import fehlgeschlagen",
     },
   },

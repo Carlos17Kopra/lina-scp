@@ -11,6 +11,7 @@ pub mod secrets;
 pub mod session;
 pub mod sshconfig;
 pub mod store;
+pub mod validate;
 
 pub use error::{CoreError, NetworkKind, Result};
 pub use export::{

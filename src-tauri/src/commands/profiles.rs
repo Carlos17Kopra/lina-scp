@@ -3,6 +3,7 @@ use linascp_core::model::{Id, LoginProfile};
 use tauri::State;
 
 use linascp_core::secrets::SecretOwner;
+use linascp_core::validate::validate_profile;
 
 use super::secrets::purge_secrets;
 use super::settings::sync_mirror;
@@ -19,6 +20,7 @@ pub(crate) fn list_profiles(state: &AppState) -> Result<Vec<ProfileWithUsage>> {
 }
 
 pub(crate) fn save_profile(state: &AppState, profile: LoginProfile) -> Result<LoginProfile> {
+    validate_profile(&profile)?;
     state.store.save_profile(&profile)?;
     let saved = state
         .store
@@ -65,6 +67,20 @@ pub(crate) mod tests {
         let mut auth = AuthConfig::new(AuthMethod::Key);
         auth.key_path = Some("~/.ssh/id_ed25519".into());
         LoginProfile::new(name, "deploy", auth)
+    }
+
+    /// F5: a profile's user/key path end up in the mirror file and must not contain line breaks or quotes.
+    #[test]
+    fn save_rejects_newlines_and_quotes() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::for_tests(dir.path());
+        let mut bad_user = profile("bad-user");
+        bad_user.user = "deploy\nProxyCommand touch /tmp/pwned".into();
+        assert!(matches!(save_profile(&state, bad_user), Err(CoreError::Config { .. })));
+        let mut bad_key = profile("bad-key");
+        bad_key.auth.key_path = Some("/keys/\"id".into());
+        assert!(matches!(save_profile(&state, bad_key), Err(CoreError::Config { .. })));
+        assert!(state.store.list_profiles().unwrap().is_empty());
     }
 
     #[tokio::test]

@@ -93,7 +93,7 @@ fn roundtrip_without_secrets_into_empty_store() {
 
     let tmp = tempfile::tempdir().unwrap();
     let report = import_apply(&bytes, None, &HashMap::new(), &dst, &dst_secrets, tmp.path()).unwrap();
-    assert_eq!(report, ImportReport { imported: 3, skipped: 0, secrets_restored: 0 });
+    assert_eq!(report, ImportReport { imported: 3, skipped: 0, secrets_restored: 0, invalid: 0 });
 
     let host = dst.get_host(src.host.id).unwrap().unwrap();
     assert_eq!(host.group_id, Some(src.group.id));
@@ -135,7 +135,7 @@ fn roundtrip_with_secrets_and_key_files() {
     let key_dir = tmp.path().join("imported");
     let report =
         import_apply(&bytes, Some(&pass("correct horse")), &HashMap::new(), &dst, &dst_secrets, &key_dir).unwrap();
-    assert_eq!(report, ImportReport { imported: 4, skipped: 0, secrets_restored: 2 });
+    assert_eq!(report, ImportReport { imported: 4, skipped: 0, secrets_restored: 2, invalid: 0 });
 
     let restored = dst_secrets.get(SecretOwner::Profile(src.profile.id), SecretKind::Password).unwrap().unwrap();
     assert_eq!(restored.expose_secret(), "s3cret");
@@ -199,7 +199,7 @@ fn conflicts_default_to_skip() {
 
     let report = import_apply(&bytes, None, &HashMap::new(), &src.store, &src.secrets, tmp.path()).unwrap();
 
-    assert_eq!(report, ImportReport { imported: 0, skipped: 3, secrets_restored: 0 });
+    assert_eq!(report, ImportReport { imported: 0, skipped: 3, secrets_restored: 0, invalid: 0 });
     assert_eq!(src.store.get_host(src.host.id).unwrap().unwrap().address, "changed");
 }
 
@@ -215,7 +215,7 @@ fn replace_same_id_overwrites() {
 
     let report = import_apply(&bytes, None, &resolutions, &src.store, &src.secrets, tmp.path()).unwrap();
 
-    assert_eq!(report, ImportReport { imported: 1, skipped: 2, secrets_restored: 0 });
+    assert_eq!(report, ImportReport { imported: 1, skipped: 2, secrets_restored: 0, invalid: 0 });
     assert_eq!(src.store.get_host(src.host.id).unwrap().unwrap().address, "10.0.0.5");
 }
 
@@ -247,7 +247,7 @@ fn duplicate_gets_new_ids_suffix_and_remapped_secrets() {
 
     let report = import_apply(&bytes, Some(&pass("pw")), &resolutions, &src.store, &src.secrets, tmp.path()).unwrap();
 
-    assert_eq!(report, ImportReport { imported: 2, skipped: 1, secrets_restored: 1 });
+    assert_eq!(report, ImportReport { imported: 2, skipped: 1, secrets_restored: 1, invalid: 0 });
     let profiles = src.store.list_profiles().unwrap();
     let dup_profile = profiles.iter().find(|p| p.name == "admin (Import)").unwrap();
     assert_ne!(dup_profile.id, src.profile.id);
@@ -367,4 +367,43 @@ fn unreadable_key_file_is_reported() {
 
     let output = export_data(&src.store, &src.secrets, &with_secrets("correct horse", true)).unwrap();
     assert_eq!(output.report.skipped_keys, vec![unreadable.to_string_lossy().into_owned()]);
+}
+
+/// F5: a crafted export file must not smuggle ssh_config directives into the mirror file.
+#[test]
+fn import_rejects_hosts_that_would_inject_ssh_config_directives() {
+    let src = Store::open_in_memory().unwrap();
+    let good = Host::new("good", "good.example");
+    let mut evil = Host::new("evil", "x.example\n    ProxyCommand touch /tmp/pwned");
+    evil.user = Some("root".into());
+    let profile = LoginProfile::new(
+        "evil-profile",
+        "ops\"\nMatch exec \"touch /tmp/pwned",
+        AuthConfig { method: AuthMethod::Password, key_path: None, has_secret: false },
+    );
+    let mut via_profile = Host::new("via-profile", "p.example");
+    via_profile.auth = HostAuth::Profile { profile_id: profile.id };
+    src.save_host(&good).unwrap();
+    src.save_host(&evil).unwrap();
+    src.save_profile(&profile).unwrap();
+    src.save_host(&via_profile).unwrap();
+    let bytes = export_data(&src, &MemorySecretStore::new(), &no_secrets()).unwrap().bytes;
+
+    let dst = Store::open_in_memory().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let report = import_apply(&bytes, None, &HashMap::new(), &dst, &MemorySecretStore::new(), tmp.path()).unwrap();
+
+    assert_eq!(report.imported, 1, "only the valid host is written: {report:?}");
+    assert_eq!(report.invalid, 3, "evil host, evil profile and the host using it: {report:?}");
+    assert!(dst.get_host(good.id).unwrap().is_some());
+    assert!(dst.get_host(evil.id).unwrap().is_none());
+    assert!(dst.get_profile(profile.id).unwrap().is_none());
+    assert!(dst.get_host(via_profile.id).unwrap().is_none(), "a host using a rejected profile is rejected too");
+
+    let ssh_dir = tmp.path().join(".ssh");
+    let mirror = crate::sshconfig::Mirror::new(ssh_dir.clone());
+    mirror.enable(&dst.list_hosts().unwrap(), &dst.list_profiles().unwrap()).unwrap();
+    let conf = fs::read_to_string(ssh_dir.join("config.d/linascp.conf")).unwrap();
+    assert!(conf.contains("Host good\n"), "{conf}");
+    assert!(!conf.contains("ProxyCommand") && !conf.contains("Match") && !conf.contains("pwned"), "{conf}");
 }

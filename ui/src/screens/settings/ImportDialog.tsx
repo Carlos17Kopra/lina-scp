@@ -55,7 +55,7 @@ export function ImportDialog() {
     setPassphraseError(null);
     try {
       const report = await importApply(stage.path, stage.preview.hasSecrets && passphrase ? passphrase : null, resolutions);
-      toast.show({ tone: "green", message: reportMessage(report) });
+      toast.show({ tone: report.invalid > 0 ? "amber" : "green", message: reportMessage(report) });
       try {
         await Promise.all([useHostsStore.getState().load(), useSettingsStore.getState().load()]);
       } catch (error) {

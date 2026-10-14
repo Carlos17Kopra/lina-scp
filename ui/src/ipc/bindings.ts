@@ -134,6 +134,11 @@ export type ImportReport = {
 	imported: number,
 	skipped: number,
 	secretsRestored: number,
+	/**
+	 *  Hosts/profiles not imported because a field failed validation (e.g. a line break that
+	 *  would inject ssh_config directives), including hosts using such a profile.
+	 */
+	invalid: number,
 };
 
 export type ItemKind = "host" | "profile" | "group";
