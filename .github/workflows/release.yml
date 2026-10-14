@@ -70,16 +70,20 @@ jobs:
           restore-keys: bun-${{ runner.os }}-
 
       - run: bun install --frozen-lockfile
+      # tauri::generate_context! needs ui/dist (gitignored) at compile time
+      - run: bun run build
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --workspace
       - run: bun run typecheck
       - run: bun run test
 
       - name: SSH integration tests (Docker)
-        run: cargo test -p linascp-core --test ssh_integration -- --ignored --test-threads=1
+        run: cargo test --locked -p linascp-core --test ssh_integration -- --ignored --test-threads=1
 
       - name: Build packages
+        env:
+          NO_STRIP: "true"
         run: bun run tauri build
 
       - name: Collect artifacts and checksums

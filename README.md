@@ -76,7 +76,7 @@ Releases entstehen auf GitHub aus Versions-Tags (`.github/workflows/release.yml`
 Der Workflow bricht ab, wenn der Tag (ohne `v`) nicht zur `version` in `src-tauri/tauri.conf.json`
 passt oder die drei Versionen voneinander abweichen. Ein manueller Start (Actions, „Run workflow“)
 baut nur und stellt die Pakete als Workflow-Artefakte bereit; ein Release entsteht dabei nur, wenn
-als Ref ein Tag gewählt wurde.
+als Ref ein Tag gewählt wurde. Ein erneuter Lauf für denselben Tag kann einen zweiten Entwurf anlegen; den überzähligen Entwurf von Hand löschen.
 
 ## Daten und Einstellungen
 
