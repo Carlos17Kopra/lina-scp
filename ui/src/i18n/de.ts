@@ -385,6 +385,7 @@ export const t = {
   settings: {
     title: "Einstellungen",
     done: "Fertig",
+    notLoaded: "Die Einstellungen wurden noch nicht geladen. Bitte LinaSCP neu starten.",
     appearance: "Darstellung",
     theme: "Design",
     themes: { dark: "Dunkel", light: "Hell" },

@@ -49,7 +49,21 @@ describe("settings store", () => {
     expect(useSettingsStore.getState()).toMatchObject({ loaded: true, settings: { theme: "light" } });
   });
 
+  it("refuses to save before the settings were loaded", async () => {
+    await expect(useSettingsStore.getState().save({ theme: "light" })).rejects.toMatchObject({ type: "config" });
+    expect(api.settingsSet).not.toHaveBeenCalled();
+    expect(useSettingsStore.getState().settings).toEqual(DEFAULT_SETTINGS);
+  });
+
+  it("refuses to save after loading failed", async () => {
+    vi.mocked(api.settingsGet).mockRejectedValue({ type: "store", message: "locked" });
+    await expect(useSettingsStore.getState().load()).rejects.toBeDefined();
+    await expect(useSettingsStore.getState().save({ sshMode: "integrate" })).rejects.toMatchObject({ type: "config" });
+    expect(api.settingsSet).not.toHaveBeenCalled();
+  });
+
   it("saves optimistically and keeps the persisted result", async () => {
+    useSettingsStore.setState({ loaded: true });
     vi.mocked(api.settingsSet).mockImplementation(async (s) => ({ ...s, terminalFontSize: 15 }));
     const pending = useSettingsStore.getState().save({ sshMode: "mirror" });
     expect(useSettingsStore.getState().settings.sshMode).toBe("mirror");
@@ -59,6 +73,7 @@ describe("settings store", () => {
   });
 
   it("reverts and rethrows when saving fails", async () => {
+    useSettingsStore.setState({ loaded: true });
     const error = { type: "io", message: "denied" };
     vi.mocked(api.settingsSet).mockRejectedValue(error);
     await expect(useSettingsStore.getState().save({ theme: "light" })).rejects.toEqual(error);

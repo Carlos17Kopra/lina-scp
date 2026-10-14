@@ -19,7 +19,7 @@ function renderRail() {
 
 beforeEach(() => {
   useUiStore.setState(useUiStore.getInitialState(), true);
-  useSettingsStore.setState(useSettingsStore.getInitialState(), true);
+  useSettingsStore.setState({ ...useSettingsStore.getInitialState(), loaded: true }, true);
   vi.mocked(api.settingsSet).mockImplementation(async (settings) => settings);
 });
 
