@@ -10,6 +10,8 @@ import { type ModalState, useUiStore } from "../stores/ui";
 import { AppShell } from "./AppShell";
 
 vi.mock("../ipc/api");
+// xterm probes canvas support at import time, which jsdom does not implement; the shell tests never render a terminal.
+vi.mock("../screens/terminal/TerminalView", () => ({ TerminalView: () => null }));
 
 function mockBackend(settings: Partial<api.Settings> = {}) {
   vi.mocked(api.settingsGet).mockResolvedValue({ ...DEFAULT_SETTINGS, firstRunDone: true, ...settings });

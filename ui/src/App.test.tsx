@@ -5,6 +5,8 @@ import * as api from "./ipc/api";
 import { DEFAULT_SETTINGS } from "./stores/settings";
 
 vi.mock("./ipc/api");
+// xterm probes canvas support at import time, which jsdom does not implement; this test never renders a terminal.
+vi.mock("./screens/terminal/TerminalView", () => ({ TerminalView: () => null }));
 
 describe("App", () => {
   it("renders the application shell", async () => {

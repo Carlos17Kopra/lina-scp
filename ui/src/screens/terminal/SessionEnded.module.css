@@ -1,0 +1,38 @@
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--bg-deep) 45%, transparent);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  max-width: 520px;
+  padding: 20px 22px;
+  border: 1px solid var(--bd-strong);
+  border-radius: 16px;
+  background: var(--dlg);
+  box-shadow: 0 18px 48px rgb(0 0 0 / 0.4);
+}
+
+.title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.text {
+  color: var(--text2);
+  font-size: 13px;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}

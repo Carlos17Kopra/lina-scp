@@ -1,0 +1,18 @@
+.frame {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 8px 4px 4px 10px;
+}
+
+.host {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* xterm adds its own viewport; keep it opaque (WebKitGTK shows artifacts with transparency). */
+.host :global(.xterm-viewport) {
+  background-color: inherit;
+}
