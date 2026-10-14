@@ -59,6 +59,25 @@ sudo apt install ./target/release/bundle/deb/LinaSCP_0.1.0_amd64.deb
 ./target/release/bundle/appimage/LinaSCP_0.1.0_amd64.AppImage
 ```
 
+## Release erstellen
+
+Releases entstehen auf GitHub aus Versions-Tags (`.github/workflows/release.yml`).
+
+1. `version` in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` und `package.json` erhöhen
+   (alle drei müssen gleich sein).
+2. Committen, dann taggen und pushen:
+   ```bash
+   git tag vX.Y.Z && git push origin vX.Y.Z
+   ```
+3. Der Workflow führt alle Prüfungen aus (fmt, clippy, Rust-Tests, SSH-Integrationstests mit Docker,
+   Typecheck, Vitest), baut `.deb` und `.AppImage` und legt sie samt `SHA256SUMS` an einen
+   **Entwurf** („Draft“) des Releases. Diesen Entwurf auf GitHub prüfen und veröffentlichen.
+
+Der Workflow bricht ab, wenn der Tag (ohne `v`) nicht zur `version` in `src-tauri/tauri.conf.json`
+passt oder die drei Versionen voneinander abweichen. Ein manueller Start (Actions, „Run workflow“)
+baut nur und stellt die Pakete als Workflow-Artefakte bereit; ein Release entsteht dabei nur, wenn
+als Ref ein Tag gewählt wurde.
+
 ## Daten und Einstellungen
 
 | Was | Wo |
