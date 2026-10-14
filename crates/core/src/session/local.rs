@@ -1,7 +1,9 @@
 //! Local terminal session backed by a pseudo terminal (portable-pty).
 
 use std::io::{Read, Write};
-use std::sync::Mutex;
+use std::sync::{Mutex, mpsc};
+
+use tokio::sync::oneshot;
 
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
@@ -26,10 +28,15 @@ fn pty_size(cols: u16, rows: u16) -> PtySize {
     PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }
 }
 
+/// One queued input chunk plus the channel that receives the outcome of writing it.
+type WriteJob = (Vec<u8>, oneshot::Sender<std::io::Result<()>>);
+
 /// A shell running in a local pseudo terminal.
 pub struct LocalPtySession {
     master: Mutex<Box<dyn MasterPty + Send>>,
-    writer: Mutex<Box<dyn Write + Send>>,
+    /// Queue of the dedicated writer thread. Blocking pty writes never run on an async worker,
+    /// and the single queue keeps the input order of one session.
+    writer: mpsc::Sender<WriteJob>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
 }
 
@@ -54,8 +61,20 @@ impl LocalPtySession {
         drop(pair.slave);
 
         let mut reader = pair.master.try_clone_reader().map_err(|e| pty_error("cannot read pty", e))?;
-        let writer = pair.master.take_writer().map_err(|e| pty_error("cannot write pty", e))?;
+        let mut writer = pair.master.take_writer().map_err(|e| pty_error("cannot write pty", e))?;
         let killer = child.clone_killer();
+
+        let (writer_tx, writer_rx) = mpsc::channel::<WriteJob>();
+        std::thread::Builder::new()
+            .name("linascp-pty-writer".into())
+            .spawn(move || {
+                // Ends once the session (the only sender) is dropped.
+                while let Ok((data, reply)) = writer_rx.recv() {
+                    let result = writer.write_all(&data).and_then(|()| writer.flush());
+                    let _ = reply.send(result);
+                }
+            })
+            .map_err(|e| pty_error("cannot start writer thread", e))?;
 
         std::thread::Builder::new()
             .name("linascp-pty-reader".into())
@@ -75,16 +94,17 @@ impl LocalPtySession {
             })
             .map_err(|e| pty_error("cannot start reader thread", e))?;
 
-        Ok(Self { master: Mutex::new(pair.master), writer: Mutex::new(writer), killer: Mutex::new(killer) })
+        Ok(Self { master: Mutex::new(pair.master), writer: writer_tx, killer: Mutex::new(killer) })
     }
 }
 
 #[async_trait::async_trait]
 impl Session for LocalPtySession {
     async fn write(&self, data: &[u8]) -> Result<()> {
-        let mut writer = self.writer.lock().unwrap_or_else(|e| e.into_inner());
-        writer.write_all(data)?;
-        writer.flush()?;
+        let closed = || CoreError::Io { message: "terminal input is closed".into() };
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.writer.send((data.to_vec(), reply_tx)).map_err(|_| closed())?;
+        reply_rx.await.map_err(|_| closed())??;
         Ok(())
     }
 
@@ -168,6 +188,70 @@ mod tests {
         .await
         .expect("exit within timeout");
         assert!(exited);
+    }
+
+    /// A process that never reads stdin fills the pty input buffer; the write must then wait off the
+    /// async runtime instead of blocking its (here: only) worker thread.
+    #[test]
+    fn stalled_pty_write_does_not_block_the_runtime() {
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            rt.block_on(async {
+                let (sink, _rx) = channel_sink();
+                let mut cmd = CommandBuilder::new("sleep");
+                cmd.arg("30");
+                let session = Arc::new(LocalPtySession::spawn_with_command(cmd, 80, 24, sink).unwrap());
+                let writer = session.clone();
+                let big = b"xxxxxxxxxxxxxxx\n".repeat(256 * 1024);
+                let pending = tokio::spawn(async move { writer.write(&big).await });
+                // Only fires if the runtime thread is not stuck inside the write.
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                session.close().await.unwrap();
+                // The kernel keeps a write to a full pty blocked even after the slave closed, so the
+                // writer thread may stay parked; the runtime must not care.
+                pending.abort();
+            });
+            let _ = done_tx.send(());
+        });
+        assert!(done_rx.recv_timeout(Duration::from_secs(15)).is_ok(), "pty write blocked the runtime");
+    }
+
+    /// Writes issued concurrently reach the pty in the order they were issued.
+    #[test]
+    fn concurrent_writes_keep_their_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.txt");
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let (sink, _rx) = channel_sink();
+            let mut cmd = CommandBuilder::new("/bin/sh");
+            cmd.args(["-c", &format!("cat > '{}'", out.display())]);
+            let session = Arc::new(LocalPtySession::spawn_with_command(cmd, 80, 24, sink).unwrap());
+            let handles: Vec<_> = (0..200)
+                .map(|i| {
+                    let session = session.clone();
+                    tokio::spawn(async move { session.write(format!("line-{i}\n").as_bytes()).await })
+                })
+                .collect();
+            for handle in handles {
+                handle.await.unwrap().unwrap();
+            }
+            let expected: String = (0..200).map(|i| format!("line-{i}\n")).collect();
+            let got = tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let got = std::fs::read_to_string(&out).unwrap_or_default();
+                    if got.len() >= expected.len() {
+                        return got;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("cat wrote all lines");
+            assert_eq!(got, expected);
+            session.close().await.unwrap();
+        });
     }
 
     #[tokio::test]
