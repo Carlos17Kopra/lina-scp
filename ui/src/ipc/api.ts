@@ -237,7 +237,10 @@ export function createOutputStream(): OutputStream {
     if (sessionId === null || unsentAck === 0) return;
     const bytes = unsentAck;
     unsentAck = 0;
-    sessionAck(sessionId, bytes).catch(() => undefined);
+    // A failed ack must not be lost (the backend pauses output above 1 MiB unacked): retry with the next one.
+    sessionAck(sessionId, bytes).catch(() => {
+      unsentAck += bytes;
+    });
   };
 
   const channel = createOutputChannel((bytes) => {

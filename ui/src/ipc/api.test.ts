@@ -92,4 +92,15 @@ describe("createOutputStream", () => {
     stream.ack(5);
     expect(invoke).toHaveBeenLastCalledWith("session_ack", { sessionId: "s1", bytes: 5 });
   });
+
+  it("re-queues bytes of a rejected ack and sends the total with the next ack", async () => {
+    const stream = createOutputStream();
+    stream.bind("s1");
+    invoke.mockRejectedValueOnce({ type: "internal", message: "boom" });
+    stream.ack(10);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    invoke.mockResolvedValue(null);
+    stream.ack(5);
+    expect(invoke).toHaveBeenLastCalledWith("session_ack", { sessionId: "s1", bytes: 15 });
+  });
 });
