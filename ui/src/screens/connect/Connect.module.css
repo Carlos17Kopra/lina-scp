@@ -211,6 +211,15 @@
   height: 52px;
 }
 
+.keyTypeWarning {
+  padding: 10px 12px;
+  border: 1px solid var(--amber-bd);
+  border-radius: 10px;
+  background: var(--amber-row);
+  color: var(--amber);
+  font-size: 13px;
+}
+
 .iconAmber {
   background: var(--amber-soft);
   color: var(--amber);

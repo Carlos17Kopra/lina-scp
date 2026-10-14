@@ -296,6 +296,8 @@ export const t = {
       format: "Fingerprint-Format",
       once: "Nur dieses Mal",
       trust: "Vertrauen und verbinden",
+      otherKeyTypes: (types: string) =>
+        `Dieser Host ist bereits mit einem anderen Schlüsseltyp bekannt (${types}). Prüfe den Fingerprint besonders sorgfältig.`,
     },
     hostKeyChanged: {
       title: "Host-Schlüssel hat sich geändert",

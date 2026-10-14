@@ -116,6 +116,13 @@ impl Container {
         container
     }
 
+    /// The server's public host key of `kind` (`ed25519`, `ecdsa`, `rsa`) as `<algorithm> <base64>`.
+    pub fn host_public_key(&self, kind: &str) -> String {
+        let line =
+            run(Command::new("docker").args(["exec", &self.id, "cat", &format!("/etc/ssh/ssh_host_{kind}_key.pub")]));
+        line.split_whitespace().take(2).collect::<Vec<_>>().join(" ")
+    }
+
     fn wait_ready(&self) {
         let deadline = Instant::now() + Duration::from_secs(30);
         while Instant::now() < deadline {

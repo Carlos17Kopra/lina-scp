@@ -17,11 +17,14 @@ export function HostKeyNewDialog({
   host,
   port,
   info,
+  otherKeyTypes = [],
   onDecision,
 }: {
   host: string;
   port: number;
   info: HostKeyInfo;
+  /** Key types known_hosts already holds for this host: known, but with a different key type. */
+  otherKeyTypes?: readonly string[];
   onDecision: (decision: HostKeyDecision) => void;
 }) {
   const [format, setFormat] = useState<Format>("sha256");
@@ -50,6 +53,11 @@ export function HostKeyNewDialog({
         <code className={styles.code}>{`${host}:${port}`}</code>
         {texts.textAfter}
       </p>
+      {otherKeyTypes.length > 0 ? (
+        <p role="note" className={styles.keyTypeWarning}>
+          {texts.otherKeyTypes(otherKeyTypes.join(", "))}
+        </p>
+      ) : null}
       <div className={styles.fingerprint}>
         <div className={styles.fingerprintHead}>
           <span>{texts.caption(algorithmLabel(info.algorithm), format === "sha256" ? "SHA256" : "MD5")}</span>

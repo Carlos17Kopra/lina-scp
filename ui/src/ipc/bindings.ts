@@ -173,7 +173,12 @@ export type ProfileWithUsage = {
 	usedBy: number,
 };
 
-export type Prompt = { kind: "hostKeyUnknown"; host: string; port: number; info: HostKeyInfo } | { kind: "hostKeyChanged"; host: string; port: number; stored: HostKeyInfo; current: HostKeyInfo } | { kind: "keyboardInteractive"; name: string; instructions: string; prompts: KbdPrompt[] } | { kind: "password"; user: string; host: string; retry: boolean } | { kind: "passphrase"; keyPath: string };
+export type Prompt = { kind: "hostKeyUnknown"; host: string; port: number; info: HostKeyInfo; 
+/**
+ *  Key types known_hosts holds for this host other than the offered one: the host is
+ *  known, but with a different key type. Never a reason to trust automatically.
+ */
+otherKeyTypesKnown: string[] } | { kind: "hostKeyChanged"; host: string; port: number; stored: HostKeyInfo; current: HostKeyInfo } | { kind: "keyboardInteractive"; name: string; instructions: string; prompts: KbdPrompt[] } | { kind: "password"; user: string; host: string; retry: boolean } | { kind: "passphrase"; keyPath: string };
 
 /**
  *  Answer sent by the UI. `Debug` is implemented manually so secrets never

@@ -9,7 +9,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use hmac::{Hmac, KeyInit, Mac};
 use md5::{Digest, Md5};
-use russh::keys::{HashAlg, PublicKey};
+use russh::keys::{Algorithm, HashAlg, PublicKey};
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 
@@ -77,6 +77,32 @@ impl KnownHosts {
             Some(stored) => HostKeyStatus::Changed { stored: fingerprints(&stored) },
             None => HostKeyStatus::Unknown,
         })
+    }
+
+    /// Key algorithms of all entries for this host/port, in file order without duplicates
+    /// (used to prefer those types during key exchange, like OpenSSH).
+    pub fn known_algorithms(&self, host: &str, port: u16) -> Result<Vec<Algorithm>> {
+        let content = self.read()?;
+        let name = lookup_name(host, port);
+        let mut algorithms: Vec<Algorithm> = Vec::new();
+        for line in content.lines() {
+            let Some(entry) = parse_line(line) else { continue };
+            if patterns_match(entry.patterns, &name) && !algorithms.contains(&entry.key.algorithm()) {
+                algorithms.push(entry.key.algorithm());
+            }
+        }
+        Ok(algorithms)
+    }
+
+    /// OpenSSH names of the key types stored for this host/port other than `key`'s type. Non-empty
+    /// for an `Unknown` key means: the host is known, but with a different key type.
+    pub fn other_key_types(&self, host: &str, port: u16, key: &PublicKey) -> Result<Vec<String>> {
+        Ok(self
+            .known_algorithms(host, port)?
+            .into_iter()
+            .filter(|algorithm| *algorithm != key.algorithm())
+            .map(|algorithm| algorithm.as_str().to_string())
+            .collect())
     }
 
     /// Appends an entry. Creates the file (0600) and its directory (0700) if missing.
@@ -306,6 +332,20 @@ mod tests {
     fn different_algorithm_is_unknown_not_changed() {
         let (_d, kh) = kh_with(&format!("example.com {KEY_A}\n"));
         assert_eq!(kh.check("example.com", 22, &key(KEY_C)).unwrap(), HostKeyStatus::Unknown);
+        // ...but flagged: the host is known with another key type.
+        let others = kh.other_key_types("example.com", 22, &key(KEY_C)).unwrap();
+        assert_eq!(others, vec![key(KEY_A).algorithm().as_str().to_string()]);
+        assert!(kh.other_key_types("example.org", 22, &key(KEY_C)).unwrap().is_empty());
+        assert!(kh.other_key_types("example.com", 22, &key(KEY_A)).unwrap().is_empty());
+    }
+
+    #[test]
+    fn known_algorithms_lists_each_matching_type_once() {
+        let (_d, kh) =
+            kh_with(&format!("example.com {KEY_C}\nexample.com {KEY_A}\nexample.com {KEY_B}\nother {KEY_C}\n"));
+        let algorithms = kh.known_algorithms("example.com", 22).unwrap();
+        assert_eq!(algorithms, vec![key(KEY_C).algorithm(), key(KEY_A).algorithm()]);
+        assert!(kh.known_algorithms("missing", 22).unwrap().is_empty());
     }
 
     #[test]

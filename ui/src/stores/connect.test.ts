@@ -74,7 +74,7 @@ describe("connect store", () => {
     eventsOf(0)({ kind: "stepStarted", step: "tcp" });
     eventsOf(0)({ kind: "log", line: "debug1: Connecting to 10.0.1.12 port 22." });
     expect(flow()).toMatchObject({ current: "tcp", log: ["debug1: Connecting to 10.0.1.12 port 22."] });
-    const prompt = { kind: "hostKeyUnknown", host: "10.0.1.12", port: 22, info: { algorithm: "ssh-ed25519", sha256: "SHA256:x", md5: "MD5:y" } } as const;
+    const prompt: api.Prompt = { kind: "hostKeyUnknown", host: "10.0.1.12", port: 22, info: { algorithm: "ssh-ed25519", sha256: "SHA256:x", md5: "MD5:y" }, otherKeyTypesKnown: [] };
     eventsOf(0)({ kind: "prompt", promptId: 5, prompt });
     expect(flow()?.prompt).toEqual({ promptId: 5, prompt });
     await useConnectStore.getState().answer(5, { kind: "hostKey", decision: "trust" });

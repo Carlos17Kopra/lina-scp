@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use russh::client;
+use russh::keys::Algorithm;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
@@ -70,6 +71,18 @@ pub enum ConnectEvent {
     Failed {
         error: CoreError,
     },
+}
+
+/// russh's default host-key algorithm list with the `known` types (from known_hosts) moved to the
+/// front; both parts keep the default order. A stored `ssh-rsa` key matches all RSA signature
+/// algorithms (rsa-sha2-512, rsa-sha2-256, ssh-rsa). Types russh does not offer are ignored.
+pub fn preferred_host_key_order(known: &[Algorithm]) -> Vec<Algorithm> {
+    let is_rsa = |a: &Algorithm| matches!(a, Algorithm::Rsa { .. });
+    let is_known = |candidate: &Algorithm| known.iter().any(|k| k == candidate || (is_rsa(k) && is_rsa(candidate)));
+    let defaults = russh::Preferred::default().key;
+    let (mut first, rest): (Vec<Algorithm>, Vec<Algorithm>) = defaults.iter().cloned().partition(|a| is_known(a));
+    first.extend(rest);
+    first
 }
 
 /// Build a `Log` event; the line is always sanitized.
@@ -239,11 +252,12 @@ impl Pipeline {
         }
     }
 
-    fn client_config(host: &Host) -> Arc<client::Config> {
+    fn client_config(host: &Host, host_key_order: Vec<Algorithm>) -> Arc<client::Config> {
         Arc::new(client::Config {
             keepalive_interval: (host.keepalive_s > 0).then(|| Duration::from_secs(u64::from(host.keepalive_s))),
             keepalive_max: 3,
             nodelay: true,
+            preferred: russh::Preferred { key: host_key_order.into(), ..russh::Preferred::default() },
             ..Default::default()
         })
     }
@@ -263,7 +277,15 @@ impl Pipeline {
             self.cancel.clone(),
             key_seen.clone(),
         );
-        let config = Self::client_config(host);
+        // Like OpenSSH: offer the key types known_hosts already holds for this host first, so a
+        // host known only by e.g. its ecdsa/rsa key negotiates that type and verifies as Known.
+        // A read error only loses the ordering; `check` reports it (fail closed) during kex.
+        let known = self.known_hosts.known_algorithms(&host.address, host.port).unwrap_or_default();
+        if !known.is_empty() {
+            let names: Vec<&str> = known.iter().map(Algorithm::as_str).collect();
+            self.log(format!("debug1: preferring known host key types: {}", names.join(",")));
+        }
+        let config = Self::client_config(host, preferred_host_key_order(&known));
         with_setup_timeout(
             host.timeout_s,
             key_seen,
@@ -454,6 +476,41 @@ mod tests {
             cols: 80,
             rows: 24,
         }
+    }
+
+    fn default_key_order() -> Vec<Algorithm> {
+        russh::Preferred::default().key.to_vec()
+    }
+
+    #[test]
+    fn preferred_host_key_order_puts_known_types_first() {
+        use russh::keys::{EcdsaCurve, HashAlg};
+        assert_eq!(preferred_host_key_order(&[]), default_key_order());
+
+        let p256 = Algorithm::Ecdsa { curve: EcdsaCurve::NistP256 };
+        let order = preferred_host_key_order(std::slice::from_ref(&p256));
+        assert_eq!(order[0], p256);
+        let mut rest = default_key_order();
+        rest.retain(|a| *a != p256);
+        assert_eq!(order[1..], rest[..], "the remaining types keep the default order");
+
+        // A stored ssh-rsa key prefers all RSA signature algorithms, in default order.
+        let order = preferred_host_key_order(&[Algorithm::Rsa { hash: None }]);
+        assert_eq!(
+            order[..3],
+            [
+                Algorithm::Rsa { hash: Some(HashAlg::Sha512) },
+                Algorithm::Rsa { hash: Some(HashAlg::Sha256) },
+                Algorithm::Rsa { hash: None }
+            ]
+        );
+        assert_eq!(order.len(), default_key_order().len());
+        assert_eq!(order[3], Algorithm::Ed25519);
+
+        // Several known types: all of them first, in default order.
+        let order = preferred_host_key_order(&[Algorithm::Rsa { hash: None }, Algorithm::Ed25519]);
+        assert_eq!(order[0], Algorithm::Ed25519);
+        assert!(order[1..4].iter().all(|a| matches!(a, Algorithm::Rsa { .. })));
     }
 
     #[test]

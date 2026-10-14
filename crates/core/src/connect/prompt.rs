@@ -28,11 +28,33 @@ pub struct KbdPrompt {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Prompt {
-    HostKeyUnknown { host: String, port: u16, info: HostKeyInfo },
-    HostKeyChanged { host: String, port: u16, stored: HostKeyInfo, current: HostKeyInfo },
-    KeyboardInteractive { name: String, instructions: String, prompts: Vec<KbdPrompt> },
-    Password { user: String, host: String, retry: bool },
-    Passphrase { key_path: String },
+    HostKeyUnknown {
+        host: String,
+        port: u16,
+        info: HostKeyInfo,
+        /// Key types known_hosts holds for this host other than the offered one: the host is
+        /// known, but with a different key type. Never a reason to trust automatically.
+        other_key_types_known: Vec<String>,
+    },
+    HostKeyChanged {
+        host: String,
+        port: u16,
+        stored: HostKeyInfo,
+        current: HostKeyInfo,
+    },
+    KeyboardInteractive {
+        name: String,
+        instructions: String,
+        prompts: Vec<KbdPrompt>,
+    },
+    Password {
+        user: String,
+        host: String,
+        retry: bool,
+    },
+    Passphrase {
+        key_path: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]

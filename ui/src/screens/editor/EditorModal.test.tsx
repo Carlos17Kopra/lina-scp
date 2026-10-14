@@ -326,7 +326,7 @@ describe("EditorModal — Verbindung testen", () => {
       emit({
         kind: "prompt",
         promptId: 3,
-        prompt: { kind: "hostKeyUnknown", host: "10.0.1.12", port: 22, info: { algorithm: "ssh-ed25519", sha256: "SHA256:abc", md5: "MD5:aa" } },
+        prompt: { kind: "hostKeyUnknown", host: "10.0.1.12", port: 22, info: { algorithm: "ssh-ed25519", sha256: "SHA256:abc", md5: "MD5:aa" }, otherKeyTypesKnown: [] },
       });
       return new Promise<void>((resolve) => {
         finish = resolve;

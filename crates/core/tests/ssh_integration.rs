@@ -181,6 +181,25 @@ async fn unknown_host_key_trust_writes_known_hosts() {
     assert_shell(session.expect("connected again"), &output).await;
 }
 
+/// F3: a host known (as in OpenSSH) only by a non-default key type negotiates that type and is
+/// accepted without a host-key prompt.
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn host_known_only_by_ecdsa_or_rsa_connects_without_prompt() {
+    let c = Container::start(None);
+    for kind in ["ecdsa", "rsa"] {
+        let env = Env::new();
+        std::fs::write(env.known_hosts_path(), format!("[127.0.0.1]:{} {}\n", c.port, c.host_public_key(kind)))
+            .unwrap();
+        let h = host(c.port, "pwuser", AuthMethod::Password, None);
+        env.store_password(&h, "pwpass");
+        let p = prompter(|other| panic!("unexpected prompt {other:?}"));
+        let (session, output) = connect(&env, request(h, None), None, &p).await;
+        assert_shell(session.unwrap_or_else(|e| panic!("{kind}: {e:?}")), &output).await;
+        assert!(p.prompts().is_empty(), "{kind}: no prompt expected");
+    }
+}
+
 #[tokio::test]
 #[ignore = "requires docker"]
 async fn changed_host_key_reject_fails_closed() {

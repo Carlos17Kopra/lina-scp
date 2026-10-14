@@ -31,11 +31,13 @@ fn rejected(message: &str) -> CoreError {
 
 /// Pure decision logic. `ask` is only invoked for unknown or changed keys.
 /// Fail-closed: anything but a valid, explicit acceptance is a rejection.
+/// `other_key_types_known` only annotates the `Unknown` prompt (see `Prompt::HostKeyUnknown`).
 pub async fn decide_host_key<F, Fut>(
     status: HostKeyStatus,
     host: &str,
     port: u16,
     current: HostKeyInfo,
+    other_key_types_known: Vec<String>,
     ask: F,
 ) -> Result<HostKeyAction>
 where
@@ -45,7 +47,8 @@ where
     match status {
         HostKeyStatus::Known => Ok(HostKeyAction::Accept),
         HostKeyStatus::Unknown => {
-            let answer = ask(Prompt::HostKeyUnknown { host: host.to_string(), port, info: current }).await;
+            let prompt = Prompt::HostKeyUnknown { host: host.to_string(), port, info: current, other_key_types_known };
+            let answer = ask(prompt).await;
             match answer {
                 PromptAnswer::HostKey { decision: HostKeyDecision::AcceptOnce } => Ok(HostKeyAction::Accept),
                 PromptAnswer::HostKey { decision: HostKeyDecision::Trust } => Ok(HostKeyAction::Trust),
@@ -122,7 +125,18 @@ impl ClientHandler {
             HostKeyStatus::Changed { .. } => "CHANGED",
         };
         (self.emit)(log_line(format!("debug1: Host '{}' key is {status_text}", self.host)));
-        let action = decide_host_key(status, &self.host, self.port, info, |prompt| {
+        let other_key_types = match status {
+            HostKeyStatus::Unknown => self.known_hosts.other_key_types(&self.host, self.port, key)?,
+            _ => Vec::new(),
+        };
+        if !other_key_types.is_empty() {
+            (self.emit)(log_line(format!(
+                "debug1: Host '{}' is known with other key types: {}",
+                self.host,
+                other_key_types.join(",")
+            )));
+        }
+        let action = decide_host_key(status, &self.host, self.port, info, other_key_types, |prompt| {
             self.broker.ask_cancellable(&self.emit, prompt, &self.cancel)
         })
         .await?;
@@ -180,7 +194,8 @@ mod tests {
 
     async fn decide(status: HostKeyStatus, reply: PromptAnswer) -> (Result<HostKeyAction>, Option<Prompt>) {
         let mut asked = None;
-        let result = decide_host_key(status, "example.org", 2222, info("SHA256:new"), |p| {
+        let others = vec!["ecdsa-sha2-nistp256".to_string()];
+        let result = decide_host_key(status, "example.org", 2222, info("SHA256:new"), others, |p| {
             asked = Some(p);
             async move { reply }
         })
@@ -190,7 +205,7 @@ mod tests {
 
     #[tokio::test]
     async fn known_key_is_accepted_without_prompt() {
-        let result = decide_host_key(HostKeyStatus::Known, "h", 22, info("SHA256:a"), |_| async {
+        let result = decide_host_key(HostKeyStatus::Known, "h", 22, info("SHA256:a"), Vec::new(), |_| async {
             panic!("must not ask for known keys")
         })
         .await;
@@ -203,7 +218,12 @@ mod tests {
         assert_eq!(r.unwrap(), HostKeyAction::Trust);
         assert_eq!(
             asked,
-            Some(Prompt::HostKeyUnknown { host: "example.org".into(), port: 2222, info: info("SHA256:new") })
+            Some(Prompt::HostKeyUnknown {
+                host: "example.org".into(),
+                port: 2222,
+                info: info("SHA256:new"),
+                other_key_types_known: vec!["ecdsa-sha2-nistp256".into()],
+            })
         );
         let (r, _) = decide(HostKeyStatus::Unknown, answer(HostKeyDecision::AcceptOnce)).await;
         assert_eq!(r.unwrap(), HostKeyAction::Accept);

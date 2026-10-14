@@ -21,7 +21,7 @@ const info = { algorithm: "ssh-ed25519", sha256: "SHA256:a", md5: "MD5:b" };
 describe("connectView", () => {
   it("prioritises host-key prompts, then inline prompts, then errors", () => {
     expect(connectView(base)).toBe("progress");
-    expect(connectView({ ...base, prompt: { promptId: 1, prompt: { kind: "hostKeyUnknown", host: "h", port: 22, info } } })).toBe("hostKeyNew");
+    expect(connectView({ ...base, prompt: { promptId: 1, prompt: { kind: "hostKeyUnknown", host: "h", port: 22, info, otherKeyTypesKnown: [] } } })).toBe("hostKeyNew");
     expect(
       connectView({ ...base, prompt: { promptId: 1, prompt: { kind: "hostKeyChanged", host: "h", port: 22, stored: info, current: info } } }),
     ).toBe("hostKeyChanged");

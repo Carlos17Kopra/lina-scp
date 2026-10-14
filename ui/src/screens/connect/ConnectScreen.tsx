@@ -57,7 +57,15 @@ export function ConnectScreen() {
   let body = <ConnectProgress flow={flow} host={host} />;
   if (pending?.prompt.kind === "hostKeyUnknown") {
     const { prompt } = pending;
-    body = <HostKeyNewDialog host={prompt.host} port={prompt.port} info={prompt.info} onDecision={decide(pending.promptId)} />;
+    body = (
+      <HostKeyNewDialog
+        host={prompt.host}
+        port={prompt.port}
+        info={prompt.info}
+        otherKeyTypes={prompt.otherKeyTypesKnown}
+        onDecision={decide(pending.promptId)}
+      />
+    );
   } else if (pending?.prompt.kind === "hostKeyChanged") {
     const { prompt } = pending;
     body = (

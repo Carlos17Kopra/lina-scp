@@ -113,10 +113,36 @@ describe("ConnectScreen — progress", () => {
 });
 
 describe("ConnectScreen — host keys", () => {
+  it("warns when the host is known with a different key type", () => {
+    renderWith(
+      flowFor("h-web", {
+        prompt: {
+          promptId: 1,
+          prompt: { kind: "hostKeyUnknown", host: "coolify.example.net", port: 22, info, otherKeyTypesKnown: ["ecdsa-sha2-nistp256"] },
+        },
+      }),
+    );
+    expect(screen.getByRole("note")).toHaveTextContent(
+      "Dieser Host ist bereits mit einem anderen Schlüsseltyp bekannt (ecdsa-sha2-nistp256). Prüfe den Fingerprint besonders sorgfältig.",
+    );
+    // Still an explicit decision: nothing is trusted automatically.
+    expect(screen.getByRole("button", { name: "Vertrauen und verbinden" })).toBeInTheDocument();
+    expect(actions.answer).not.toHaveBeenCalled();
+  });
+
+  it("shows no key-type warning for a host that is not known at all", () => {
+    renderWith(
+      flowFor("h-web", {
+        prompt: { promptId: 1, prompt: { kind: "hostKeyUnknown", host: "coolify.example.net", port: 22, info, otherKeyTypesKnown: [] } },
+      }),
+    );
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+
   it("asks about an unknown host key", async () => {
     const writeText = vi.fn(async () => undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
-    renderWith(flowFor("h-web", { prompt: { promptId: 1, prompt: { kind: "hostKeyUnknown", host: "coolify.example.net", port: 22, info } } }));
+    renderWith(flowFor("h-web", { prompt: { promptId: 1, prompt: { kind: "hostKeyUnknown", host: "coolify.example.net", port: 22, info, otherKeyTypesKnown: [] } } }));
     expect(screen.getByRole("tab", { name: "web-prod-01 · wartet auf Bestätigung" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Unbekannter Host" })).toBeInTheDocument();
     expect(screen.getByText(/Du verbindest dich zum ersten Mal mit/)).toHaveTextContent(
