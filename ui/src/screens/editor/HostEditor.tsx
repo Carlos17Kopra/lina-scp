@@ -27,7 +27,7 @@ export function HostEditor({
   onEditProfile,
 }: {
   frame: HostFrame;
-  onChange: (frame: HostFrame) => void;
+  onChange: (frame: HostFrame | ((previous: HostFrame) => HostFrame)) => void;
   onEditProfile: (profileId?: Id) => void;
 }) {
   const { draft, tab, isNew } = frame;
@@ -58,7 +58,8 @@ export function HostEditor({
         const group = await store.saveGroup({ id: newId(), name: draft.newGroupName.trim(), sortOrder: store.groups.length });
         groupId = group.id;
         // Keep the created group on a failed host save so a retry does not create it again.
-        onChange({ ...frame, draft: { ...draft, groupId: group.id, newGroupName: "" } });
+        // Merge into the latest frame: the user may have kept typing while the group was saved.
+        onChange((latest) => ({ ...latest, draft: { ...latest.draft, groupId: group.id, newGroupName: "" } }));
       }
       const saved = await store.saveHost(draftToHost(draft, groupId));
       if (draft.authSource === "custom" && !(await storeSecrets({ kind: "host", id: saved.id }, draft.auth))) {

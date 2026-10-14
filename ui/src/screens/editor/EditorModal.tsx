@@ -41,14 +41,21 @@ export function EditorModal({ target }: { target: EditorTarget }) {
   const top = stack[stack.length - 1];
   if (!top) return null;
 
-  const replaceTop = (frame: EditorFrame) => setStack((current) => [...current.slice(0, -1), frame]);
+  const replaceTop = (frame: EditorFrame | ((previous: EditorFrame) => EditorFrame)) =>
+    setStack((current) => {
+      const previous = current[current.length - 1];
+      if (!previous) return current;
+      return [...current.slice(0, -1), typeof frame === "function" ? frame(previous) : frame];
+    });
   const pop = () => setStack((current) => current.slice(0, -1));
 
   if (top.kind === "host") {
     return (
       <HostEditor
         frame={top}
-        onChange={replaceTop}
+        onChange={(next) =>
+          replaceTop(typeof next === "function" ? (previous) => (previous.kind === "host" ? next(previous) : previous) : next)
+        }
         onEditProfile={(profileId) => setStack((current) => [...current, profileFrame(profileId)])}
       />
     );

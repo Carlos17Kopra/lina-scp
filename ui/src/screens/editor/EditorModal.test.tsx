@@ -170,6 +170,30 @@ describe("EditorModal — host", () => {
     expect(api.hostSave).toHaveBeenLastCalledWith(expect.objectContaining({ groupId: "new-id" }));
   });
 
+  it("keeps edits made while the new group is being saved", async () => {
+    let finishGroup: (group: api.Group) => void = () => undefined;
+    vi.mocked(api.groupSave).mockImplementationOnce(
+      () =>
+        new Promise<api.Group>((resolve) => {
+          finishGroup = resolve;
+        }),
+    );
+    vi.mocked(api.hostSave).mockRejectedValueOnce({ type: "store", message: "locked" });
+    renderEditor({ kind: "host", id: "h-web" });
+    await userEvent.selectOptions(screen.getByLabelText("Gruppe"), "__new__");
+    await userEvent.type(screen.getByLabelText("Name der neuen Gruppe"), "Kunden");
+    await userEvent.click(saveButton());
+    await waitFor(() => expect(api.groupSave).toHaveBeenCalledTimes(1));
+    await userEvent.type(screen.getByLabelText("Anzeigename"), "-edited");
+    await act(async () => finishGroup({ id: "new-id", name: "Kunden", sortOrder: 1 }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Speichern fehlgeschlagen");
+    expect(screen.getByLabelText("Anzeigename")).toHaveValue("web-prod-01-edited");
+    await userEvent.click(saveButton());
+    await waitFor(() => expect(api.hostSave).toHaveBeenCalledTimes(2));
+    expect(api.groupSave).toHaveBeenCalledTimes(1);
+    expect(api.hostSave).toHaveBeenLastCalledWith(expect.objectContaining({ name: "web-prod-01-edited", groupId: "new-id" }));
+  });
+
   it("reports a failing key file dialog as a toast", async () => {
     vi.mocked(open).mockRejectedValueOnce(new Error("portal unavailable"));
     renderEditor({ kind: "host", id: "h-web" });
