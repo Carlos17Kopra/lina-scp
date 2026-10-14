@@ -12,7 +12,7 @@ export function ModalLayer() {
   if (!modal) return null;
   switch (modal.type) {
     case "editor":
-      return <EditorModal target={modal.target} />;
+      return <EditorModal key={`${modal.target.kind}:${modal.target.id ?? "new"}`} target={modal.target} />;
     case "settings":
       return <SettingsDialog />;
     case "firstRun":
