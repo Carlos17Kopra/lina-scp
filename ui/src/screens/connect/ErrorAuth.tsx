@@ -4,7 +4,7 @@ import { Button, Checkbox, cx, TextField } from "../../components";
 import { t } from "../../i18n/de";
 import type { CoreError, Host } from "../../ipc/api";
 import { hostAuthConfig, hostProfile, methodLabel } from "../../model/hostFormat";
-import { type ConnectFlow, MAX_ATTEMPTS, useConnectStore } from "../../stores/connect";
+import { authFailureHost, type ConnectFlow, MAX_ATTEMPTS, useConnectStore } from "../../stores/connect";
 import { useHostsStore } from "../../stores/hosts";
 import styles from "./Connect.module.css";
 
@@ -28,6 +28,7 @@ export function ErrorAuth({
   onEdit: (target: { kind: "host" | "profile"; id: string }) => void;
 }) {
   const profiles = useHostsStore((state) => state.profiles);
+  const hosts = useHostsStore((state) => state.hosts);
   const retry = useConnectStore((state) => state.retry);
   const retryWithPassword = useConnectStore((state) => state.retryWithPassword);
   const cancel = useConnectStore((state) => state.cancel);
@@ -38,8 +39,11 @@ export function ErrorAuth({
   const formId = useId();
   const texts = t.connect.auth;
 
-  const profile = hostProfile(host, profiles);
-  const auth = hostAuthConfig(host, profiles);
+  // After a failed jump step everything (text, user, save target, editor) is about the jump host.
+  const { host: failedHost, isJump } = authFailureHost(flow, hosts);
+  const subject = isJump ? failedHost : host;
+  const profile = subject ? hostProfile(subject, profiles) : null;
+  const auth = subject ? hostAuthConfig(subject, profiles) : null;
   const askPassword = auth?.method === "password";
   const rejected = error.type === "auth" ? error.rejectedMethods : [];
 
@@ -65,11 +69,15 @@ export function ErrorAuth({
       <h1 id={titleId} className={styles.cardTitle}>
         {texts.title}
       </h1>
-      <p className={styles.text}>
-        {texts.textBefore}
-        <code className={styles.code}>{host.address}</code>
-        {profile ? texts.rejectedProfile(profile.name) : texts.rejectedHost}
-      </p>
+      {subject ? (
+        <p className={styles.text}>
+          {isJump ? texts.jumpTextBefore(subject.name) : texts.textBefore}
+          <code className={styles.code}>{subject.address}</code>
+          {profile ? texts.rejectedProfile(profile.name) : isJump ? texts.rejectedJumpHost : texts.rejectedHost}
+        </p>
+      ) : (
+        <p className={styles.text}>{texts.jumpMissing}</p>
+      )}
       {rejected.length > 0 ? (
         <ul className={styles.methods} aria-label={texts.methods}>
           {rejected.map((method) => {
@@ -85,7 +93,7 @@ export function ErrorAuth({
       ) : null}
       {askPassword ? (
         <form id={formId} className={styles.form} onSubmit={submit} noValidate>
-          <TextField label={texts.user} mono readOnly value={host.user ?? profile?.user ?? ""} onChange={() => undefined} />
+          <TextField label={texts.user} mono readOnly value={subject?.user ?? profile?.user ?? ""} onChange={() => undefined} />
           <TextField
             type="password"
             label={texts.password}
@@ -99,29 +107,42 @@ export function ErrorAuth({
               setMissing(false);
             }}
           />
-          <Checkbox label={profile ? texts.saveInProfile(profile.name) : texts.saveForHost} checked={save} onChange={setSave} />
+          <Checkbox
+            label={profile ? texts.saveInProfile(profile.name) : isJump && subject ? texts.saveForJumpHost(subject.name) : texts.saveForHost}
+            checked={save}
+            onChange={setSave}
+          />
         </form>
-      ) : (
+      ) : subject ? (
         <p className={styles.text}>{texts.otherMethod(auth ? methodLabel(auth.method) : t.hosts.none)}</p>
+      ) : null}
+      {subject ? (
+        <div className={styles.footer}>
+          <Button variant="ghost" onClick={() => void cancel()}>
+            {t.common.cancel}
+          </Button>
+          <Button onClick={() => onEdit(profile ? { kind: "profile", id: profile.id } : { kind: "host", id: subject.id })}>
+            {profile ? texts.editProfile : t.hosts.edit}
+          </Button>
+          <span className={styles.spacer} />
+          {askPassword ? (
+            <Button variant="primary" type="submit" form={formId} disabled={flow.submitting}>
+              {flow.submitting ? t.connect.error.connecting : texts.retry}
+            </Button>
+          ) : (
+            <Button variant="primary" disabled={flow.submitting} onClick={() => submit()}>
+              {flow.submitting ? t.connect.error.connecting : texts.retry}
+            </Button>
+          )}
+        </div>
+      ) : (
+        <div className={styles.footer}>
+          <span className={styles.spacer} />
+          <Button variant="primary" onClick={() => void cancel()}>
+            {t.common.back}
+          </Button>
+        </div>
       )}
-      <div className={styles.footer}>
-        <Button variant="ghost" onClick={() => void cancel()}>
-          {t.common.cancel}
-        </Button>
-        <Button onClick={() => onEdit(profile ? { kind: "profile", id: profile.id } : { kind: "host", id: host.id })}>
-          {profile ? texts.editProfile : t.hosts.edit}
-        </Button>
-        <span className={styles.spacer} />
-        {askPassword ? (
-          <Button variant="primary" type="submit" form={formId} disabled={flow.submitting}>
-            {flow.submitting ? t.connect.error.connecting : texts.retry}
-          </Button>
-        ) : (
-          <Button variant="primary" disabled={flow.submitting} onClick={() => submit()}>
-            {flow.submitting ? t.connect.error.connecting : texts.retry}
-          </Button>
-        )}
-      </div>
     </section>
   );
 }

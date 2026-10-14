@@ -8,6 +8,7 @@ import {
   connectSsh,
   createEventChannel,
   createOutputStream,
+  type Host,
   type Id,
   newId,
   type OutputStream,
@@ -64,14 +65,31 @@ export interface ConnectState {
   answer(promptId: number, answer: PromptAnswer): Promise<void>;
   cancel(): Promise<void>;
   retry(): Promise<void>;
-  /** ErrorAuth: retry with a new password; `save` stores it for the host (or its login profile) first. */
+  /**
+   * ErrorAuth: retry with a new password for the host whose credentials were rejected (the jump host
+   * after a failed jump step, else the target); `save` stores it for that host (or its login profile) first.
+   */
   retryWithPassword(password: string, save: boolean): Promise<void>;
   setAutoRetry(on: boolean): void;
 }
 
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
-/** Re-entered password for the next password prompt (kept out of the store state on purpose). */
-let pendingPassword: string | null = null;
+/**
+ * Re-entered password for the next password prompt of host `hostId` (the target, or its jump host
+ * when the jump step failed). Kept out of the store state on purpose.
+ */
+let pendingPassword: { value: string; hostId: Id } | null = null;
+
+/**
+ * The host whose credentials a failed flow's auth error is about: the jump host when the
+ * `jumpHost` step failed (`null` if it no longer exists), else the target.
+ */
+export function authFailureHost(flow: ConnectFlow, hosts: readonly Host[]): { host: Host | null; isJump: boolean } {
+  const target = hosts.find((h) => h.id === flow.hostId) ?? null;
+  if (flow.failed?.step !== "jumpHost") return { host: target, isJump: false };
+  const jumpId = target?.jumpHostId;
+  return { host: (jumpId ? hosts.find((h) => h.id === jumpId) : undefined) ?? null, isJump: true };
+}
 
 function clearRetryTimer(): void {
   if (retryTimer !== null) clearTimeout(retryTimer);
@@ -100,11 +118,11 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
 
   /**
    * The backend prompts with `host.address` and the effective user (host user, else profile user).
-   * Only the target's own prompt may receive the re-entered password, never a jump host's (fail closed).
+   * Only the prompt of the host the password was entered for may receive it (the target, or its
+   * jump host after a failed jump step), never another hop's (fail closed).
    */
-  const isTargetPrompt = (prompt: { host: string; user: string }) => {
-    const flow = get().active;
-    const host = useHostsStore.getState().hosts.find((h) => h.id === flow?.hostId);
+  const isPromptFor = (hostId: Id, prompt: { host: string; user: string }) => {
+    const host = useHostsStore.getState().hosts.find((h) => h.id === hostId);
     if (!host) return false;
     const profile = hostProfile(host, useHostsStore.getState().profiles);
     const user = host.user?.trim() || profile?.user.trim();
@@ -114,8 +132,8 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
   const onEvent = (connectId: string, event: ConnectEvent) => {
     if (!isCurrent(connectId)) return;
     if (event.kind === "prompt") {
-      if (event.prompt.kind === "password" && pendingPassword !== null && isTargetPrompt(event.prompt)) {
-        const value = pendingPassword;
+      if (event.prompt.kind === "password" && pendingPassword !== null && isPromptFor(pendingPassword.hostId, event.prompt)) {
+        const { value } = pendingPassword;
         pendingPassword = null;
         fireAndForget(() => connectAnswer(event.promptId, { kind: "secret", value, save: false }));
         return;
@@ -276,11 +294,14 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
     retryWithPassword: async (password, save) => {
       const flow = get().active;
       if (!flow || flow.submitting) return;
+      // The password belongs to the host whose credentials were rejected (jump host or target).
+      const subject = authFailureHost(flow, useHostsStore.getState().hosts).host;
+      if (!subject) return;
       set({ active: { ...flow, submitting: true } });
-      pendingPassword = password;
+      pendingPassword = { value: password, hostId: subject.id };
       if (save) {
         try {
-          await secretSet(secretOwnerOf(flow.hostId), "password", password);
+          await secretSet(secretOwnerOf(subject.id), "password", password);
           pendingPassword = null;
         } catch {
           pushNotice({ tone: "amber", message: t.connect.secretFailed });

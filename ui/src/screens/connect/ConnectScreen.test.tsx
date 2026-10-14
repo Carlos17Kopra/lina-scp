@@ -260,6 +260,45 @@ describe("ConnectScreen — authentication errors", () => {
   });
 });
 
+describe("ConnectScreen — authentication errors at the jump host", () => {
+  const jumpFailed = (hostId: string) =>
+    flowFor(hostId, {
+      steps: ["jumpHost", "tcp", "hostKey", "auth", "channel", "shell"],
+      failed: { step: "jumpHost", error: { type: "auth", rejectedMethods: ["password"], message: "denied" } },
+    });
+
+  it("names the jump host and targets it with the password form", async () => {
+    renderWith(jumpFailed("h-web"));
+    expect(screen.getByText(/hat die Zugangsdaten des Jump-Hosts abgelehnt/)).toHaveTextContent(
+      "Der Jump-Host »bastion« bastion.example.net hat die Zugangsdaten des Jump-Hosts abgelehnt.",
+    );
+    expect(screen.queryByText(/10\.0\.1\.12/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Benutzer")).toHaveValue("admin");
+    expect(screen.getByRole("checkbox", { name: "Neues Passwort für den Jump-Host »bastion« speichern" })).toBeChecked();
+    await userEvent.type(screen.getByLabelText("Passwort"), "neu");
+    await userEvent.click(screen.getByRole("button", { name: "Erneut anmelden" }));
+    expect(actions.retryWithPassword).toHaveBeenCalledWith("neu", true);
+  });
+
+  it("edits the jump host", async () => {
+    renderWith(jumpFailed("h-web"));
+    await userEvent.click(screen.getByRole("button", { name: "Host bearbeiten" }));
+    expect(useUiStore.getState().modal).toEqual({ type: "editor", target: { kind: "host", id: "h-bastion" } });
+  });
+
+  it("offers only going back when the jump host is gone", async () => {
+    const orphan = makeHost({ id: "h-orphan", name: "orphan", jumpHostId: "h-gone" });
+    useHostsStore.setState({ hosts: [bastion, web, shop, keyHost, orphan] });
+    renderWith(jumpFailed("h-orphan"));
+    expect(screen.getByText("Der Jump-Host dieses Hosts ist nicht mehr vorhanden.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Passwort")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Host bearbeiten" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Erneut anmelden" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Zurück" }));
+    expect(actions.cancel).toHaveBeenCalledOnce();
+  });
+});
+
 describe("ConnectScreen — lifecycle", () => {
   it("moves focus into the overlay so Escape cancels", async () => {
     renderWith(flowFor("h-web", { steps: ["tcp"], current: "tcp" }));

@@ -258,6 +258,40 @@ describe("connect store", () => {
     expect(api.connectAnswer).toHaveBeenCalledExactlyOnceWith(21, { kind: "secret", value: "neu", save: false });
   });
 
+  describe("auth failure at the jump host", () => {
+    const bastion = makeHost({ id: "h-bastion", name: "bastion", address: "bastion.example.net", user: "admin" });
+    const jumped = makeHost({ id: "h-jumped", name: "app-01", address: "10.0.2.5", user: "deploy", jumpHostId: "h-bastion" });
+
+    const failAtJump = async () => {
+      useHostsStore.setState({ hosts: [web, viaProfile, bastion, jumped] });
+      void useConnectStore.getState().start("h-jumped", "ssh");
+      eventsOf(0)({ kind: "steps", steps: ["jumpHost", "tcp", "hostKey", "auth", "channel", "shell"] });
+      eventsOf(0)({ kind: "stepStarted", step: "jumpHost" });
+      eventsOf(0)({ kind: "stepFailed", step: "jumpHost", error: { type: "auth", rejectedMethods: ["password"], message: "denied" } });
+      attempts[0]?.reject({ type: "auth", rejectedMethods: ["password"], message: "denied" });
+      await settle();
+      expect(flow()?.failed?.step).toBe("jumpHost");
+    };
+
+    it("saves the re-entered password for the jump host", async () => {
+      await failAtJump();
+      void useConnectStore.getState().retryWithPassword("neu", true);
+      await settle();
+      expect(api.secretSet).toHaveBeenCalledExactlyOnceWith({ kind: "host", id: "h-bastion" }, "password", "neu");
+    });
+
+    it("answers only the jump host's password prompt", async () => {
+      await failAtJump();
+      void useConnectStore.getState().retryWithPassword("neu", false);
+      await settle();
+      eventsOf(1)({ kind: "prompt", promptId: 30, prompt: { kind: "password", user: "deploy", host: "10.0.2.5", retry: false } });
+      expect(api.connectAnswer).not.toHaveBeenCalled();
+      expect(flow()?.prompt?.promptId).toBe(30);
+      eventsOf(1)({ kind: "prompt", promptId: 31, prompt: { kind: "password", user: "admin", host: "bastion.example.net", retry: false } });
+      expect(api.connectAnswer).toHaveBeenCalledExactlyOnceWith(31, { kind: "secret", value: "neu", save: false });
+    });
+  });
+
   it("starts only one attempt for a double retryWithPassword", async () => {
     void useConnectStore.getState().start("h-prof", "ssh");
     attempts[0]?.reject({ type: "auth", rejectedMethods: ["password"], message: "denied" });
