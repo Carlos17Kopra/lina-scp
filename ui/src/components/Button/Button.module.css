@@ -1,0 +1,90 @@
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s,
+    filter 0.15s;
+}
+
+.button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.sm {
+  height: 34px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.md {
+  height: 40px;
+  padding: 0 16px;
+  font-size: 14px;
+}
+
+.lg {
+  height: 44px;
+  padding: 0 20px;
+  font-size: 14px;
+}
+
+.primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.secondary {
+  background: transparent;
+  border-color: var(--bd-strong);
+  color: var(--text);
+}
+
+.secondary:hover:not(:disabled) {
+  background: var(--raised);
+  border-color: var(--bd-hover);
+}
+
+.ghost {
+  background: transparent;
+  color: var(--text3);
+}
+
+.ghost:hover:not(:disabled) {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.danger {
+  background: var(--red);
+  color: var(--bg);
+  font-weight: 600;
+}
+
+.danger:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.inverted {
+  background: var(--text);
+  color: var(--bg);
+  font-weight: 600;
+}
+
+.inverted:hover:not(:disabled) {
+  filter: brightness(1.1);
+}

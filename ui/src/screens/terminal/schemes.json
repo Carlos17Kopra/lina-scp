@@ -1,0 +1,16 @@
+{
+  "_info": "Terminal-Farbschemata. 'auto' (Standard) = linascp im dunklen, linascpLight im hellen App-Design. Felder: bg, fg, dim (Kommentare/Zeitstempel), green (Prompt/User), blue (Pfad), yellow (Hashes/Warnung), red (Fehler), cursor, bd (Trennlinie Bereichskopf). Für xterm.js: bg→background, fg→foreground, cursor→cursor, green/blue/yellow/red→green/blue/yellow/red (+ bright-Varianten ableiten).",
+  "default": "auto",
+  "fontSize": { "default": 13, "min": 10, "max": 20 },
+  "schemes": {
+    "linascp":      { "name": "LinaSCP",       "bg": "#0B0E13", "fg": "#D4DAE2", "dim": "#8B95A3", "green": "#3DDC97", "blue": "#7AA2F7", "yellow": "#F2A65A", "red": "#F28B82", "cursor": "#4FD1C5", "bd": "#1A2028" },
+    "linascpLight": { "name": "LinaSCP Light", "bg": "#FFFFFF", "fg": "#2A313B", "dim": "#6B7480", "green": "#12804F", "blue": "#3A64C8", "yellow": "#A85A0C", "red": "#B8322A", "cursor": "#0E7C72", "bd": "#E1E5EB" },
+    "dracula":        { "name": "Dracula",         "bg": "#282A36", "fg": "#F8F8F2", "dim": "#6272A4", "green": "#50FA7B", "blue": "#BD93F9", "yellow": "#F1FA8C", "red": "#FF5555", "cursor": "#FF79C6", "bd": "#343746" },
+    "nord":           { "name": "Nord",            "bg": "#2E3440", "fg": "#D8DEE9", "dim": "#7B88A1", "green": "#A3BE8C", "blue": "#81A1C1", "yellow": "#EBCB8B", "red": "#BF616A", "cursor": "#88C0D0", "bd": "#3B4252" },
+    "gruvbox":        { "name": "Gruvbox Dark",    "bg": "#282828", "fg": "#EBDBB2", "dim": "#928374", "green": "#B8BB26", "blue": "#83A598", "yellow": "#FABD2F", "red": "#FB4934", "cursor": "#FE8019", "bd": "#3C3836" },
+    "tokyo":          { "name": "Tokyo Night",     "bg": "#1A1B26", "fg": "#C0CAF5", "dim": "#737AA2", "green": "#9ECE6A", "blue": "#7AA2F7", "yellow": "#E0AF68", "red": "#F7768E", "cursor": "#BB9AF7", "bd": "#24283B" },
+    "solDark":        { "name": "Solarized Dark",  "bg": "#002B36", "fg": "#93A1A1", "dim": "#657B83", "green": "#859900", "blue": "#268BD2", "yellow": "#B58900", "red": "#DC322F", "cursor": "#2AA198", "bd": "#073642" },
+    "solLight":       { "name": "Solarized Light", "bg": "#FDF6E3", "fg": "#586E75", "dim": "#839496", "green": "#859900", "blue": "#268BD2", "yellow": "#B58900", "red": "#DC322F", "cursor": "#2AA198", "bd": "#EEE8D5" },
+    "contrast":       { "name": "Hoher Kontrast",  "bg": "#000000", "fg": "#FFFFFF", "dim": "#B0B0B0", "green": "#00FF87", "blue": "#6CB8FF", "yellow": "#FFD75F", "red": "#FF6B6B", "cursor": "#FFFFFF", "bd": "#333333" }
+  }
+}

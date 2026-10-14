@@ -1,0 +1,234 @@
+.headIcon {
+  display: grid;
+  flex: 0 0 44px;
+  place-items: center;
+  height: 44px;
+  border-radius: 12px;
+  background: var(--raised);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.profileIcon {
+  color: var(--amber);
+}
+
+/* Cancels the dialog body padding: vertical tabs touch the dialog edges. */
+.body {
+  display: flex;
+  flex-direction: column;
+  min-height: 520px;
+  margin: -22px;
+}
+
+.layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.tabs {
+  flex: 0 0 190px;
+  padding: 14px 10px;
+  border-right: 1px solid var(--bd);
+  background: var(--s1b);
+}
+
+.panel {
+  flex: 1;
+  min-width: 0;
+  padding: 22px 26px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 16px;
+}
+
+.wide {
+  grid-column: 1 / -1;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+
+.banner {
+  padding: 10px 12px;
+  border: 1px solid var(--accent-bd);
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--text2);
+  font-size: 13px;
+}
+
+.info {
+  color: var(--text3);
+  font-size: 13px;
+}
+
+.fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.legend {
+  padding: 0;
+  color: var(--text3);
+  font-size: 12px;
+}
+
+.inline {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+}
+
+.inline > button {
+  margin-top: 24px;
+}
+
+.summary {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--bd);
+  border-radius: 10px;
+  background: var(--s1);
+  font-size: 13px;
+}
+
+.summary dt {
+  color: var(--muted);
+}
+
+.summary dd {
+  margin: 0;
+}
+
+.swatches {
+  display: flex;
+  gap: 10px;
+}
+
+.swatch {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--dlg);
+  cursor: pointer;
+}
+
+.swatchChecked {
+  border-color: var(--text);
+}
+
+.sectionLabel {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.hintText {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.errorText {
+  color: var(--red);
+  font-size: 12px;
+}
+
+.forwardList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.forwardRow {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr) auto auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.addButton {
+  height: 40px;
+  border: 1px dashed var(--bd-dash);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.addButton:hover {
+  border-color: var(--bd-hover);
+  color: var(--text);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.invalidHint {
+  align-self: center;
+  color: var(--red);
+  font-size: 12px;
+}
+
+.status {
+  align-self: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.statusOk {
+  color: var(--green);
+}
+
+.statusFailed {
+  color: var(--red);
+}
+
+.test {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 26px;
+  border-top: 1px solid var(--bd);
+}
+
+.hostKey {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}

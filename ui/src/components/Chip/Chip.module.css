@@ -1,0 +1,46 @@
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.accent {
+  background: var(--accent-soft);
+  border-color: var(--accent-bd);
+  color: var(--accent);
+}
+
+.amber {
+  background: var(--amber-soft);
+  border-color: var(--amber-bd);
+  color: var(--amber);
+}
+
+.red {
+  background: var(--red-soft);
+  border-color: var(--red-bd);
+  color: var(--red);
+}
+
+.green {
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+  border-color: color-mix(in srgb, var(--green) 35%, transparent);
+  color: var(--green);
+}
+
+.neutral {
+  background: var(--raised);
+  color: var(--text3);
+}

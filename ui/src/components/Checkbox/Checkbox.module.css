@@ -1,0 +1,38 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  color: var(--text2);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.row:has(.box:disabled) {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.box {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: inherit;
+}
+
+.label {
+  min-width: 0;
+}
+
+.hint {
+  margin-left: 26px;
+  font-size: 12px;
+  color: var(--muted);
+}

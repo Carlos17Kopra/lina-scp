@@ -1,0 +1,78 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  display: grid;
+  grid-template-columns: 24px 1fr auto;
+  align-items: center;
+  column-gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+
+.icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+}
+
+.label {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.meta {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.detail {
+  grid-column: 2 / -1;
+  margin-top: 10px;
+}
+
+.done .icon {
+  color: var(--green);
+}
+
+.active {
+  background: var(--accent-soft);
+}
+
+.active .icon {
+  color: var(--accent);
+}
+
+.failed .icon,
+.failed .label {
+  color: var(--red);
+}
+
+.pending .label {
+  color: var(--muted2);
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dim);
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

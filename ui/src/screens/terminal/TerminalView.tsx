@@ -1,0 +1,180 @@
+import "@xterm/xterm/css/xterm.css";
+import { FitAddon } from "@xterm/addon-fit";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebglAddon } from "@xterm/addon-webgl";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import { Terminal } from "@xterm/xterm";
+import { useEffect, useRef, useState } from "react";
+import { t } from "../../i18n/de";
+import { sessionResize, sessionWrite } from "../../ipc/api";
+import { fireAndForget } from "../../stores/connectProgress";
+import type { Tab } from "../../stores/sessions";
+import { useSettingsStore } from "../../stores/settings";
+import { getStream } from "../../stores/streams";
+import { useUiStore } from "../../stores/ui";
+import { copyText, readText } from "./clipboard";
+import { clipboardShortcut, shouldUseWebgl } from "./terminalConfig";
+import styles from "./TerminalView.module.css";
+import { TERMINAL_FONT_FAMILY, terminalTheme } from "./theme";
+
+/**
+ * One xterm.js terminal bound to a session. Output comes from the tab's `OutputStream` (acked after
+ * xterm consumed it), input/resizes go to the session. WebGL is attached only while `visible`.
+ */
+export function TerminalView({ tab, visible }: { tab: Tab; visible: boolean }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  const webglRef = useRef<WebglAddon | null>(null);
+  const [webglFailed, setWebglFailed] = useState(false);
+  const theme = useUiStore((state) => state.theme);
+  const fontSize = useSettingsStore((state) => state.settings.terminalFontSize);
+  const renderer = useSettingsStore((state) => state.settings.terminalRenderer);
+  const initial = useRef({ theme, fontSize });
+  initial.current = { theme, fontSize };
+  const sessionId = tab.sessionId;
+
+  // Terminal lifetime = session lifetime.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !sessionId) return undefined;
+    const term = new Terminal({
+      allowProposedApi: true,
+      allowTransparency: false,
+      cursorBlink: true,
+      fontFamily: TERMINAL_FONT_FAMILY,
+      fontSize: initial.current.fontSize,
+      scrollback: 10_000,
+      theme: terminalTheme(initial.current.theme),
+    });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.loadAddon(new Unicode11Addon());
+    term.unicode.activeVersion = "11";
+    term.loadAddon(new WebLinksAddon());
+    term.open(container);
+    termRef.current = term;
+    fitRef.current = fit;
+
+    const subscriptions = [
+      term.onData((data) => fireAndForget(() => sessionWrite(sessionId, data))),
+      term.onBinary((data) =>
+        fireAndForget(() => sessionWrite(sessionId, Uint8Array.from(data, (char) => char.charCodeAt(0) & 0xff))),
+      ),
+      term.onResize(({ cols, rows }) => fireAndForget(() => sessionResize(sessionId, cols, rows))),
+      term.onSelectionChange(() => {
+        if (term.hasSelection()) void copyText(term.getSelection());
+      }),
+    ];
+
+    const paste = () => {
+      void readText().then((text) => {
+        if (text) term.paste(text);
+      });
+    };
+    term.attachCustomKeyEventHandler((event) => {
+      const action = clipboardShortcut(event);
+      if (!action) return true;
+      if (event.type === "keydown") {
+        event.preventDefault();
+        if (action === "copy") {
+          if (term.hasSelection()) void copyText(term.getSelection());
+        } else {
+          paste();
+        }
+      }
+      return false;
+    });
+    // Middle click pastes the clipboard; cancelling mouseup stops WebKit's own (PRIMARY) paste.
+    const onMouseUp = (event: MouseEvent) => {
+      if (event.button !== 1) return;
+      event.preventDefault();
+      paste();
+    };
+    container.addEventListener("mouseup", onMouseUp, true);
+
+    const stream = getStream(tab.id);
+    const detach = stream?.attach((bytes) => term.write(bytes, () => stream.ack(bytes.length)));
+
+    return () => {
+      detach?.();
+      container.removeEventListener("mouseup", onMouseUp, true);
+      for (const subscription of subscriptions) subscription.dispose();
+      webglRef.current?.dispose();
+      webglRef.current = null;
+      term.dispose();
+      termRef.current = null;
+      fitRef.current = null;
+    };
+  }, [tab.id, sessionId]);
+
+  // WebGL renderer only while visible; DOM fallback after a failure or with the "dom" setting.
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    if (!shouldUseWebgl(renderer, visible, webglFailed)) {
+      webglRef.current?.dispose();
+      webglRef.current = null;
+      return;
+    }
+    if (webglRef.current) return;
+    try {
+      const addon = new WebglAddon();
+      addon.onContextLoss(() => {
+        addon.dispose();
+        if (webglRef.current === addon) webglRef.current = null;
+        setWebglFailed(true);
+      });
+      term.loadAddon(addon);
+      webglRef.current = addon;
+    } catch {
+      setWebglFailed(true);
+    }
+  }, [renderer, visible, webglFailed, sessionId]);
+
+  // Fit to the container while visible (hidden terminals have no size).
+  useEffect(() => {
+    const container = containerRef.current;
+    const fit = fitRef.current;
+    const term = termRef.current;
+    if (!container || !fit || !term || !sessionId || !visible) return undefined;
+    const refit = () => {
+      try {
+        fit.fit();
+      } catch {
+        // not measurable yet
+      }
+    };
+    refit();
+    // The PTY was opened with an estimated size; `onResize` only fires when xterm's size changes.
+    fireAndForget(() => sessionResize(sessionId, term.cols, term.rows));
+    term.focus();
+    const observer = new ResizeObserver(refit);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [visible, sessionId]);
+
+  useEffect(() => {
+    const term = termRef.current;
+    if (term) term.options.theme = terminalTheme(theme);
+  }, [theme, sessionId]);
+
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.fontSize = fontSize;
+    if (visible) {
+      try {
+        fitRef.current?.fit();
+      } catch {
+        // not measurable yet
+      }
+    }
+  }, [fontSize, sessionId, visible]);
+
+  return (
+    <div className={styles.frame} style={{ background: terminalTheme(theme).background }} data-terminal="">
+      <div ref={containerRef} className={styles.host} aria-label={t.terminal.label(tab.title)} />
+    </div>
+  );
+}

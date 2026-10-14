@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name={{name}}
+{{#if comment}}
+Comment={{comment}}
+{{/if}}
+Exec={{exec}}
+Icon={{icon}}
+Terminal=false
+Categories=Network;RemoteAccess;
+Keywords=SSH;SFTP;Terminal;Remote;
+StartupWMClass={{exec}}

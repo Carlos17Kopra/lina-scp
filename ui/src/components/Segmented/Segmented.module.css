@@ -1,0 +1,47 @@
+.group {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--bd-strong);
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.option {
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text3);
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.md .option {
+  height: 32px;
+  font-size: 13px;
+}
+
+.sm .option {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.option:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.option:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.checked,
+.checked:hover:not(:disabled) {
+  background: var(--bd-strong);
+  color: var(--text);
+}

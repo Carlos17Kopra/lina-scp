@@ -1,0 +1,45 @@
+.screen {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.panels {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.panel {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.panel[hidden] {
+  display: none;
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 420px;
+  margin: auto;
+  padding: 40px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.emptyTitle {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 600;
+}

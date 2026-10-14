@@ -1,0 +1,14 @@
+.card {
+  border: 1px solid var(--bd-card);
+  border-radius: 12px;
+  background: var(--card);
+  transition: border-color 0.15s;
+}
+
+.selected {
+  border-color: var(--accent);
+}
+
+.padded {
+  padding: 16px;
+}

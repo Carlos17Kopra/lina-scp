@@ -1,0 +1,8 @@
+[workspace]
+resolver = "3"
+members = ["crates/core", "src-tauri"]
+
+# Dependencies are optimized even in dev builds: age/scrypt and russh crypto are
+# unbearably slow at opt-level 0 (export tests would take minutes).
+[profile.dev.package."*"]
+opt-level = 2

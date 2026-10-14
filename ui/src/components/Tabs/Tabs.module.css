@@ -1,0 +1,58 @@
+.list {
+  display: flex;
+}
+
+.horizontal {
+  gap: 4px;
+  border-bottom: 1px solid var(--bd);
+}
+
+.vertical {
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tab {
+  border: 0;
+  background: transparent;
+  color: var(--text3);
+  font-weight: 500;
+  font-size: 14px;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.horizontal .tab {
+  height: 40px;
+  padding: 0 14px;
+  box-shadow: inset 0 -2px 0 transparent;
+}
+
+.vertical .tab {
+  height: 38px;
+  padding: 0 14px;
+  border-radius: 8px;
+  text-align: left;
+}
+
+.tab:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.tab:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.horizontal .selected {
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.vertical .selected {
+  background: var(--raised);
+  color: var(--text);
+  box-shadow: inset 2px 0 0 var(--accent);
+}

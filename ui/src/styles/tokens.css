@@ -1,0 +1,130 @@
+/* LinaSCP design tokens (from the design package)
+   Dark is the default. Light is enabled via the .light class on the app root. */
+
+.app {
+  color-scheme: dark;
+
+  /* Flächen */
+  --bg: #0B0E13;          /* App-Hintergrund, Terminal-/Listenflächen */
+  --bg-deep: #06080B;     /* Hintergrund hinter Modals */
+  --s1: #0E1217;          /* Rail, Sidebars, Kopf-/Fußleisten, Inputs */
+  --s1b: #0F1318;         /* Dialog-Footer */
+  --dlg: #12161C;         /* Dialoge */
+  --card: #151A21;        /* Karten, Suchfelder */
+  --raised: #1B2129;      /* aktive Nav-Items, Chips, Hover */
+  --hover: #222A34;
+
+  /* Linien */
+  --bd: #1F262F;
+  --bd-sub: #1A2028;
+  --bd-card: #232A33;
+  --bd-strong: #262E38;
+  --bd-input: #2A323D;
+  --bd-dash: #333C48;
+  --bd-hover: #3A4553;
+
+  /* Text */
+  --text: #E6EAF0;
+  --text2: #C3CAD4;
+  --text3: #A6B0BD;
+  --muted: #8B95A3;
+  --muted2: #6B7684;      /* Platzhalter, inaktive Schritte */
+  --dim: #4B5563;         /* Offline-Punkt, Trenner */
+
+  /* Akzent = SSH / primäre Aktion */
+  --accent: #4FD1C5;
+  --on-accent: #062521;
+  --accent-soft: #12302D;
+  --accent-bd: #1F5550;
+  --accent-ring: #2C6E68;
+  --link-hover: #7FE3D9;
+
+  /* Amber = SFTP / Warnung */
+  --amber: #F2A65A;
+  --amber-soft: #33261A;
+  --amber-bd: #4A3622;
+  --on-amber: #2A1A08;
+  --amber-row: #2A2016;
+
+  /* Status */
+  --green: #3DDC97;       /* verbunden, fertig */
+  --red: #F28B82;         /* Fehler, destruktiv */
+  --red-soft: #3A1A1A;
+  --red-bd: #5A2A28;
+  --red-bg2: #1E1214;
+  --red-bd2: #8A3A36;
+  --red-text: #F7B4AE;
+
+  /* Broadcast-Toggle (aktiv) */
+  --bc-bg: #4A2A12;
+  --bc-bd: #8A5320;
+
+  /* Host-Farben (frei wählbar je Host) */
+  --blue: #7AA2F7;
+  --violet: #B48EF7;
+  --pink: #E67E9A;
+}
+
+.app.light {
+  color-scheme: light;
+
+  --bg: #F6F7F9;
+  --bg-deep: #E4E8ED;
+  --s1: #FFFFFF;
+  --s1b: #F3F5F8;
+  --dlg: #FFFFFF;
+  --card: #FFFFFF;
+  --raised: #EEF1F5;
+  --hover: #E6EAF0;
+
+  --bd: #E1E5EB;
+  --bd-sub: #E8EBF0;
+  --bd-card: #DDE2E8;
+  --bd-strong: #D3D9E1;
+  --bd-input: #C9D0D9;
+  --bd-dash: #BCC4CF;
+  --bd-hover: #A9B3C0;
+
+  --text: #151A21;
+  --text2: #3A4250;
+  --text3: #4D5664;
+  --muted: #5B6574;
+  --muted2: #7D8796;
+  --dim: #A0A9B6;
+
+  --accent: #0E7C72;
+  --on-accent: #FFFFFF;
+  --accent-soft: #DDF3F0;
+  --accent-bd: #9ED8D1;
+  --accent-ring: #7CC7BE;
+  --link-hover: #0A5F57;
+
+  --amber: #A85A0C;
+  --amber-soft: #FCEBD8;
+  --amber-bd: #F0C899;
+  --on-amber: #FFFFFF;
+  --amber-row: #FDF1E3;
+
+  --green: #12804F;
+  --red: #B8322A;
+  --red-soft: #FBE3E1;
+  --red-bd: #EDB3AE;
+  --red-bg2: #FDF0EF;
+  --red-bd2: #D98C85;
+  --red-text: #8F2620;
+
+  --bc-bg: #FCE6CF;
+  --bc-bd: #E2A464;
+
+  --blue: #3A64C8;
+  --violet: #7A4CC8;
+  --pink: #B83D63;
+}
+
+/* Typografie */
+.app {
+  --font-ui: 'IBM Plex Sans', system-ui, sans-serif;   /* 400/500/600 */
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace; /* 400/500 */
+  font-family: var(--font-ui);
+  font-size: 14px;
+}
