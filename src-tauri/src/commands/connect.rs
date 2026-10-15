@@ -92,18 +92,38 @@ impl Drop for ConnectGuard<'_> {
 }
 
 /// Registers a cancellable connection attempt under the UI-generated `connect_id`. The
-/// returned guard un-registers it again when dropped (success, error, or panic).
+/// returned guard un-registers it again when dropped (success, error, or panic). If a cancel
+/// for this id arrived first (see `cancel_connect`), the attempt starts out cancelled.
 pub(crate) fn register_connect(state: &AppState, connect_id: Uuid) -> ConnectGuard<'_> {
-    let token = CancellationToken::new();
-    lock(&state.connects).insert(connect_id, token.clone());
+    let mut connects = lock(&state.connects);
+    let token = match connects.get(&connect_id) {
+        Some(early) if early.is_cancelled() => early.clone(),
+        _ => {
+            let token = CancellationToken::new();
+            connects.insert(connect_id, token.clone());
+            token
+        }
+    };
+    drop(connects);
     ConnectGuard { state, connect_id, token }
 }
 
-/// Unknown ids are ignored (the attempt may just have finished).
+/// Cancels the attempt. Tauri runs invokes concurrently, so the cancel can arrive before the
+/// connect invoke registered its id: then a cancelled token is left for `register_connect`.
+/// Every attempt has a fresh id, so such a token never hits a later attempt.
 pub(crate) fn cancel_connect(state: &AppState, connect_id: Uuid) {
-    if let Some(token) = lock(&state.connects).get(&connect_id) {
+    let mut connects = lock(&state.connects);
+    if let Some(token) = connects.get(&connect_id) {
         token.cancel();
+        return;
     }
+    // ponytail: cancels that came after their attempt ended stay as tombstones; prune them in bulk.
+    if connects.len() >= 64 {
+        connects.retain(|_, token| !token.is_cancelled());
+    }
+    let token = CancellationToken::new();
+    token.cancel();
+    connects.insert(connect_id, token);
 }
 
 fn connect_deps(state: &AppState) -> ConnectDeps {
@@ -325,7 +345,19 @@ mod tests {
         assert!(guard.is_cancelled());
 
         drop(guard);
-        assert!(state.connects.lock().unwrap().is_empty());
+        assert!(!state.connects.lock().unwrap().contains_key(&connect_id));
+    }
+
+    #[test]
+    fn cancel_that_arrives_before_the_registration_is_kept() {
+        let (_dir, state) = setup();
+        let connect_id = Uuid::new_v4();
+        cancel_connect(&state, connect_id);
+
+        let guard = register_connect(&state, connect_id);
+        assert!(guard.is_cancelled());
+        drop(guard);
+        assert!(!register_connect(&state, Uuid::new_v4()).is_cancelled(), "other ids stay unaffected");
     }
 
     /// M2: dropping a superseded guard (its `connect_id` was reused by a later registration)

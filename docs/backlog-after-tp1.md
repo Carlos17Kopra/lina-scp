@@ -7,9 +7,6 @@ fixed before the merge are not listed.
 ## Security / robustness (prioritise in TP2)
 
 - **Secrets hygiene:** keyboard-interactive responses are not zeroized: russh takes the `Vec<String>` by value, and the answer has already passed through IPC/serde copies. Needs an upstream API taking secret buffers.
-- **Connect:**
-  - A cancel invoke processed before `connect_ssh` registers its token is still lost; the window is tiny now.
-  - Terminal input order across separate `session_write` invokes is not guaranteed.
 
 ## Behaviour / UX
 
