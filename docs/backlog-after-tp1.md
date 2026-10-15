@@ -48,6 +48,13 @@ fixed before the merge are not listed.
   - `aria-describedby` overwrites the value passed in by the consumer.
 - `sync_mirror` and `settings_set` do a small amount of blocking I/O on the async runtime. Wrap them in `spawn_blocking`.
 
+- TP2a terminal sidebar (from the branch review):
+  - Fast A+/A− or scheme clicks: optimistic settings saves can finish out of order or revert to a stale value;
+    in host scope a quick double click loses a step until `hostSave` + reload resolve. Serialize saves.
+  - The "Tunnel folgen …" hint shows below every sidebar panel instead of on the disabled Tunnel tab.
+  - The scheme radiogroup has no roving tabindex / arrow keys (10 tab stops).
+  - Every xterm resize calls `updateTab`, re-rendering all terminal tabs while the window is dragged.
+
 ## Packaging / CI
 
 - deb `Depends` lists `libwebkit2gtk-4.1-0`/`libgtk-3-0` twice, because the bundler appends its own; the package name is `lina-scp`.
