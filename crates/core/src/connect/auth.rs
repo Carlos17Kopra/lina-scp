@@ -201,8 +201,9 @@ async fn run_method(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>, method:
 
 /// Run the configured method (with retries where applicable). On partial success (e.g.
 /// `AuthenticationMethods publickey,keyboard-interactive`) continue with the next method the
-/// server still accepts, see [`next_method`]; all of it stays within the Auth step.
-pub async fn authenticate(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -> Result<()> {
+/// server still accepts, see [`next_method`]; all of it stays within the Auth step. Returns the
+/// methods of the successful login in order.
+pub async fn authenticate(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -> Result<Vec<AuthMethod>> {
     ctx.log(format!("debug1: Authenticating as '{}' using {:?}", ctx.user, ctx.auth.method));
     let mut method = ctx.auth.method;
     let mut used = Vec::new();
@@ -211,7 +212,7 @@ pub async fn authenticate(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -
         match run_method(auth, ctx, method).await? {
             MethodOutcome::Done => {
                 ctx.log(format!("debug1: Authenticated as '{}'", ctx.user));
-                return Ok(());
+                return Ok(used);
             }
             MethodOutcome::Partial(remaining) => {
                 ctx.log(format!(
@@ -653,7 +654,8 @@ NKGOvMLy4gKjk9jA==
         let h = Harness::new(vec![]);
         h.secrets.set(h.owner, SecretKind::Password, &SecretString::from("stored".to_string())).unwrap();
         let mut fake = FakeAuth { password_results: VecDeque::from([AuthOutcome::Success]), ..Default::default() };
-        authenticate(&mut fake, &h.ctx(AuthMethod::Password, None)).await.unwrap();
+        let used = authenticate(&mut fake, &h.ctx(AuthMethod::Password, None)).await.unwrap();
+        assert_eq!(used, vec![AuthMethod::Password]);
         assert_eq!(fake.passwords_seen, vec!["stored"]);
         assert!(h.prompts().is_empty());
     }
@@ -825,7 +827,8 @@ NKGOvMLy4gKjk9jA==
             kbd_steps: VecDeque::from([code_prompt(), KbdStep::Success]),
             ..Default::default()
         };
-        authenticate(&mut fake, &h.ctx(AuthMethod::Key, Some(key))).await.unwrap();
+        let used = authenticate(&mut fake, &h.ctx(AuthMethod::Key, Some(key))).await.unwrap();
+        assert_eq!(used, vec![AuthMethod::Key, AuthMethod::KeyboardInteractive]);
         // keyboard-interactive is preferred over password when both remain.
         assert_eq!(fake.calls, vec!["publickey", "keyboard-interactive"]);
         assert_eq!(fake.kbd_responses, vec![vec!["123456".to_string()]]);

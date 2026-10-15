@@ -177,7 +177,9 @@ async fn key_then_keyboard_interactive_two_factor() {
         other => trust_all(other),
     });
     let (session, output) = connect(&env, request(h, None), None, &p).await;
-    assert_shell(session.expect("connected with key + keyboard-interactive"), &output).await;
+    let session = session.expect("connected with key + keyboard-interactive");
+    assert_eq!(session.info().auth_methods, vec![AuthMethod::Key, AuthMethod::KeyboardInteractive]);
+    assert_shell(session, &output).await;
     assert!(p.prompts().iter().any(|pr| matches!(pr, Prompt::KeyboardInteractive { .. })));
     let events = p.events.lock().unwrap().clone();
     assert!(events.iter().any(|e| matches!(e, ConnectEvent::StepDone { step: Step::Auth })));
@@ -229,8 +231,14 @@ async fn unknown_host_key_trust_writes_known_hosts() {
 
     let p = prompter(trust_all);
     let (session, output) = connect(&env, request(h.clone(), None), None, &p).await;
-    assert_shell(session.expect("connected"), &output).await;
-    assert!(matches!(p.prompts()[0], Prompt::HostKeyUnknown { .. }));
+    let session = session.expect("connected");
+    let info = session.info().clone();
+    let Prompt::HostKeyUnknown { info: shown, .. } = &p.prompts()[0] else { panic!("expected host key prompt") };
+    assert_eq!(info.host_key_sha256, shown.sha256);
+    assert_eq!(info.host_key_algorithm, shown.algorithm);
+    assert!(!info.kex.is_empty() && !info.cipher.is_empty() && !info.mac.is_empty(), "{info:?}");
+    assert_eq!(info.auth_methods, vec![AuthMethod::Password]);
+    assert_shell(session, &output).await;
     assert!(env.known_hosts_path().exists());
 
     // Second connect: key is known, no host key prompt allowed.
