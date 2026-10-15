@@ -26,6 +26,19 @@ export const commands = {
 	connectCancel: (connectId: string) => typedError<null, CoreError>(__TAURI_INVOKE("connect_cancel", { connectId })),
 	/**  "Verbindung testen": pipeline for an (unsaved) host up to Auth, then disconnect (core `test_connection`). */
 	connectTest: (connectId: string, host: Host, events: Channel<ConnectEvent>) => typedError<null, CoreError>(__TAURI_INVOKE("connect_test", { connectId, host, events })),
+	connectSftp: (connectId: string, hostId: string, events: Channel<ConnectEvent>, sftpEvents: Channel<SftpEvent>) => typedError<SftpConnected, CoreError>(__TAURI_INVOKE("connect_sftp", { connectId, hostId, events, sftpEvents })),
+	sftpList: (sessionId: string, path: string) => typedError<Listing, CoreError>(__TAURI_INVOKE("sftp_list", { sessionId, path })),
+	sftpMkdir: (sessionId: string, dir: string, name: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_mkdir", { sessionId, dir, name })),
+	sftpRename: (sessionId: string, dir: string, from: string, to: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_rename", { sessionId, dir, from, to })),
+	sftpDelete: (sessionId: string, dir: string, names: string[]) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_delete", { sessionId, dir, names })),
+	/**  Disconnects and forgets the session; unknown ids are fine (already closed). */
+	sftpClose: (sessionId: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_close", { sessionId })),
+	localList: (path: string) => typedError<Listing, CoreError>(__TAURI_INVOKE("local_list", { path })),
+	localHome: (hostId: string | null) => typedError<string, CoreError>(__TAURI_INVOKE("local_home", { hostId })),
+	localMkdir: (dir: string, name: string) => typedError<null, CoreError>(__TAURI_INVOKE("local_mkdir", { dir, name })),
+	localRename: (dir: string, from: string, to: string) => typedError<null, CoreError>(__TAURI_INVOKE("local_rename", { dir, from, to })),
+	localDelete: (dir: string, names: string[]) => typedError<null, CoreError>(__TAURI_INVOKE("local_delete", { dir, names })),
+	localTrash: (dir: string, names: string[]) => typedError<null, CoreError>(__TAURI_INVOKE("local_trash", { dir, names })),
 	sessionOpenLocal: (cols: number, rows: number, output: Channel<ArrayBuffer>, sessionEvents: Channel<SessionEventDto>) => typedError<string, CoreError>(__TAURI_INVOKE("session_open_local", { cols, rows, output, sessionEvents })),
 	sessionWrite: (sessionId: string, data: number[]) => typedError<null, CoreError>(__TAURI_INVOKE("session_write", { sessionId, data })),
 	sessionResize: (sessionId: string, cols: number, rows: number) => typedError<null, CoreError>(__TAURI_INVOKE("session_resize", { sessionId, cols, rows })),
@@ -68,9 +81,25 @@ export type ConnectedSession = {
  *  (not `kind`, because the `Network` variant already has a field named `kind`):
  *  `{"type":"network","kind":"timeout","message":"..."}`.
  */
-export type CoreError = { type: "network"; kind: NetworkKind; message: string } | { type: "hostKeyRejected"; message: string } | { type: "auth"; rejectedMethods: string[]; message: string } | { type: "keyring"; message: string } | { type: "store"; message: string } | { type: "config"; message: string } | { type: "io"; message: string } | { type: "cancelled" } | 
+export type CoreError = { type: "network"; kind: NetworkKind; message: string } | { type: "hostKeyRejected"; message: string } | { type: "auth"; rejectedMethods: string[]; message: string } | { type: "keyring"; message: string } | { type: "store"; message: string } | { type: "config"; message: string } | { type: "io"; message: string } | { type: "fs"; kind: FsKind; path: string; message: string } | { type: "cancelled" } | 
 /**  A reconnect attempt would have needed user input (password, passphrase, 2FA, host key). */
 { type: "inputRequired" } | { type: "internal"; message: string };
+
+export type Entry = {
+	name: string,
+	kind: EntryKind,
+	size: number,
+	/**  Unix seconds. */
+	mtime: number | null,
+	/**  `st_mode` as reported (type and permission bits). */
+	mode: number | null,
+	/**  User name, else the numeric uid. */
+	owner: string | null,
+	/**  Local only: the real name is not valid UTF-8; `name` is a lossy rendering and must not be used for operations. */
+	nameLossy: boolean,
+};
+
+export type EntryKind = { type: "file" } | { type: "dir" } | { type: "symlink"; target: LinkTarget | null } | { type: "other" };
 
 export type EnvVar = {
 	key: string,
@@ -84,6 +113,9 @@ export type ExportReport = {
 };
 
 export type ForwardKind = "local" | "remote" | "dynamic";
+
+/**  Classification of file-system failures (local or SFTP), used for UI texts. */
+export type FsKind = "permissionDenied" | "notFound" | "alreadyExists" | "notEmpty" | "other";
 
 export type Group = {
 	id: string,
@@ -165,6 +197,15 @@ export type KbdPrompt = {
 	echo: boolean,
 };
 
+/**  What a symlink points to; `None` in `EntryKind::Symlink` = dangling or unreadable. */
+export type LinkTarget = "file" | "dir" | "other";
+
+/**  One directory: canonical absolute `path` and its entries without `.` and `..`. */
+export type Listing = {
+	path: string,
+	entries: Entry[],
+};
+
 export type LoginProfile = {
 	id: string,
 	name: string,
@@ -244,6 +285,15 @@ export type Settings = {
 	compatRendering: boolean,
 };
 
+export type SftpConnected = {
+	sessionId: string,
+	info: SessionInfo,
+	version: number,
+	listing: Listing,
+};
+
+export type SftpEvent = { kind: "lost"; error: CoreError };
+
 export type SftpSettings = {
 	remoteStart: string | null,
 	localStart: string | null,
@@ -266,7 +316,7 @@ export type Snippet = {
 
 export type SshMode = "integrate" | "mirror";
 
-export type Step = "jumpHost" | "tcp" | "hostKey" | "auth" | "channel" | "shell";
+export type Step = "jumpHost" | "tcp" | "hostKey" | "auth" | "channel" | "shell" | "subsystem" | "directory";
 
 export type TerminalRenderer = "auto" | "webgl" | "dom";
 

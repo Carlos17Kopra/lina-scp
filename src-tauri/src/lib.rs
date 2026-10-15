@@ -5,7 +5,7 @@ pub mod startup;
 pub mod state;
 mod util;
 
-use commands::{connect, hosts, profiles, secrets, sessions, settings, snippets, transfer};
+use commands::{connect, hosts, profiles, secrets, sessions, settings, sftp, snippets, transfer};
 
 /// Where the generated TypeScript bindings live (committed to git).
 pub const BINDINGS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../ui/src/ipc/bindings.ts");
@@ -34,6 +34,18 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             connect::connect_answer,
             connect::connect_cancel,
             connect::connect_test,
+            sftp::connect_sftp,
+            sftp::sftp_list,
+            sftp::sftp_mkdir,
+            sftp::sftp_rename,
+            sftp::sftp_delete,
+            sftp::sftp_close,
+            sftp::local_list,
+            sftp::local_home,
+            sftp::local_mkdir,
+            sftp::local_rename,
+            sftp::local_delete,
+            sftp::local_trash,
             sessions::session_open_local,
             sessions::session_write,
             sessions::session_resize,

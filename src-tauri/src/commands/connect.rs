@@ -133,7 +133,7 @@ pub(crate) fn cancel_connect(state: &AppState, connect_id: Uuid) {
     early.insert(connect_id, Instant::now());
 }
 
-fn connect_deps(state: &AppState) -> ConnectDeps {
+pub(crate) fn connect_deps(state: &AppState) -> ConnectDeps {
     connect_deps_in(&state.connect_env())
 }
 
@@ -167,7 +167,7 @@ fn reconnect_connector(env: ConnectEnv, host_id: Id) -> Connector {
     })
 }
 
-fn channel_emit(channel: Channel<ConnectEvent>) -> EmitFn {
+pub(crate) fn channel_emit(channel: Channel<ConnectEvent>) -> EmitFn {
     Arc::new(move |event: ConnectEvent| {
         if let Err(error) = channel.send(event) {
             tracing::debug!(%error, "connect event dropped: channel closed");
@@ -179,7 +179,7 @@ fn channel_emit(channel: Channel<ConnectEvent>) -> EmitFn {
 /// (host lookup, profile/jump-host resolution) — without this, the UI's connect screen would
 /// hang forever waiting for a terminal event that never comes, since the command just rejects
 /// its promise and `events` stays silent.
-fn fail<T>(emit: &EmitFn, error: CoreError) -> Result<T> {
+pub(crate) fn fail<T>(emit: &EmitFn, error: CoreError) -> Result<T> {
     emit(ConnectEvent::Failed { error: error.clone() });
     Err(error)
 }
