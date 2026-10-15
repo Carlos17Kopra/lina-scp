@@ -78,9 +78,3 @@
   padding-top: 10px;
   border-top: 1px solid var(--bd);
 }
-
-.later,
-.later:hover {
-  opacity: 0.45;
-  cursor: not-allowed;
-}

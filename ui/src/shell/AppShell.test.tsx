@@ -54,8 +54,7 @@ describe("AppShell", () => {
     expect(screen.queryByRole("heading", { name: "Server-Übersicht" })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Server-Übersicht", hidden: true })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "SFTP" }));
-    expect(screen.getByRole("heading", { name: "SFTP" })).toBeInTheDocument();
-    expect(screen.getByText("Der SFTP-Dateimanager folgt in einer späteren Version.")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Host für SFTP wählen" })).toBeVisible();
   });
 
   it("applies the persisted theme", async () => {

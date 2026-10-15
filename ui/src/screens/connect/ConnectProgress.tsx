@@ -48,7 +48,7 @@ export function ConnectProgress({ flow, host }: { flow: ConnectFlow; host: Host 
           <p className={styles.subtitle}>{jump ? t.connect.via(endpoint, jump.name) : endpoint}</p>
         </div>
       </div>
-      <ProgressBar value={progressRatio(flow)} label={t.connect.progress} />
+      <ProgressBar value={progressRatio(flow)} tone={flow.protocol === "sftp" ? "amber" : "accent"} label={t.connect.progress} />
       <StepList steps={stepItems(flow, { jumpName: jump?.name, meta, detail })} />
       {detail && !flow.current ? detail : null}
       <div>

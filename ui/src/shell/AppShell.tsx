@@ -3,7 +3,7 @@ import { useToast } from "../components";
 import { t } from "../i18n/de";
 import { errorDetails } from "../ipc/errors";
 import { HostsScreen } from "../screens/hosts/HostsScreen";
-import { SftpPlaceholder } from "../screens/sftp/SftpPlaceholder";
+import { SftpScreen } from "../screens/sftp/SftpScreen";
 import { SnippetsScreen } from "../screens/snippets/SnippetsScreen";
 import { TerminalScreen } from "../screens/terminal/TerminalScreen";
 import { useHostsStore } from "../stores/hosts";
@@ -62,7 +62,7 @@ export function AppShell() {
           <TerminalScreen />
         </section>
         <section className={styles.view} hidden={view !== "sftp"}>
-          <SftpPlaceholder />
+          <SftpScreen />
         </section>
         <section className={styles.view} hidden={view !== "snippets"}>
           <SnippetsScreen />

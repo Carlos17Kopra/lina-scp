@@ -4,6 +4,7 @@ pub mod profiles;
 pub mod secrets;
 pub mod sessions;
 pub mod settings;
+pub mod sftp;
 pub mod snippets;
 pub mod transfer;
 

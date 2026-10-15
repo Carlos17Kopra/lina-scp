@@ -33,6 +33,11 @@ impl AppPaths {
         Self { data_dir: root.join("data"), state_dir: root.join("state"), ssh_dir: home.join(".ssh"), home }
     }
 
+    /// freedesktop.org home trash (`$XDG_DATA_HOME/Trash`), the parent of `data_dir`.
+    pub fn trash_dir(&self) -> PathBuf {
+        self.data_dir.parent().unwrap_or(&self.data_dir).join("Trash")
+    }
+
     pub fn db_path(&self) -> PathBuf {
         self.data_dir.join("linascp.db")
     }
@@ -90,6 +95,12 @@ mod tests {
         assert_eq!(expand_tilde("~", home), PathBuf::from("/home/u"));
         assert_eq!(expand_tilde("/etc/key", home), PathBuf::from("/etc/key"));
         assert_eq!(expand_tilde("~other/key", home), PathBuf::from("~other/key"));
+    }
+
+    #[test]
+    fn trash_dir_is_next_to_the_data_dir() {
+        let paths = AppPaths::for_root(std::path::Path::new("/r"));
+        assert_eq!(paths.trash_dir(), std::path::PathBuf::from("/r/Trash"));
     }
 
     #[test]

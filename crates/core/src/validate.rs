@@ -22,6 +22,17 @@ pub fn is_safe_value(value: &str) -> bool {
     is_safe_text(value) && !value.contains(['\'', '\\']) && !value.trim_start().starts_with('#')
 }
 
+/// A single path component typed by the user (new folder, rename) or sent back from a listing.
+/// U+FFFD marks a name that was lossily decoded from a non-UTF-8 local name: it is rejected so a
+/// lossy name never addresses a (different) real file.
+// ponytail: also rejects real names containing U+FFFD; add raw-byte names if that ever matters.
+pub fn validate_file_name(name: &str) -> Result<()> {
+    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\0', '\u{FFFD}']) {
+        return Err(CoreError::config(format!("ungültiger Dateiname: {name:?}")));
+    }
+    Ok(())
+}
+
 fn check_value(field: &str, value: &str) -> Result<()> {
     check_text(field, value)?;
     if is_safe_value(value) {
@@ -142,6 +153,16 @@ pub fn validate_snippet(snippet: &Snippet) -> Result<()> {
 mod tests {
     use super::*;
     use crate::model::AuthMethod;
+
+    #[test]
+    fn file_names_must_be_single_path_components() {
+        for bad in ["", ".", "..", "a/b", "/", "a\0b", "bad\u{FFFD}name"] {
+            assert!(matches!(validate_file_name(bad), Err(CoreError::Config { .. })), "{bad:?} accepted");
+        }
+        for good in ["a", ".hidden", "with space", "ümlaut.txt", "a..b"] {
+            assert!(validate_file_name(good).is_ok(), "{good:?} rejected");
+        }
+    }
 
     fn key_auth(path: &str) -> AuthConfig {
         AuthConfig { method: AuthMethod::Key, key_path: Some(path.into()), has_secret: false }

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use linascp_core::connect::{ConnectEvent, PromptBroker};
+use linascp_core::connect::{ConnectEvent, PromptBroker, SftpSession};
 use linascp_core::error::Result;
 use linascp_core::model::Host;
 use linascp_core::paths::AppPaths;
@@ -35,6 +35,8 @@ pub struct AppState {
     /// Output pumps of open sessions (needed by `session_ack` / `session_close`). `Arc`-wrapped
     /// for the same self-cleanup reason as `sessions`.
     pub outputs: Arc<Mutex<HashMap<SessionId, Arc<OutputPump>>>>,
+    /// Open SFTP sessions; separate from terminal sessions.
+    pub sftp: Arc<Mutex<HashMap<SessionId, Arc<SftpSession>>>>,
     /// Shell of local terminals instead of `$SHELL`; set by tests so the developer's rc files never run.
     pub local_shell: Option<String>,
 }
@@ -50,6 +52,7 @@ impl AppState {
             connects: Mutex::new(HashMap::new()),
             early_cancels: Mutex::new(HashMap::new()),
             outputs: Arc::new(Mutex::new(HashMap::new())),
+            sftp: Arc::new(Mutex::new(HashMap::new())),
             local_shell: None,
         }
     }

@@ -5,6 +5,7 @@ import {
   type CoreError,
   connectAnswer,
   connectCancel,
+  connectSftp,
   connectSsh,
   createEventChannel,
   createOutputStream,
@@ -19,6 +20,8 @@ import {
   type SessionInfo,
   secretSet,
   sessionClose,
+  type SftpEvent,
+  sftpClose,
   type Step,
 } from "../ipc/api";
 import { hostProfile } from "../model/hostFormat";
@@ -28,6 +31,7 @@ import { pushNotice } from "./notices";
 import { discardEarlySessionEvent, sessionEventHandler } from "./sessionEvents";
 import { useSessionsStore } from "./sessions";
 import { useSettingsStore } from "./settings";
+import { useSftpStore } from "./sftp";
 import { dropStream, registerStream } from "./streams";
 import { estimateTerminalSize } from "./terminalSize";
 import { useUiStore, type View } from "./ui";
@@ -60,12 +64,17 @@ export interface ConnectFlow extends StepProgress {
   rows: number;
   /** Split pane (status `picking`) that receives the session instead of a new tab. */
   paneId?: string;
+  /** SFTP reconnect: the tab that receives the new session. */
+  sftpTabId?: string;
 }
 
 export interface ConnectState {
   active: ConnectFlow | null;
-  /** `target.paneId`: connect into that picking pane; cancel then stays in the terminal view. */
-  start(hostId: Id, protocol: ConnectProtocol, target?: { paneId: string }): Promise<void>;
+  /**
+   * `target.paneId`: connect into that picking pane; `target.sftpTabId`: reconnect that SFTP tab.
+   * Cancel then stays in the terminal / SFTP view.
+   */
+  start(hostId: Id, protocol: ConnectProtocol, target?: { paneId: string } | { sftpTabId: string }): Promise<void>;
   answer(promptId: number, answer: PromptAnswer): Promise<void>;
   cancel(): Promise<void>;
   retry(): Promise<void>;
@@ -93,6 +102,13 @@ export function authFailureHost(flow: ConnectFlow, hosts: readonly Host[]): { ho
   if (flow.failed?.step !== "jumpHost") return { host: target, isJump: false };
   const jumpId = target?.jumpHostId;
   return { host: (jumpId ? hosts.find((h) => h.id === jumpId) : undefined) ?? null, isJump: true };
+}
+
+/** Where a cancelled/rejected flow returns to. */
+function homeView(flow: ConnectFlow | null): View {
+  if (flow?.paneId) return "terminal";
+  if (flow?.sftpTabId) return "sftp";
+  return "hosts";
 }
 
 function clearRetryTimer(): void {
@@ -164,7 +180,7 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
   const onFailure = (connectId: string, error: CoreError) => {
     if (!isCurrent(connectId)) return;
     pendingPassword = null;
-    const home: View = get().active?.paneId ? "terminal" : "hosts";
+    const home = homeView(get().active);
     if (error.type === "cancelled") {
       close(home);
       return;
@@ -200,12 +216,33 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
     close("terminal");
   };
 
+  const runSftp = async (flow: ConnectFlow) => {
+    const { connectId } = flow;
+    const tabId = flow.sftpTabId ?? newId();
+    let bound: string | null = null;
+    const events = createEventChannel<ConnectEvent>((event) => onEvent(connectId, event));
+    const sftpEvents = createEventChannel<SftpEvent>((event) => {
+      if (bound !== null) useSftpStore.getState().markLost(tabId, bound, event.error);
+    });
+    const connected = await connectSftp(connectId, flow.hostId, events, sftpEvents);
+    if (!isCurrent(connectId)) {
+      fireAndForget(() => sftpClose(connected.sessionId));
+      return;
+    }
+    bound = connected.sessionId;
+    const sftp = useSftpStore.getState();
+    if (!flow.sftpTabId) sftp.openTab(tabId, flow.hostId, connected);
+    else if (!sftp.attachSession(flow.sftpTabId, connected)) fireAndForget(() => sftpClose(connected.sessionId));
+    close("sftp");
+  };
+
   const run = async (flow: ConnectFlow) => {
     const { connectId } = flow;
     // Everything that can throw (setup and invoke) lives inside the try: callers fire `start`/`retry`
     // with `void`, so a failure must surface as flow state, never as a rejected promise.
     let tabId: string | null = null;
     try {
+      if (flow.protocol === "sftp") return await runSftp(flow);
       tabId = newId();
       const stream = createOutputStream();
       const events = createEventChannel<ConnectEvent>((event) => onEvent(connectId, event));
@@ -248,7 +285,8 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
         retrying: false,
         cols,
         rows,
-        paneId: target?.paneId,
+        paneId: target && "paneId" in target ? target.paneId : undefined,
+        sftpTabId: target && "sftpTabId" in target ? target.sftpTabId : undefined,
       };
       set({ active: flow });
       const ui = useUiStore.getState();
@@ -271,7 +309,7 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
     cancel: async () => {
       const flow = get().active;
       if (!flow) return;
-      close(flow.paneId ? "terminal" : "hosts");
+      close(homeView(flow));
       if (!flow.failed || flow.retrying) {
         try {
           await connectCancel(flow.connectId);

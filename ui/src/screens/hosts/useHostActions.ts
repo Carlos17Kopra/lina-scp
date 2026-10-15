@@ -10,6 +10,7 @@ import { findQuickConnectHost, type QuickTarget, quickConnectHost } from "./quic
 
 export interface HostActions {
   connect(host: Host): void;
+  openFiles(host: Host): void;
   edit(host: Host): void;
   remove(host: Host): Promise<void>;
 }
@@ -20,6 +21,9 @@ export function useHostActions(): HostActions {
     () => ({
       connect: (host) => {
         void useConnectStore.getState().start(host.id, "ssh");
+      },
+      openFiles: (host) => {
+        void useConnectStore.getState().start(host.id, "sftp");
       },
       edit: (host) => useUiStore.getState().openModal({ type: "editor", target: { kind: "host", id: host.id } }),
       remove: async (host) => {

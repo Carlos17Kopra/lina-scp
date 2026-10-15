@@ -9,11 +9,12 @@ pub mod model;
 pub mod paths;
 pub mod secrets;
 pub mod session;
+pub mod sftp;
 pub mod sshconfig;
 pub mod store;
 pub mod validate;
 
-pub use error::{CoreError, NetworkKind, Result};
+pub use error::{CoreError, FsKind, NetworkKind, Result};
 pub use export::{
     Conflict, ExportOptions, ExportOutput, ExportReport, FORMAT_VERSION, ImportItem, ImportPreview, ImportReport,
     ItemKind, Resolution, export_data, import_apply, import_preview,

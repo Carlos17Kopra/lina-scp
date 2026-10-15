@@ -211,6 +211,10 @@ impl Prompter {
     pub fn prompts(&self) -> Vec<Prompt> {
         self.prompts.lock().unwrap().clone()
     }
+
+    pub fn events(&self) -> Vec<ConnectEvent> {
+        self.events.lock().unwrap().clone()
+    }
 }
 
 /// Collects session output and the exit event.

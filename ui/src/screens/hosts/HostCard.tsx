@@ -44,9 +44,7 @@ export function HostCard({ host, selected, onSelect }: { host: Host; selected: b
             label={t.hosts.openFiles}
             icon={FolderOpen}
             size="sm"
-            aria-disabled="true"
-            title={t.hosts.filesLater}
-            className={styles.later}
+            onClick={() => actions.openFiles(host)}
           />
         ) : null}
         <IconButton label={t.hosts.edit} icon={Pencil} size="sm" onClick={() => actions.edit(host)} />
