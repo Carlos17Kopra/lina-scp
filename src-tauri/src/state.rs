@@ -35,6 +35,8 @@ pub struct AppState {
     /// Output pumps of open sessions (needed by `session_ack` / `session_close`). `Arc`-wrapped
     /// for the same self-cleanup reason as `sessions`.
     pub outputs: Arc<Mutex<HashMap<SessionId, Arc<OutputPump>>>>,
+    /// Shell of local terminals instead of `$SHELL`; set by tests so the developer's rc files never run.
+    pub local_shell: Option<String>,
 }
 
 impl AppState {
@@ -48,6 +50,7 @@ impl AppState {
             connects: Mutex::new(HashMap::new()),
             early_cancels: Mutex::new(HashMap::new()),
             outputs: Arc::new(Mutex::new(HashMap::new())),
+            local_shell: None,
         }
     }
 
@@ -72,7 +75,10 @@ impl AppState {
         use linascp_core::secrets::MemorySecretStore;
         let paths = AppPaths::for_root(root);
         std::fs::create_dir_all(&paths.ssh_dir).expect("create test ssh dir");
-        Self::new(paths, Store::open_in_memory().expect("in-memory store"), Arc::new(MemorySecretStore::new()))
+        let mut state =
+            Self::new(paths, Store::open_in_memory().expect("in-memory store"), Arc::new(MemorySecretStore::new()));
+        state.local_shell = Some("/bin/sh".into());
+        state
     }
 }
 
