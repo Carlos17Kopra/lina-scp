@@ -6,7 +6,7 @@ import type { Settings, SshMode, TerminalRenderer, Theme } from "../../ipc/api";
 import { errorDetails } from "../../ipc/errors";
 import { useSettingsStore } from "../../stores/settings";
 import { useUiStore } from "../../stores/ui";
-import { FONT_SIZE_MAX, FONT_SIZE_MIN } from "../terminal/theme";
+import { AUTO_SCHEME, FONT_SIZE_MAX, FONT_SIZE_MIN, isKnownScheme, SCHEME_CHOICES } from "../terminal/theme";
 import styles from "./Settings.module.css";
 
 const THEME_OPTIONS: ReadonlyArray<{ value: Theme; label: string }> = [
@@ -26,6 +26,8 @@ const FONT_OPTIONS = Array.from({ length: FONT_SIZE_MAX - FONT_SIZE_MIN + 1 }, (
   const size = FONT_SIZE_MIN + index;
   return { value: String(size), label: t.settings.fontSizeOption(size) };
 });
+
+const SCHEME_OPTIONS = SCHEME_CHOICES.map((choice) => ({ value: choice.id, label: choice.label }));
 
 /** Minimal TP1 settings; every change is saved immediately (mirror changes after confirmation). */
 export function SettingsDialog() {
@@ -114,6 +116,12 @@ export function SettingsDialog() {
               value={String(settings.terminalFontSize)}
               options={FONT_OPTIONS}
               onChange={(size) => persist({ terminalFontSize: Number(size) })}
+            />
+            <Select
+              label={t.terminal.design.scheme}
+              value={isKnownScheme(settings.terminalScheme) ? settings.terminalScheme : AUTO_SCHEME}
+              options={SCHEME_OPTIONS}
+              onChange={(terminalScheme) => persist({ terminalScheme })}
             />
           </div>
           <Checkbox
