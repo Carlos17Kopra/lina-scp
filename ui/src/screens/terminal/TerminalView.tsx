@@ -11,6 +11,7 @@ import { fireAndForget } from "../../stores/connectProgress";
 import { type Tab, useSessionsStore } from "../../stores/sessions";
 import { useSettingsStore } from "../../stores/settings";
 import { getStream } from "../../stores/streams";
+import { dropPasteTarget, registerPasteTarget } from "./pasteTargets";
 import { useUiStore } from "../../stores/ui";
 import { copyText, readText } from "./clipboard";
 import { useTerminalPrefs } from "./prefs";
@@ -97,12 +98,25 @@ export function TerminalView({ tab, visible }: { tab: Tab; visible: boolean }) {
       paste();
     };
     container.addEventListener("mouseup", onMouseUp, true);
+    registerPasteTarget(tab.id, {
+      insert: (text) => {
+        term.paste(text);
+        term.focus();
+      },
+      // term.input feeds onData, so Enter is queued behind the pasted text (and outside the paste brackets).
+      run: (text) => {
+        term.paste(text);
+        term.input("\r");
+        term.focus();
+      },
+    });
 
     const stream = getStream(tab.id);
     const detach = stream?.attach((bytes) => term.write(bytes, () => stream.ack(bytes.length)));
 
     return () => {
       detach?.();
+      dropPasteTarget(tab.id);
       container.removeEventListener("mouseup", onMouseUp, true);
       for (const subscription of subscriptions) subscription.dispose();
       webglRef.current?.dispose();
