@@ -10,6 +10,17 @@ pub enum NetworkKind {
     Other,
 }
 
+/// Classification of file-system failures (local or SFTP), used for UI texts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub enum FsKind {
+    PermissionDenied,
+    NotFound,
+    AlreadyExists,
+    NotEmpty,
+    Other,
+}
+
 /// The single error type of `linascp-core`.
 ///
 /// Serialized as an internally tagged object with the tag field `type`
@@ -32,6 +43,8 @@ pub enum CoreError {
     Config { message: String },
     #[error("i/o error: {message}")]
     Io { message: String },
+    #[error("file error ({kind:?}) at {path}: {message}")]
+    Fs { kind: FsKind, path: String, message: String },
     #[error("cancelled")]
     Cancelled,
     /// A reconnect attempt would have needed user input (password, passphrase, 2FA, host key).
@@ -56,6 +69,10 @@ impl CoreError {
         Self::Keyring { message: message.into() }
     }
 
+    pub fn fs(kind: FsKind, path: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::Fs { kind, path: path.into(), message: message.into() }
+    }
+
     pub fn internal(message: impl Into<String>) -> Self {
         Self::Internal { message: message.into() }
     }
@@ -77,6 +94,15 @@ impl From<std::io::Error> for CoreError {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn fs_error_serializes_with_kind_and_path() {
+        let json = serde_json::to_value(CoreError::fs(FsKind::AlreadyExists, "/tmp/a", "exists")).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({ "type": "fs", "kind": "alreadyExists", "path": "/tmp/a", "message": "exists" })
+        );
+    }
 
     #[test]
     fn network_error_serializes_with_type_tag_and_kind_field() {
