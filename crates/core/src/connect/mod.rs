@@ -5,6 +5,7 @@ pub mod classify;
 pub mod handler;
 pub mod prompt;
 pub mod reconnect;
+mod sftp_session;
 pub mod ssh_session;
 
 use std::future::Future;
@@ -41,6 +42,8 @@ pub enum Step {
     Auth,
     Channel,
     Shell,
+    Subsystem,
+    Directory,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
@@ -137,6 +140,14 @@ pub fn plan_steps(req: &ConnectRequest) -> Vec<Step> {
         steps.push(Step::JumpHost);
     }
     steps.extend([Step::Tcp, Step::HostKey, Step::Auth, Step::Channel, Step::Shell]);
+    steps
+}
+
+/// Steps of an SFTP connect: the SSH part, then subsystem and start directory.
+pub fn plan_sftp_steps(req: &ConnectRequest) -> Vec<Step> {
+    let mut steps = plan_steps(req);
+    steps.truncate(steps.len() - 2);
+    steps.extend([Step::Subsystem, Step::Directory]);
     steps
 }
 
@@ -545,6 +556,15 @@ mod tests {
         let order = preferred_host_key_order(&[Algorithm::Rsa { hash: None }, Algorithm::Ed25519]);
         assert_eq!(order[0], Algorithm::Ed25519);
         assert!(order[1..4].iter().all(|a| matches!(a, Algorithm::Rsa { .. })));
+    }
+
+    #[test]
+    fn sftp_steps_replace_channel_and_shell() {
+        assert_eq!(
+            plan_sftp_steps(&request(true)),
+            vec![Step::JumpHost, Step::Tcp, Step::HostKey, Step::Auth, Step::Subsystem, Step::Directory]
+        );
+        assert_eq!(plan_sftp_steps(&request(false))[0], Step::Tcp);
     }
 
     #[test]
