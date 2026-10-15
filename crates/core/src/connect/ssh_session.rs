@@ -2,12 +2,12 @@
 
 use russh::client::{self, Msg};
 use russh::{Channel, ChannelMsg, ChannelReadHalf, ChannelWriteHalf, Disconnect};
-use tokio::task::JoinHandle;
+use tokio::task::AbortHandle;
 
 use super::classify::map_russh_error;
 use super::handler::ClientHandler;
 use crate::error::Result;
-use crate::session::{OutputSink, Session, SessionEvent};
+use crate::session::{OutputSink, Session, SessionEvent, spawn_guarded};
 
 /// A shell channel plus the connection(s) that carry it.
 pub struct SshSession {
@@ -15,7 +15,7 @@ pub struct SshSession {
     handle: client::Handle<ClientHandler>,
     /// Keeps the jump host connection (and thus the tunnel) alive.
     jump: Option<client::Handle<ClientHandler>>,
-    reader: JoinHandle<()>,
+    reader: AbortHandle,
 }
 
 impl SshSession {
@@ -27,7 +27,7 @@ impl SshSession {
         sink: OutputSink,
     ) -> Self {
         let (read_half, writer) = channel.split();
-        let reader = tokio::spawn(forward_output(read_half, sink));
+        let reader = spawn_guarded(forward_output(read_half, sink.clone()), sink);
         Self { writer, handle, jump, reader }
     }
 }

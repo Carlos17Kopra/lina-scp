@@ -26,6 +26,30 @@ pub enum SessionEvent {
 /// Callback receiving session events. Must be cheap and non-blocking.
 pub type OutputSink = Arc<dyn Fn(SessionEvent) + Send + Sync>;
 
+/// The error a session reports when one of its tasks panicked (spec §9). The panic payload
+/// is deliberately not included: it may contain arbitrary data.
+pub(crate) fn panicked() -> CoreError {
+    CoreError::internal("session task panicked")
+}
+
+/// Spawns a session's output task. If it panics, `sink` gets one `SessionEvent::Error`
+/// instead of the session silently going dead. Aborting the returned handle reports nothing.
+pub(crate) fn spawn_guarded<F>(task: F, sink: OutputSink) -> tokio::task::AbortHandle
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    let task = tokio::spawn(task);
+    let abort = task.abort_handle();
+    tokio::spawn(async move {
+        if let Err(err) = task.await
+            && err.is_panic()
+        {
+            sink(SessionEvent::Error(panicked()));
+        }
+    });
+    abort
+}
+
 /// Common interface of all interactive sessions.
 #[async_trait::async_trait]
 pub trait Session: Send + Sync {
@@ -104,6 +128,23 @@ mod tests {
         assert!(manager.remove(id).is_some());
         assert!(manager.get(id).is_none());
         assert!(manager.remove(id).is_none());
+    }
+
+    #[tokio::test]
+    async fn guarded_task_reports_a_panic_once_and_an_abort_not_at_all() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let seen = events.clone();
+        let sink: OutputSink = Arc::new(move |event| seen.lock().unwrap().push(format!("{event:?}")));
+
+        spawn_guarded(async { panic!("bug") }, sink.clone());
+        let aborted = spawn_guarded(std::future::pending(), sink.clone());
+        aborted.abort();
+        spawn_guarded(async {}, sink);
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let events = events.lock().unwrap().clone();
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert!(events[0].starts_with("Error(Internal"), "{events:?}");
     }
 
     #[test]
