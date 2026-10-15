@@ -376,3 +376,74 @@ async fn test_connection_stops_after_auth() {
         ConnectEvent::StepStarted { step: Step::Channel } | ConnectEvent::StepStarted { step: Step::Shell }
     )));
 }
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn lost_connection_reconnects_on_the_same_session() {
+    use linascp_core::connect::{Connector, Enabled, ReconnectingSession};
+    use linascp_core::session::{OutputSink, SessionEvent};
+    use std::sync::Mutex;
+
+    let c = Container::start(None);
+    let env = Arc::new(Env::new());
+    let h = host(c.port, "pwuser", AuthMethod::Password, None);
+    env.store_password(&h, "pwpass");
+    let p = prompter(trust_all);
+
+    let events: Arc<Mutex<Vec<SessionEvent>>> = Arc::default();
+    let (output, collect) = Output::new();
+    let sink: OutputSink = {
+        let events = events.clone();
+        Arc::new(move |event: SessionEvent| {
+            if !matches!(event, SessionEvent::Output(_)) {
+                events.lock().unwrap().push(event.clone());
+            }
+            collect(event);
+        })
+    };
+    let connector: Connector = {
+        let (env, h) = (env.clone(), h.clone());
+        Arc::new(move |cols, rows, sink, cancel| {
+            let (env, h) = (env.clone(), h.clone());
+            Box::pin(async move {
+                let mut req = request(h, None);
+                req.cols = cols;
+                req.rows = rows;
+                let broker = Arc::new(linascp_core::connect::PromptBroker::non_interactive());
+                let session = connect_ssh(req, env.deps(None), broker, Arc::new(|_| {}), sink, cancel).await?;
+                let info = session.info().clone();
+                Ok((Arc::new(session) as Arc<dyn Session>, info))
+            })
+        })
+    };
+    let enabled: Enabled = Arc::new(|| true);
+    let session = ReconnectingSession::new(sink, 80, 24, connector, enabled);
+    // First connect: interactive broker (trusts the unknown host key), wrapper's sink.
+    let initial = connect_ssh(
+        request(h, None),
+        env.deps(None),
+        p.broker.clone(),
+        p.emit.clone(),
+        session.first_sink(),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("connected");
+    session.attach(Arc::new(initial));
+
+    session.write(b"echo before-$((1+1))\n").await.unwrap();
+    output.wait_for("before-2").await;
+    // Kill the server side of this login without a regular channel close. The slim image has no
+    // procps, so scan /proc; OpenSSH >= 9.8 names the per-login processes `sshd-session: <user> …`.
+    // `[:]` keeps the pattern from matching this shell's own command line.
+    let kill = r#"for p in /proc/[0-9]*; do grep -qaE 'sshd(-session)?[:] pwuser' "$p/cmdline" 2>/dev/null && kill -9 "${p#/proc/}"; done; true"#;
+    let _ = std::process::Command::new("docker").args(["exec", &c.id, "sh", "-c", kill]).output();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !events.lock().unwrap().iter().any(|e| matches!(e, SessionEvent::Reconnected { .. })) {
+        assert!(std::time::Instant::now() < deadline, "no reconnect: {:?}", events.lock().unwrap());
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    session.write(b"echo after-$((2+2))\n").await.unwrap();
+    output.wait_for("after-4").await;
+    session.close().await.unwrap();
+}

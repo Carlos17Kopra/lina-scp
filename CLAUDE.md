@@ -31,8 +31,9 @@ non-commercial open-source release later. Target platform is Linux only: Debian 
   session info).
 - `docs/superpowers/specs/2026-10-15-linascp-tp2b-snippets-design.md`: TP2b spec (snippets).
 - `docs/superpowers/specs/2026-10-15-linascp-tp2c-split-broadcast-design.md`: TP2c spec (split panes, broadcast).
-- `docs/acceptance-tp1.md`: manual acceptance checklist (`docs/acceptance-tp2a.md` … `docs/acceptance-tp2c.md` for
-  TP2a–TP2c).
+- `docs/superpowers/specs/2026-10-15-linascp-tp2d-auto-reconnect-design.md`: TP2d spec (auto-reconnect).
+- `docs/acceptance-tp1.md`: manual acceptance checklist (`docs/acceptance-tp2a.md` … `docs/acceptance-tp2d.md` for
+  TP2a–TP2d).
 - `docs/backlog-after-tp1.md`: deferred review findings. Start TP2 planning there.
 
 ## Commands (run from the repo root)
@@ -57,6 +58,7 @@ bun run tauri build               # .deb + .AppImage in target/release/bundle/
   every decision fails closed: anything other than an explicit accept is a reject.
 - **Connections:** exactly one terminal `ConnectEvent` (`connected` | `failed`) per connect id, including errors
   before the pipeline starts and a cancel. `useConnectStore.start`/`retry` never reject.
+  Automatic reconnects never prompt: any prompt fails the attempt with `inputRequired` (fail closed).
 - **`~/.ssh` modes:**
   - "integrate" (default) is a read-only import.
   - "mirror" writes `~/.ssh/config.d/linascp.conf` plus one `Include` line at the top of `~/.ssh/config`.
