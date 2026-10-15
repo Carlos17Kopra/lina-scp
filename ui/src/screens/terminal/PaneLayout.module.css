@@ -1,0 +1,114 @@
+.area {
+  position: absolute;
+  inset: 0;
+}
+
+.pane {
+  position: absolute;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  border: 1px solid transparent;
+}
+
+.focused {
+  border-color: var(--accent);
+}
+
+.broadcast {
+  border-color: var(--amber);
+}
+
+.close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 2;
+  opacity: 0.6;
+}
+
+.close:hover,
+.close:focus-visible {
+  opacity: 1;
+}
+
+.divider {
+  position: absolute;
+  z-index: 3;
+  background: transparent;
+}
+
+.divider:hover,
+.divider:focus-visible {
+  background: var(--accent);
+  outline: none;
+}
+
+.dividerRow {
+  width: 6px;
+  transform: translateX(-50%);
+  cursor: col-resize;
+}
+
+.dividerColumn {
+  height: 6px;
+  transform: translateY(-50%);
+  cursor: row-resize;
+}
+
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(360px, 90%);
+  margin: auto;
+}
+
+.pickerTitle {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.search {
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--bd);
+  border-radius: 8px;
+  background: var(--s1);
+  color: var(--text);
+  font: inherit;
+}
+
+.choices {
+  display: flex;
+  flex-direction: column;
+  max-height: 240px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.choice {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.selected {
+  background: var(--card);
+}
+
+.detail {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}

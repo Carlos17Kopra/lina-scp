@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../../components";
@@ -126,5 +126,16 @@ describe("TerminalScreen", () => {
     expect(screen.queryByRole("button", { name: "Neu verbinden" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Schließen" }));
     expect(closeSession).toHaveBeenCalledWith("b");
+  });
+
+  it("shows the focused pane in the sidebar; a picking pane has no terminal", async () => {
+    vi.mocked(api.settingsSet).mockImplementation(async (settings) => settings);
+    useSettingsStore.setState({ settings: { ...DEFAULT_SETTINGS, terminalSidebarOpen: true } });
+    seed([web], "a");
+    vi.mocked(api.newId).mockReturnValue("p-2");
+    act(() => useSessionsStore.getState().split("row"));
+    render(<TerminalScreen />);
+    const sidebar = screen.getByRole("complementary", { name: "Sitzungsdetails" });
+    expect(within(sidebar).getByText("Kein Terminal")).toBeInTheDocument();
   });
 });
