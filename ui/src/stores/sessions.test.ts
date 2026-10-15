@@ -2,7 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../ipc/api";
 import { useNoticeStore } from "./notices";
 import { paneIds } from "../screens/terminal/layout";
-import { discardEarlySessionEvent, pendingSessionEventCount, sessionEventHandler, sessionEventPatch } from "./sessionEvents";
+import {
+  discardEarlySessionEvent,
+  pendingSessionEventCount,
+  resetSessionEvents,
+  sessionEventHandler,
+  sessionEventPatch,
+} from "./sessionEvents";
 import { broadcastPeers, focusedPane, type Tab, type TabStatus, useSessionsStore } from "./sessions";
 import { getStream, registerStream } from "./streams";
 import { useUiStore } from "./ui";
@@ -17,6 +23,7 @@ let sessionHandlers: Array<(event: api.SessionEventDto) => void> = [];
 beforeEach(() => {
   let next = 0;
   sessionHandlers = [];
+  resetSessionEvents();
   useSessionsStore.setState(useSessionsStore.getInitialState(), true);
   useUiStore.setState(useUiStore.getInitialState(), true);
   useNoticeStore.setState(useNoticeStore.getInitialState(), true);
@@ -67,6 +74,14 @@ describe("sessions store — local terminals", () => {
     reject({ type: "io", message: "no pty" });
     await opening;
     expect(useSessionsStore.getState().tabs).toEqual([]);
+    expect(pendingSessionEventCount()).toBe(0);
+  });
+
+  it("forgets the exit of a session whose pane was already closed", async () => {
+    vi.mocked(api.sessionOpenLocal).mockResolvedValue("s-1");
+    await useSessionsStore.getState().openLocal();
+    await useSessionsStore.getState().closeSession("t-1");
+    sessionHandlers[0]?.({ kind: "exit", code: null });
     expect(pendingSessionEventCount()).toBe(0);
   });
 
