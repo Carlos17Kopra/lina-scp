@@ -126,7 +126,7 @@ describe("sessions store — groups and panes", () => {
     s.addTab(pane("x"));
     s.addTab(pane("a"));
     s.split("row");
-    useSessionsStore.getState().attachSession("t-1", { sessionId: "s-new", status: "connected" });
+    useSessionsStore.getState().attachSession("t-1", "t-1", { sessionId: "s-new", status: "connected" });
     await useSessionsStore.getState().closeSession("t-1");
     expect(api.sessionClose).toHaveBeenCalledWith("s-new");
     expect(useSessionsStore.getState().groups[1]).toMatchObject({ layout: { type: "pane", paneId: "a" }, focusedPaneId: "a" });
@@ -137,7 +137,7 @@ describe("sessions store — groups and panes", () => {
   it("closes a whole group with all its sessions", async () => {
     useSessionsStore.getState().addTab(pane("a"));
     useSessionsStore.getState().split("row");
-    useSessionsStore.getState().attachSession("t-1", { sessionId: "s-2", status: "connected" });
+    useSessionsStore.getState().attachSession("t-1", "t-1", { sessionId: "s-2", status: "connected" });
     await useSessionsStore.getState().closeGroup("a");
     expect(api.sessionClose).toHaveBeenCalledWith("s-a");
     expect(api.sessionClose).toHaveBeenCalledWith("s-2");
@@ -160,7 +160,7 @@ describe("sessions store — groups and panes", () => {
     useSessionsStore.getState().toggleBroadcast();
     expect(useSessionsStore.getState().groups[0]!.broadcast).toBe(false);
     useSessionsStore.getState().split("row");
-    useSessionsStore.getState().attachSession("t-1", { sessionId: "s-b", status: "connected" });
+    useSessionsStore.getState().attachSession("t-1", "t-1", { sessionId: "s-b", status: "connected" });
     useSessionsStore.getState().split("row");
     useSessionsStore.getState().focusPane("a");
     useSessionsStore.getState().toggleBroadcast();
@@ -176,12 +176,12 @@ describe("sessions store — groups and panes", () => {
   it("attaches sessions to picking panes only and applies an event that arrived meanwhile", () => {
     useSessionsStore.getState().addTab(pane("a"));
     useSessionsStore.getState().split("row");
-    expect(useSessionsStore.getState().attachSession("a", { sessionId: "s-x" })).toBe(false);
-    expect(useSessionsStore.getState().attachSession("zz", { sessionId: "s-x" })).toBe(false);
+    expect(useSessionsStore.getState().attachSession("a", "a", { sessionId: "s-x" })).toBe(false);
+    expect(useSessionsStore.getState().attachSession("zz", "zz", { sessionId: "s-x" })).toBe(false);
     // An exit reported while the pane still shows the picker is buffered, then applied on attach.
     sessionEventHandlerFor("t-1")({ kind: "exit", code: 0 });
     expect(focusedPane(useSessionsStore.getState())?.status).toBe("picking");
-    expect(useSessionsStore.getState().attachSession("t-1", { sessionId: "s-b", status: "connected" })).toBe(true);
+    expect(useSessionsStore.getState().attachSession("t-1", "t-1", { sessionId: "s-b", status: "connected" })).toBe(true);
     expect(focusedPane(useSessionsStore.getState())).toMatchObject({ sessionId: "s-b", status: "closed", origin: undefined });
   });
 
@@ -203,8 +203,8 @@ describe("sessions store — groups and panes", () => {
     useSessionsStore.getState().split("row");
     await useSessionsStore.getState().openLocal({ paneId: "t-1" });
     expect(useSessionsStore.getState().groups).toHaveLength(1);
-    expect(focusedPane(useSessionsStore.getState())).toMatchObject({ id: "t-1", kind: "local", sessionId: "s-l", status: "connected" });
-    expect(getStream("t-1")).toBe(stream);
+    expect(focusedPane(useSessionsStore.getState())).toMatchObject({ id: "t-2", kind: "local", sessionId: "s-l", status: "connected" });
+    expect(getStream("t-2")).toBe(stream);
   });
 
   it("closes the local shell when its picking pane vanished meanwhile", async () => {
@@ -217,7 +217,26 @@ describe("sessions store — groups and panes", () => {
     resolve("s-late");
     await opening;
     expect(api.sessionClose).toHaveBeenCalledWith("s-late");
-    expect(getStream("t-1")).toBeUndefined();
+    expect(getStream("t-2")).toBeUndefined();
     expect(useSessionsStore.getState().groups).toHaveLength(1);
+  });
+
+  it("keeps the first local shell when the picker fires twice (review C1)", async () => {
+    const resolvers: Array<(id: string) => void> = [];
+    vi.mocked(api.sessionOpenLocal).mockImplementation(() => new Promise((r) => resolvers.push(r)));
+    useSessionsStore.getState().addTab(pane("a"));
+    useSessionsStore.getState().split("row");
+    const first = useSessionsStore.getState().openLocal({ paneId: "t-1" });
+    const second = useSessionsStore.getState().openLocal({ paneId: "t-1" });
+    resolvers[0]?.("s-1");
+    await first;
+    resolvers[1]?.("s-2");
+    await second;
+    expect(api.sessionClose).toHaveBeenCalledWith("s-2");
+    // The surplus shell's exit must not end the live one, and its stream cleanup must not drop the live stream.
+    sessionHandlers[1]?.({ kind: "exit", code: 0 });
+    const live = focusedPane(useSessionsStore.getState());
+    expect(live).toMatchObject({ sessionId: "s-1", status: "connected" });
+    expect(getStream(live!.id)).toBe(stream);
   });
 });

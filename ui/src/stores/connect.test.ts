@@ -360,14 +360,15 @@ describe("connect into a pane", () => {
     attempts[0]?.resolve("s-1");
     await started;
     expect(useSessionsStore.getState().groups).toHaveLength(1);
-    expect(useSessionsStore.getState().tabs.find((tab) => tab.id === "pane-1")).toMatchObject({
+    const paneId = useSessionsStore.getState().groups[0]!.focusedPaneId;
+    expect(useSessionsStore.getState().tabs.find((tab) => tab.id === paneId)).toMatchObject({
       kind: "ssh",
       hostId: "h-web",
       sessionId: "s-1",
       status: "connected",
       title: "web-prod-01",
     });
-    expect(getStream("pane-1")).toBe(stream);
+    expect(getStream(paneId)).toBe(stream);
     expect(useUiStore.getState()).toMatchObject({ view: "terminal", modal: null });
   });
 
@@ -388,5 +389,21 @@ describe("connect into a pane", () => {
     expect(api.sessionClose).toHaveBeenCalledWith("s-late");
     expect(useSessionsStore.getState().groups).toHaveLength(1);
     expect(getStream("pane-1")).toBeUndefined();
+  });
+
+  it("ignores a late exit of a cancelled attempt when the pane connects again (review C1)", async () => {
+    splitPicking();
+    void useConnectStore.getState().start("h-web", "ssh", { paneId: "pane-1" });
+    await useConnectStore.getState().cancel();
+    // The cancelled attempt still got a shell: it is closed, and its exit arrives late.
+    attempts[0]?.resolve("s-old");
+    await settle();
+    expect(api.sessionClose).toHaveBeenCalledWith("s-old");
+    sessionEventsOf(0)({ kind: "exit", code: 0 });
+    const started = useConnectStore.getState().start("h-web", "ssh", { paneId: "pane-1" });
+    attempts[1]?.resolve("s-new");
+    await started;
+    const paneId = useSessionsStore.getState().groups[0]!.focusedPaneId;
+    expect(useSessionsStore.getState().tabs.find((tab) => tab.id === paneId)).toMatchObject({ sessionId: "s-new", status: "connected" });
   });
 });

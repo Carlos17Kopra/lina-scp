@@ -191,7 +191,7 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
     const session = { title, kind: "ssh", hostId: flow.hostId, sessionId, status: "connected", info, connectedAt: Date.now() } as const;
     const sessions = useSessionsStore.getState();
     if (!flow.paneId) sessions.addTab({ id: tabId, ...session });
-    else if (!sessions.attachSession(tabId, session)) {
+    else if (!sessions.attachSession(flow.paneId, tabId, session)) {
       // The pane was closed while connecting: no stray tab, no orphaned session.
       dropStream(tabId);
       discardEarlySessionEvent(tabId);
@@ -206,7 +206,7 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
     // with `void`, so a failure must surface as flow state, never as a rejected promise.
     let tabId: string | null = null;
     try {
-      tabId = flow.paneId ?? newId();
+      tabId = newId();
       const stream = createOutputStream();
       const events = createEventChannel<ConnectEvent>((event) => onEvent(connectId, event));
       const sessionEvents = createEventChannel<SessionEventDto>(sessionEventHandler(tabId));

@@ -91,8 +91,12 @@ export interface SessionsState {
   setRatio(groupId: string, path: SplitPath, ratio: number): void;
   /** Toggles broadcast of the active group; only with at least two panes. */
   toggleBroadcast(): void;
-  /** Gives a picking pane its session. False if the pane is gone or not picking (caller closes the session). */
-  attachSession(paneId: string, patch: Partial<Omit<Tab, "id">>): boolean;
+  /**
+   * Gives a picking pane its session; the pane takes the session's own `key` (stream, session events) as its id,
+   * so late events of an earlier attempt in the same pane cannot reach it. False if the pane is gone or not
+   * picking (caller closes the session).
+   */
+  attachSession(paneId: string, key: string, patch: Partial<Omit<Tab, "id">>): boolean;
   /**
    * Swaps the pane for a fresh picking pane (new id, same place) and closes the old session. A late event
    * of the old session then targets the old id and cannot end whatever connects in the new pane.
@@ -143,6 +147,15 @@ function withoutPane(state: SessionsState, paneId: string): Partial<SessionsStat
   return { tabs, groups, activeId: next ? next.id : null };
 }
 
+/** Renames a pane inside its group (layout and focus). */
+function renamed(groups: readonly TabGroup[], paneId: string, nextId: string): TabGroup[] {
+  return groups.map((g) =>
+    paneIds(g.layout).includes(paneId)
+      ? { ...g, layout: renamePane(g.layout, paneId, nextId), focusedPaneId: g.focusedPaneId === paneId ? nextId : g.focusedPaneId }
+      : g,
+  );
+}
+
 async function closeQuietly(sessionId: SessionId | undefined): Promise<void> {
   if (!sessionId) return;
   try {
@@ -170,7 +183,8 @@ export const useSessionsStore = create<SessionsState>()((set, get) => {
     updateTab: (id, patch) =>
       set((state) => ({ tabs: state.tabs.map((tab) => (tab.id === id ? { ...tab, ...patch } : tab)) })),
     openLocal: async (target) => {
-      const tabId = target?.paneId ?? newId();
+      // Own key per session, also inside a pane: a surplus or stale session never touches the pane's live one.
+      const tabId = newId();
       const stream = createOutputStream();
       const sessionEvents = createEventChannel<SessionEventDto>(sessionEventHandler(tabId));
       const { cols, rows } = estimateTerminalSize(useSettingsStore.getState().settings.terminalFontSize);
@@ -182,7 +196,7 @@ export const useSessionsStore = create<SessionsState>()((set, get) => {
         const title = count === 0 ? t.terminal.localTitle : `${t.terminal.localTitle} ${count + 1}`;
         const opened = { title, kind: "local", sessionId, status: "connected", connectedAt: Date.now() } as const;
         if (!target) get().addTab({ id: tabId, ...opened });
-        else if (!get().attachSession(tabId, opened)) {
+        else if (!get().attachSession(target.paneId, tabId, opened)) {
           dropStream(tabId);
           discardEarlySessionEvent(tabId);
           await closeQuietly(sessionId);
@@ -235,11 +249,15 @@ export const useSessionsStore = create<SessionsState>()((set, get) => {
       if (!group || (!group.broadcast && paneIds(group.layout).length < 2)) return;
       updateGroup(group.id, (g) => ({ ...g, broadcast: !g.broadcast }));
     },
-    attachSession: (paneId, patch) => {
+    attachSession: (paneId, key, patch) => {
       const pane = get().tabs.find((tab) => tab.id === paneId);
       if (pane?.status !== "picking") return false;
-      const early = takeEarlySessionEvent(paneId);
-      get().updateTab(paneId, { ...patch, origin: undefined, ...(early ? sessionEventPatch(early) : {}) });
+      const early = takeEarlySessionEvent(key);
+      const attached: Tab = { ...pane, ...patch, id: key, origin: undefined, ...(early ? sessionEventPatch(early) : {}) };
+      set((state) => ({
+        tabs: state.tabs.map((tab) => (tab.id === paneId ? attached : tab)),
+        groups: renamed(state.groups, paneId, key),
+      }));
       return true;
     },
     replacePane: (paneId) => {
@@ -255,11 +273,7 @@ export const useSessionsStore = create<SessionsState>()((set, get) => {
       };
       set((state) => ({
         tabs: state.tabs.map((tab) => (tab.id === paneId ? fresh : tab)),
-        groups: state.groups.map((g) =>
-          paneIds(g.layout).includes(paneId)
-            ? { ...g, layout: renamePane(g.layout, paneId, freshId), focusedPaneId: g.focusedPaneId === paneId ? freshId : g.focusedPaneId }
-            : g,
-        ),
+        groups: renamed(state.groups, paneId, freshId),
       }));
       dropStream(paneId);
       void closeQuietly(pane.sessionId);
