@@ -4,6 +4,7 @@ pub mod auth;
 pub mod classify;
 pub mod handler;
 pub mod prompt;
+pub mod reconnect;
 pub mod ssh_session;
 
 use std::future::Future;
@@ -22,6 +23,7 @@ use tokio_util::sync::CancellationToken;
 pub use classify::{classify_io, classify_resolve_error, map_russh_error, network_error, sanitize_log_line};
 pub use handler::{ClientHandler, HandlerError, HostKeyAction, decide_host_key};
 pub use prompt::{EmitFn, HostKeyDecision, KbdPrompt, Prompt, PromptAnswer, PromptBroker};
+pub use reconnect::{BACKOFF_SECS, ConnectFuture, Connector, Enabled, MAX_ATTEMPTS, ReconnectingSession, is_fatal};
 pub use ssh_session::SshSession;
 
 use crate::error::{CoreError, NetworkKind, Result};
