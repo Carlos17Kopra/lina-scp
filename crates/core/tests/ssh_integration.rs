@@ -585,3 +585,30 @@ async fn sftp_killed_session_reports_lost_once() {
     assert_eq!(lost.lock().unwrap().len(), 1);
     s.close().await;
 }
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn sftp_frozen_link_without_keepalive_reports_lost_once() {
+    use std::sync::Mutex;
+    let c = Container::start(None);
+    let env = Env::new();
+    let mut h = host(c.port, "pwuser", AuthMethod::Password, None);
+    h.keepalive_s = 0;
+    h.timeout_s = 2;
+    env.store_password(&h, "pwpass");
+    let lost: Arc<Mutex<Vec<CoreError>>> = Arc::default();
+    let on_lost: LostFn = {
+        let lost = lost.clone();
+        Arc::new(move |e| lost.lock().unwrap().push(e))
+    };
+    let (s, home, _) = sftp(&env, h, on_lost).await;
+    let pause = std::process::Command::new("docker").args(["pause", &c.id]).output().unwrap();
+    assert!(pause.status.success(), "{pause:?}");
+    let result = s.list(&home.path).await;
+    let _ = std::process::Command::new("docker").args(["unpause", &c.id]).output();
+    assert!(matches!(result, Err(CoreError::Network { .. })), "{result:?}");
+    assert_eq!(lost.lock().unwrap().len(), 1, "a timed-out request on an open handle reports Lost");
+    let _ = s.list(&home.path).await;
+    assert_eq!(lost.lock().unwrap().len(), 1);
+    s.close().await;
+}

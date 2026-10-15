@@ -85,11 +85,13 @@ impl SftpSession {
         self.version
     }
 
-    /// Maps the error and reports a lost connection (once) when the transport is gone.
+    /// Maps the error and reports a lost connection (once) on any transport failure: a request
+    /// timeout (frozen link without keepalive) or a dead SFTP channel leaves the SSH handle open,
+    /// but the session is unusable either way; reconnecting is cheap.
     fn check<T>(&self, result: std::result::Result<T, SftpError>, path: &str) -> Result<T> {
         result.map_err(|e| {
             let error = map_sftp_error(e, path);
-            if matches!(error, CoreError::Network { .. }) && self.handle.is_closed() {
+            if matches!(error, CoreError::Network { .. }) {
                 self.lost.fire(error.clone());
             }
             error
