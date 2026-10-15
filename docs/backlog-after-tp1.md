@@ -96,3 +96,17 @@ fixed before the merge are not listed.
   - `list_hosts` does N+1 queries.
   - Poison recovery is undocumented.
   - `HostKeyStatus` lacks `rename_all_fields`.
+
+## TP3a review (deferred minors)
+
+- SFTP connect: a `Lost` event that arrives before `runSftp` binds the session id is dropped (window < 1 s).
+- `attachSession` does not bump the remote pane token: an in-flight navigate on the old session can paint its error on the reconnected pane.
+- Remote non-UTF-8 names are decoded lossily by russh-sftp but not marked `nameLossy` (`file.filename.contains('\u{FFFD}')`).
+- Non-`fs` errors show the raw English core message in the pane error row and `NameDialog`; reuse `errorTitle` for `network`.
+- Unreadable `remote_start`: the connect error page shows the raw server message without the path.
+- Context menu: no outside-click close, no keyboard focus; it opens (and "Öffnen"/"Neu laden" fire) on the greyed-out lost pane; double-click too.
+- Unused strings `t.sftp.loading`, `empty`, `up`, `title`; the pane shows no loading/empty state.
+- `NameDialog`: double Enter submits twice.
+- Local rename reports every error at the new path, also a vanished source.
+- Cancelling a new SFTP connect started from the SFTP picker returns to Hosts instead of SFTP.
+- Local path field: no `~` expansion; relative paths resolve against the process cwd.
