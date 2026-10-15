@@ -108,6 +108,11 @@ vi.mock("@xterm/addon-fit", () => ({ FitAddon: fakes.FakeFit }));
 vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: fakes.FakeAddon }));
 vi.mock("@xterm/addon-unicode11", () => ({ Unicode11Addon: fakes.FakeAddon }));
 vi.mock("../../ipc/api");
+const clipboard = vi.hoisted(() => ({
+  writeText: vi.fn(async (_text: string) => undefined),
+  readText: vi.fn(async () => "pasted"),
+}));
+vi.mock("@tauri-apps/plugin-clipboard-manager", () => clipboard);
 
 class FakeResizeObserver {
   observe() {}
@@ -125,7 +130,8 @@ const stream = {
     return detach;
   }),
 };
-const clipboard = { writeText: vi.fn(async () => undefined), readText: vi.fn(async () => "pasted") };
+// The webview clipboard cannot read other apps' content on WebKitGTK; it must stay unused.
+const webviewClipboard = { writeText: vi.fn(async () => undefined), readText: vi.fn(async () => "webview") };
 const term = () => fakes.FakeTerminal.instances[0] as InstanceType<typeof fakes.FakeTerminal>;
 const flush = () => act(async () => undefined);
 
@@ -134,7 +140,7 @@ beforeEach(() => {
   fakes.FakeWebgl.instances = [];
   fakes.FakeWebgl.failNext = false;
   vi.stubGlobal("ResizeObserver", FakeResizeObserver);
-  Object.defineProperty(navigator, "clipboard", { value: clipboard, configurable: true });
+  Object.defineProperty(navigator, "clipboard", { value: webviewClipboard, configurable: true });
   useSettingsStore.setState(useSettingsStore.getInitialState(), true);
   useUiStore.setState(useUiStore.getInitialState(), true);
   registerStream(tab.id, stream as unknown as api.OutputStream);
@@ -178,6 +184,7 @@ describe("TerminalView", () => {
     term().selection = "uptime";
     term().selectionChange.fire();
     expect(clipboard.writeText).toHaveBeenCalledWith("uptime");
+    expect(webviewClipboard.writeText).not.toHaveBeenCalled();
     const handler = term().keyHandler as (event: KeyboardEvent) => boolean;
     expect(handler(new KeyboardEvent("keydown", { key: "V", ctrlKey: true, shiftKey: true }))).toBe(false);
     await flush();
@@ -188,6 +195,16 @@ describe("TerminalView", () => {
     fireEvent.mouseUp(term().element as HTMLElement, { button: 1 });
     await flush();
     expect(term().pasted).toEqual(["pasted", "pasted"]);
+    expect(webviewClipboard.readText).not.toHaveBeenCalled();
+  });
+
+  it("pastes nothing when the system clipboard cannot be read", async () => {
+    clipboard.readText.mockRejectedValueOnce(new Error("empty clipboard"));
+    render(<TerminalView tab={tab} visible />);
+    const handler = term().keyHandler as (event: KeyboardEvent) => boolean;
+    handler(new KeyboardEvent("keydown", { key: "V", ctrlKey: true, shiftKey: true }));
+    await flush();
+    expect(term().pasted).toEqual([]);
   });
 
   it("keeps WebGL only while visible and falls back to the DOM renderer on context loss", () => {
