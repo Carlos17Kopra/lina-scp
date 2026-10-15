@@ -48,7 +48,7 @@ function Pane({ paneId, group, rect, multi, visible }: { paneId: string; group: 
       onMouseDown={() => focusPane(paneId)}
       onFocus={() => focusPane(paneId)}
     >
-      {pane.status === "picking" ? <PanePicker pane={pane} /> : null}
+      {pane.status === "picking" ? <PanePicker pane={pane} focused={visible && focused} /> : null}
       {pane.sessionId ? <TerminalView tab={pane} visible={visible} focused={visible && focused} /> : null}
       {ended ? <SessionEnded tab={pane} /> : null}
       {multi ? (

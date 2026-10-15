@@ -14,7 +14,7 @@ interface Choice {
 }
 
 /** What a new split pane opens: same host (preselected), another SSH host, or a local shell. */
-export function PanePicker({ pane }: { pane: Tab }) {
+export function PanePicker({ pane, focused }: { pane: Tab; focused: boolean }) {
   const texts = t.terminal.panes;
   const hosts = useHostsStore((state) => state.hosts);
   const openLocal = useSessionsStore((state) => state.openLocal);
@@ -24,7 +24,10 @@ export function PanePicker({ pane }: { pane: Tab }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listId = useId();
 
-  useEffect(() => inputRef.current?.focus(), []);
+  // The focused pane (after a split, click, Ctrl+Shift+←/→) gets the keyboard.
+  useEffect(() => {
+    if (focused) inputRef.current?.focus();
+  }, [focused]);
 
   const connect = (hostId: string) => void useConnectStore.getState().start(hostId, "ssh", { paneId: pane.id });
   const local: Choice = { key: "local", label: texts.local, open: () => void openLocal({ paneId: pane.id }) };

@@ -37,7 +37,7 @@ const options = () => screen.getAllByRole("option").map((option) => option.textC
 
 describe("PanePicker", () => {
   it("preselects the same host and opens it with Enter", async () => {
-    render(<PanePicker pane={picking} />);
+    render(<PanePicker pane={picking} focused />);
     expect(options()[0]).toContain("Gleicher Host (web-prod-01)");
     expect(options().some((text) => text?.includes("files"))).toBe(false);
     expect(screen.getAllByRole("option")[0]).toHaveAttribute("aria-selected", "true");
@@ -46,7 +46,7 @@ describe("PanePicker", () => {
   });
 
   it("filters by name and address and picks with the arrow keys", async () => {
-    render(<PanePicker pane={picking} />);
+    render(<PanePicker pane={picking} focused />);
     await userEvent.type(screen.getByRole("combobox", { name: "Host suchen" }), "10.0.1.2");
     expect(options()[0]).toContain("db-prod-01");
     await userEvent.keyboard("{ArrowDown}{Enter}");
@@ -54,11 +54,19 @@ describe("PanePicker", () => {
   });
 
   it("offers the local terminal first for a pane split from a local one, and closes on Escape", async () => {
-    render(<PanePicker pane={{ ...picking, kind: "local", origin: { kind: "local" } }} />);
+    render(<PanePicker pane={{ ...picking, kind: "local", origin: { kind: "local" } }} focused />);
     expect(options()[0]).toBe("Lokales Terminal");
     await userEvent.click(screen.getByRole("option", { name: /db-prod-01/ }));
     expect(start).toHaveBeenCalledWith("h2", "ssh", { paneId: "p1" });
     await userEvent.type(screen.getByRole("combobox", { name: "Host suchen" }), "{Escape}");
     expect(closeSession).toHaveBeenCalledWith("p1");
+  });
+
+  it("takes the keyboard whenever its pane becomes the focused one (review I2)", () => {
+    const { rerender } = render(<PanePicker pane={picking} focused={false} />);
+    const search = screen.getByRole("combobox", { name: "Host suchen" });
+    expect(search).not.toHaveFocus();
+    rerender(<PanePicker pane={picking} focused />);
+    expect(search).toHaveFocus();
   });
 });

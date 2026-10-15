@@ -337,4 +337,33 @@ it("broadcasts input of the focused pane to connected peers of its group (Review
     expect(term().disposed).toBe(true);
     expect(fakes.FakeWebgl.instances[0]?.disposed).toBe(true);
   });
+
+  it("does not grab the keyboard when an unfocused pane becomes visible (review I1)", () => {
+    const { rerender } = render(<TerminalView tab={tab} visible={false} />);
+    rerender(<TerminalView tab={tab} visible />);
+    expect(term().focused).toBe(0);
+  });
+
+  it("does not broadcast automatic terminal replies, only typed input (review I3)", () => {
+    const peer: Tab = { id: "tab-2", title: "db", kind: "ssh", sessionId: "s-2", status: "connected" };
+    useSessionsStore.setState({
+      tabs: [tab, peer],
+      groups: [
+        {
+          id: tab.id,
+          layout: { type: "split", dir: "row", ratio: 0.5, a: { type: "pane", paneId: tab.id }, b: { type: "pane", paneId: "tab-2" } },
+          focusedPaneId: tab.id,
+          broadcast: true,
+        },
+      ],
+      activeId: tab.id,
+    });
+    render(<TerminalView tab={tab} visible />);
+    for (const reply of ["\u001b[?1;2c", "\u001b[12;5R", "\u001b[0n", "\u001b[?2004;2$y", "\u001b[I", "\u001b[O", "\u001b]11;rgb:0000/0000/0000\u0007"]) {
+      term().data.fire(reply);
+    }
+    expect(vi.mocked(api.sessionWrite).mock.calls.every(([session]) => session === "s-1")).toBe(true);
+    term().data.fire("\u001b[A");
+    expect(api.sessionWrite).toHaveBeenLastCalledWith("s-2", "\u001b[A");
+  });
 });
