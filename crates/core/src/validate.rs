@@ -98,7 +98,7 @@ pub fn validate_profile(profile: &LoginProfile) -> Result<()> {
     check_auth(&profile.auth)
 }
 
-const SNIPPET_NAME_MAX_CHARS: usize = 64;
+pub(crate) const SNIPPET_NAME_MAX_CHARS: usize = 64;
 const SNIPPET_COMMAND_MAX_BYTES: usize = 8192;
 
 /// Snippets never reach ssh_config; the limits keep the UI and the terminal sane.
