@@ -234,6 +234,7 @@ impl Store {
         groups: &[Group],
         profiles: &[LoginProfile],
         hosts: &[Host],
+        snippets: &[Snippet],
         settings: &[(&str, &str)],
     ) -> Result<()> {
         let mut conn = self.conn();
@@ -246,6 +247,9 @@ impl Store {
         }
         for h in hosts {
             upsert_host(&tx, h)?;
+        }
+        for s in snippets {
+            upsert_snippet(&tx, s)?;
         }
         for (key, value) in settings {
             upsert_setting(&tx, key, value)?;

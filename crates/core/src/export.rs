@@ -16,11 +16,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{CoreError, Result};
 use crate::fsutil;
-use crate::model::{AuthConfig, AuthMethod, Group, Host, HostAuth, Id, LoginProfile, now_unix};
+use crate::model::{AuthConfig, AuthMethod, Group, Host, HostAuth, Id, LoginProfile, Snippet, now_unix};
 use crate::paths::expand_tilde;
 use crate::secrets::{SecretKind, SecretOwner, SecretStore, account_name, parse_account_name};
 use crate::store::{self, Store};
-use crate::validate::{validate_host, validate_profile, validate_terminal_overrides};
+use crate::validate::{validate_host, validate_profile, validate_snippet, validate_terminal_overrides};
 
 pub const FORMAT_VERSION: u32 = 1;
 
@@ -71,6 +71,7 @@ pub enum ItemKind {
     Host,
     Profile,
     Group,
+    Snippet,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -123,6 +124,9 @@ struct ExportDoc {
     groups: Vec<Group>,
     profiles: Vec<LoginProfile>,
     hosts: Vec<Host>,
+    /// Missing in files from builds before TP2b.
+    #[serde(default)]
+    snippets: Vec<Snippet>,
     settings: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     secrets: Option<String>,
@@ -155,6 +159,7 @@ pub fn export_data(store: &Store, secrets: &dyn SecretStore, opts: &ExportOption
     let groups = store.list_groups()?;
     let profiles = store.list_profiles()?;
     let hosts = store.list_hosts()?;
+    let snippets = store.list_snippets()?;
     let mut settings = BTreeMap::new();
     for key in EXPORTED_SETTINGS {
         if let Some(value) = store.get_setting(key)? {
@@ -183,6 +188,7 @@ pub fn export_data(store: &Store, secrets: &dyn SecretStore, opts: &ExportOption
         groups,
         profiles,
         hosts,
+        snippets,
         settings,
         secrets: secrets_block,
     };
@@ -202,6 +208,9 @@ pub fn import_preview(bytes: &[u8], store: &Store) -> Result<ImportPreview> {
     }
     for h in &doc.hosts {
         items.push(item(h.id, &h.name, ItemKind::Host, existing.conflict(ItemKind::Host, h.id, &h.name)));
+    }
+    for s in &doc.snippets {
+        items.push(item(s.id, &s.name, ItemKind::Snippet, existing.conflict(ItemKind::Snippet, s.id, &s.name)));
     }
     Ok(ImportPreview { items, has_secrets: doc.secrets.is_some() })
 }
@@ -245,6 +254,9 @@ pub fn import_apply(
     for h in &doc.hosts {
         plan.decide(&existing, resolutions, ItemKind::Host, h.id, &h.name);
     }
+    for s in &doc.snippets {
+        plan.decide(&existing, resolutions, ItemKind::Snippet, s.id, &s.name);
+    }
     // Invalid entries are never written (nor their secrets or key files restored); a host that
     // uses a rejected profile or jump host from this file is rejected as well, along whole chains.
     for p in doc.profiles.iter().filter(|p| validate_profile(p).is_err()) {
@@ -252,6 +264,9 @@ pub fn import_apply(
     }
     for h in doc.hosts.iter().filter(|h| validate_host(h).is_err()) {
         plan.reject(h.id);
+    }
+    for s in doc.snippets.iter().filter(|s| validate_snippet(s).is_err()) {
+        plan.reject(s.id);
     }
     loop {
         let newly: Vec<Id> = doc
@@ -310,6 +325,19 @@ pub fn import_apply(
             Action::Skip => report.skipped += 1,
         }
     }
+    // A snippet keeps its host only if that host exists after the import; otherwise it turns global.
+    let known_hosts: HashSet<Id> = hosts.iter().map(|h| h.id).chain(existing.ids(ItemKind::Host)).collect();
+    let mut snippets = Vec::new();
+    for s in &doc.snippets {
+        match plan.action(s.id) {
+            Action::Write { id, name } => {
+                let host_id = s.host_id.map(|h| plan.map_id(h)).filter(|h| known_hosts.contains(h));
+                snippets.push(Snippet { id, name, host_id, ..s.clone() });
+            }
+            Action::Skip if plan.is_rejected(s.id) => report.invalid += 1,
+            Action::Skip => report.skipped += 1,
+        }
+    }
     let settings: Vec<(&str, &str)> = doc
         .settings
         .iter()
@@ -347,7 +375,7 @@ pub fn import_apply(
                 report.secrets_restored += 1;
             }
         }
-        store.save_import(&groups, &profiles, &hosts, &settings)
+        store.save_import(&groups, &profiles, &hosts, &snippets, &settings)
     })();
     if let Err(err) = written {
         for (owner, kind, previous) in previous_secrets.iter().rev() {
@@ -361,7 +389,7 @@ pub fn import_apply(
         }
         return Err(err);
     }
-    report.imported = (groups.len() + profiles.len() + hosts.len()) as u32;
+    report.imported = (groups.len() + profiles.len() + hosts.len() + snippets.len()) as u32;
     Ok(report)
 }
 
@@ -389,6 +417,7 @@ impl Existing {
         items.extend(store.list_groups()?.into_iter().map(|g| (ItemKind::Group, g.id, g.name)));
         items.extend(store.list_profiles()?.into_iter().map(|p| (ItemKind::Profile, p.id, p.name)));
         items.extend(store.list_hosts()?.into_iter().map(|h| (ItemKind::Host, h.id, h.name)));
+        items.extend(store.list_snippets()?.into_iter().map(|s| (ItemKind::Snippet, s.id, s.name)));
         Ok(Self { items })
     }
 
@@ -400,6 +429,10 @@ impl Existing {
         } else {
             None
         }
+    }
+
+    fn ids(&self, kind: ItemKind) -> impl Iterator<Item = Id> + '_ {
+        self.items.iter().filter(move |(k, _, _)| *k == kind).map(|(_, id, _)| *id)
     }
 
     fn same_name(&self, kind: ItemKind, name: &str) -> Option<Id> {
