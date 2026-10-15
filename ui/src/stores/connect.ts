@@ -28,7 +28,7 @@ import { pushNotice } from "./notices";
 import { discardEarlySessionEvent, sessionEventHandler } from "./sessionEvents";
 import { useSessionsStore } from "./sessions";
 import { useSettingsStore } from "./settings";
-import { registerStream } from "./streams";
+import { dropStream, registerStream } from "./streams";
 import { estimateTerminalSize } from "./terminalSize";
 import { useUiStore, type View } from "./ui";
 
@@ -58,11 +58,14 @@ export interface ConnectFlow extends StepProgress {
   /** PTY size requested for the shell. */
   cols: number;
   rows: number;
+  /** Split pane (status `picking`) that receives the session instead of a new tab. */
+  paneId?: string;
 }
 
 export interface ConnectState {
   active: ConnectFlow | null;
-  start(hostId: Id, protocol: ConnectProtocol): Promise<void>;
+  /** `target.paneId`: connect into that picking pane; cancel then stays in the terminal view. */
+  start(hostId: Id, protocol: ConnectProtocol, target?: { paneId: string }): Promise<void>;
   answer(promptId: number, answer: PromptAnswer): Promise<void>;
   cancel(): Promise<void>;
   retry(): Promise<void>;
@@ -161,12 +164,13 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
   const onFailure = (connectId: string, error: CoreError) => {
     if (!isCurrent(connectId)) return;
     pendingPassword = null;
+    const home: View = get().active?.paneId ? "terminal" : "hosts";
     if (error.type === "cancelled") {
-      close("hosts");
+      close(home);
       return;
     }
     if (error.type === "hostKeyRejected") {
-      close("hosts");
+      close(home);
       pushNotice({ tone: "amber", message: t.connect.hostKeyRejected });
       return;
     }
@@ -184,9 +188,15 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
     stream.bind(sessionId);
     registerStream(tabId, stream);
     const title = useHostsStore.getState().hosts.find((h) => h.id === flow.hostId)?.name ?? flow.hostId;
-    useSessionsStore
-      .getState()
-      .addTab({ id: tabId, title, kind: "ssh", hostId: flow.hostId, sessionId, status: "connected", info, connectedAt: Date.now() });
+    const session = { title, kind: "ssh", hostId: flow.hostId, sessionId, status: "connected", info, connectedAt: Date.now() } as const;
+    const sessions = useSessionsStore.getState();
+    if (!flow.paneId) sessions.addTab({ id: tabId, ...session });
+    else if (!sessions.attachSession(flow.paneId, tabId, session)) {
+      // The pane was closed while connecting: no stray tab, no orphaned session.
+      dropStream(tabId);
+      discardEarlySessionEvent(tabId);
+      fireAndForget(() => sessionClose(sessionId));
+    }
     close("terminal");
   };
 
@@ -216,7 +226,7 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
   return {
     active: null,
 
-    start: async (hostId, protocol) => {
+    start: async (hostId, protocol, target) => {
       if (!useHostsStore.getState().hosts.some((h) => h.id === hostId)) {
         pushNotice({ tone: "red", message: t.connect.hostMissing });
         return;
@@ -238,6 +248,7 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
         retrying: false,
         cols,
         rows,
+        paneId: target?.paneId,
       };
       set({ active: flow });
       const ui = useUiStore.getState();
@@ -260,7 +271,7 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
     cancel: async () => {
       const flow = get().active;
       if (!flow) return;
-      close("hosts");
+      close(flow.paneId ? "terminal" : "hosts");
       if (!flow.failed || flow.retrying) {
         try {
           await connectCancel(flow.connectId);

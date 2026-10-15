@@ -1,28 +1,27 @@
 import { Plus } from "lucide-react";
 import { Button } from "../../components";
 import { t } from "../../i18n/de";
-import { useSessionsStore } from "../../stores/sessions";
+import { focusedPane, useSessionsStore } from "../../stores/sessions";
 import { useSettingsStore } from "../../stores/settings";
 import { useUiStore } from "../../stores/ui";
-import { SessionEnded } from "./SessionEnded";
+import { PaneLayout } from "./PaneLayout";
 import { Sidebar } from "./sidebar/Sidebar";
 import { TabBar, tabButtonId, tabPanelId } from "./TabBar";
 import styles from "./TerminalScreen.module.css";
-import { TerminalView } from "./TerminalView";
 
-/** Terminal view: tab bar + one panel per session. Stays mounted while hidden (AppShell). */
+/** Terminal view: tab bar + one panel per tab (group) with its split panes. Stays mounted while hidden (AppShell). */
 export function TerminalScreen() {
-  const tabs = useSessionsStore((state) => state.tabs);
+  const groups = useSessionsStore((state) => state.groups);
   const activeId = useSessionsStore((state) => state.activeId);
   const openLocal = useSessionsStore((state) => state.openLocal);
   const shown = useUiStore((state) => state.view === "terminal");
   const sidebarOpen = useSettingsStore((state) => state.settings.terminalSidebarOpen);
-  const activeTab = tabs.find((tab) => tab.id === activeId);
+  const pane = useSessionsStore((state) => focusedPane(state));
 
   return (
     <div className={styles.screen}>
       <h1 className="visually-hidden">{t.terminal.title}</h1>
-      {tabs.length === 0 ? (
+      {groups.length === 0 ? (
         <div className={styles.empty}>
           <p className={styles.emptyTitle}>{t.terminal.emptyTitle}</p>
           <p>{t.terminal.emptyText}</p>
@@ -35,21 +34,20 @@ export function TerminalScreen() {
           <TabBar />
           <div className={styles.body}>
             <div className={styles.panels}>
-              {tabs.map((tab) => (
+              {groups.map((group) => (
                 <div
-                  key={tab.id}
+                  key={group.id}
                   role="tabpanel"
-                  id={tabPanelId(tab.id)}
-                  aria-labelledby={tabButtonId(tab.id)}
-                  hidden={tab.id !== activeId}
+                  id={tabPanelId(group.id)}
+                  aria-labelledby={tabButtonId(group.id)}
+                  hidden={group.id !== activeId}
                   className={styles.panel}
                 >
-                  {tab.sessionId ? <TerminalView tab={tab} visible={shown && tab.id === activeId} /> : null}
-                  {tab.status === "closed" || tab.status === "error" ? <SessionEnded tab={tab} /> : null}
+                  <PaneLayout group={group} visible={shown && group.id === activeId} />
                 </div>
               ))}
             </div>
-            {sidebarOpen && activeTab ? <Sidebar tab={activeTab} /> : null}
+            {sidebarOpen && pane ? <Sidebar tab={pane} /> : null}
           </div>
         </>
       )}

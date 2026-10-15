@@ -6,7 +6,7 @@ import { type Tab, useSessionsStore } from "../../stores/sessions";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../../stores/settings";
 import { dropStream, registerStream } from "../../stores/streams";
 import { useUiStore } from "../../stores/ui";
-import { makeHost } from "../../test/fixtures";
+import { makeHost, singleGroups } from "../../test/fixtures";
 import { getPasteTarget } from "./pasteTargets";
 import { TerminalView } from "./TerminalView";
 
@@ -71,7 +71,10 @@ const fakes = vi.hoisted(() => {
     input(data: string) {
       this.inputs.push(data);
     }
-    focus() {}
+    focused = 0;
+    focus() {
+      this.focused += 1;
+    }
     dispose() {
       this.disposed = true;
     }
@@ -278,11 +281,89 @@ describe("TerminalView", () => {
     expect(getPasteTarget(tab.id)).toBeUndefined();
   });
 
+it("broadcasts input of the focused pane to connected peers of its group (Review Focus 4)", () => {
+    const peer: Tab = { id: "tab-2", title: "db", kind: "ssh", sessionId: "s-2", status: "connected" };
+    const picking: Tab = { id: "tab-3", title: "Neuer Bereich", kind: "ssh", status: "picking" };
+    useSessionsStore.setState({
+      tabs: [tab, peer, picking],
+      groups: [
+        {
+          id: tab.id,
+          layout: {
+            type: "split",
+            dir: "row",
+            ratio: 0.5,
+            a: { type: "pane", paneId: tab.id },
+            b: { type: "split", dir: "column", ratio: 0.5, a: { type: "pane", paneId: "tab-2" }, b: { type: "pane", paneId: "tab-3" } },
+          },
+          focusedPaneId: tab.id,
+          broadcast: true,
+        },
+      ],
+      activeId: tab.id,
+    });
+    render(<TerminalView tab={tab} visible />);
+    term().data.fire("uptime\r");
+    expect(api.sessionWrite).toHaveBeenCalledWith("s-1", "uptime\r");
+    expect(api.sessionWrite).toHaveBeenCalledWith("s-2", "uptime\r");
+    expect(api.sessionWrite).toHaveBeenCalledTimes(2);
+    term().binary.fire("\u0080");
+    expect(api.sessionWrite).toHaveBeenLastCalledWith("s-2", new Uint8Array([0x80]));
+    // Unfocused: only its own session.
+    vi.mocked(api.sessionWrite).mockClear();
+    act(() => useSessionsStore.getState().focusPane("tab-2"));
+    term().data.fire("x");
+    expect(vi.mocked(api.sessionWrite).mock.calls).toEqual([["s-1", "x"]]);
+  });
+
+  it("does not broadcast without the flag", () => {
+    useSessionsStore.setState({ tabs: [tab], groups: singleGroups([tab]), activeId: tab.id });
+    render(<TerminalView tab={tab} visible />);
+    term().data.fire("ls");
+    expect(vi.mocked(api.sessionWrite).mock.calls).toEqual([["s-1", "ls"]]);
+  });
+
+  it("takes DOM focus when it becomes the focused pane", () => {
+    const { rerender } = render(<TerminalView tab={tab} visible focused={false} />);
+    const before = term().focused;
+    rerender(<TerminalView tab={tab} visible focused />);
+    expect(term().focused).toBe(before + 1);
+  });
+
   it("detaches and disposes on unmount", () => {
     const { unmount } = render(<TerminalView tab={tab} visible />);
     unmount();
     expect(detach).toHaveBeenCalled();
     expect(term().disposed).toBe(true);
     expect(fakes.FakeWebgl.instances[0]?.disposed).toBe(true);
+  });
+
+  it("does not grab the keyboard when an unfocused pane becomes visible (review I1)", () => {
+    const { rerender } = render(<TerminalView tab={tab} visible={false} />);
+    rerender(<TerminalView tab={tab} visible />);
+    expect(term().focused).toBe(0);
+  });
+
+  it("does not broadcast automatic terminal replies, only typed input (review I3)", () => {
+    const peer: Tab = { id: "tab-2", title: "db", kind: "ssh", sessionId: "s-2", status: "connected" };
+    useSessionsStore.setState({
+      tabs: [tab, peer],
+      groups: [
+        {
+          id: tab.id,
+          layout: { type: "split", dir: "row", ratio: 0.5, a: { type: "pane", paneId: tab.id }, b: { type: "pane", paneId: "tab-2" } },
+          focusedPaneId: tab.id,
+          broadcast: true,
+        },
+      ],
+      activeId: tab.id,
+    });
+    render(<TerminalView tab={tab} visible />);
+    for (const reply of ["\u001b[?1;2c", "\u001b[12;5R", "\u001b[0n", "\u001b[?2004;2$y", "\u001b[I", "\u001b[O", "\u001b]11;rgb:0000/0000/0000\u0007"]) {
+      term().data.fire(reply);
+    }
+    expect(vi.mocked(api.sessionWrite).mock.calls.every(([session]) => session === "s-1")).toBe(true);
+    term().data.fire("\u001b[A");
+    expect(api.sessionWrite).toHaveBeenLastCalledWith("s-2", "\u001b[A");
   });
 });

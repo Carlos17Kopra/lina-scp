@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../../components";
@@ -7,6 +7,7 @@ import { useConnectStore } from "../../stores/connect";
 import { type Tab, useSessionsStore } from "../../stores/sessions";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../../stores/settings";
 import { useUiStore } from "../../stores/ui";
+import { singleGroups } from "../../test/fixtures";
 import { TerminalScreen } from "./TerminalScreen";
 
 vi.mock("../../ipc/api");
@@ -18,12 +19,13 @@ vi.mock("./TerminalView", () => ({
 
 const openLocal = vi.fn(async () => undefined);
 const closeSession = vi.fn(async () => undefined);
+const closeGroup = vi.fn(async () => undefined);
 const start = vi.fn(async () => undefined);
 const web: Tab = { id: "a", title: "web-prod-01", kind: "ssh", hostId: "h-web", sessionId: "s-a", status: "connected" };
 const local: Tab = { id: "b", title: "Lokales Terminal", kind: "local", sessionId: "s-b", status: "connected" };
 
 function seed(tabs: Tab[], activeId: string | null) {
-  useSessionsStore.setState({ tabs, activeId, openLocal, closeSession });
+  useSessionsStore.setState({ tabs, groups: singleGroups(tabs), activeId, openLocal, closeSession, closeGroup });
 }
 
 beforeEach(() => {
@@ -96,16 +98,18 @@ describe("TerminalScreen", () => {
     await userEvent.click(screen.getByRole("button", { name: "Neues lokales Terminal" }));
     expect(openLocal).toHaveBeenCalledOnce();
     await userEvent.click(screen.getByRole("button", { name: "web-prod-01 schließen" }));
-    expect(closeSession).toHaveBeenCalledWith("a");
+    expect(closeGroup).toHaveBeenCalledWith("a");
   });
 
-  it("offers close and reconnect when an SSH session ended", async () => {
+  it("offers close and reconnect in the same pane when an SSH session ended", async () => {
+    vi.mocked(api.newId).mockReturnValue("p-new");
     seed([{ ...web, status: "closed" }], "a");
     render(<TerminalScreen />);
     expect(screen.getByRole("heading", { name: "Sitzung beendet" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Neu verbinden" }));
-    expect(closeSession).toHaveBeenCalledWith("a");
-    expect(start).toHaveBeenCalledWith("h-web", "ssh");
+    expect(api.sessionClose).toHaveBeenCalledWith("s-a");
+    expect(start).toHaveBeenCalledWith("h-web", "ssh", { paneId: "p-new" });
+    expect(useSessionsStore.getState().groups[0]).toMatchObject({ id: "a", focusedPaneId: "p-new" });
   });
 
   it("shows the error of a session that ended with an error", () => {
@@ -122,5 +126,34 @@ describe("TerminalScreen", () => {
     expect(screen.queryByRole("button", { name: "Neu verbinden" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Schließen" }));
     expect(closeSession).toHaveBeenCalledWith("b");
+  });
+
+  it("shows the focused pane in the sidebar; a picking pane has no terminal", async () => {
+    vi.mocked(api.settingsSet).mockImplementation(async (settings) => settings);
+    useSettingsStore.setState({ settings: { ...DEFAULT_SETTINGS, terminalSidebarOpen: true } });
+    seed([web], "a");
+    vi.mocked(api.newId).mockReturnValue("p-2");
+    act(() => useSessionsStore.getState().split("row"));
+    render(<TerminalScreen />);
+    const sidebar = screen.getByRole("complementary", { name: "Sitzungsdetails" });
+    expect(within(sidebar).getByText("Kein Terminal")).toBeInTheDocument();
+  });
+
+  it("splits, counts panes, limits to 4 and toggles broadcast from the tab bar", async () => {
+    seed([web], "a");
+    let next = 0;
+    vi.mocked(api.newId).mockImplementation(() => `p-${++next}`);
+    render(<TerminalScreen />);
+    const broadcast = screen.getByRole("button", { name: "Broadcast" });
+    expect(broadcast).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Nebeneinander teilen" }));
+    expect(screen.getByRole("tab", { name: "web-prod-01 · 2" })).toBeInTheDocument();
+    await userEvent.click(broadcast);
+    expect(broadcast).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Broadcast an · 2 Bereiche")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Untereinander teilen" }));
+    await userEvent.click(screen.getByRole("button", { name: "Untereinander teilen" }));
+    expect(screen.getByRole("button", { name: "Nebeneinander teilen" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Untereinander teilen" })).toBeDisabled();
   });
 });

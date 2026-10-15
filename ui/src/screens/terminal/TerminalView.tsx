@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { t } from "../../i18n/de";
 import { sessionResize, sessionWrite } from "../../ipc/api";
 import { fireAndForget } from "../../stores/connectProgress";
-import { type Tab, useSessionsStore } from "../../stores/sessions";
+import { broadcastPeers, type Tab, useSessionsStore } from "../../stores/sessions";
 import { useSettingsStore } from "../../stores/settings";
 import { getStream } from "../../stores/streams";
 import { dropPasteTarget, registerPasteTarget } from "./pasteTargets";
@@ -23,7 +23,14 @@ import { TERMINAL_FONT_FAMILY, terminalTheme } from "./theme";
  * One xterm.js terminal bound to a session. Output comes from the tab's `OutputStream` (acked after
  * xterm consumed it), input/resizes go to the session. WebGL is attached only while `visible`.
  */
-export function TerminalView({ tab, visible }: { tab: Tab; visible: boolean }) {
+/**
+ * Answers xterm sends on its own (device attributes, cursor position, status, DECRQM mode, focus in/out, OSC
+ * color queries). They belong to the focused pane's program only and are never broadcast.
+ * ponytail: pattern match; a modified F3 (`ESC[1;2R`) is not broadcast either — flag typed input if that matters.
+ */
+const TERMINAL_REPLY = /^(?:\x1b\[[?>=]?[\d;]*(?:c|R|n|\$y)|\x1b\[[IO]|\x1b\]\d+;[^\x07\x1b]*(?:\x07|\x1b\\))$/;
+
+export function TerminalView({ tab, visible, focused = false }: { tab: Tab; visible: boolean; focused?: boolean }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -59,11 +66,15 @@ export function TerminalView({ tab, visible }: { tab: Tab; visible: boolean }) {
     fitRef.current = fit;
 
     const reportSize = (cols: number, rows: number) => useSessionsStore.getState().updateTab(tab.id, { cols, rows });
+    // Own session first, then (broadcast) every connected peer; each session keeps its own write order.
+    const send = (data: string | Uint8Array) => {
+      fireAndForget(() => sessionWrite(sessionId, data));
+      if (typeof data === "string" && TERMINAL_REPLY.test(data)) return;
+      for (const peer of broadcastPeers(tab.id)) fireAndForget(() => sessionWrite(peer, data));
+    };
     const subscriptions = [
-      term.onData((data) => fireAndForget(() => sessionWrite(sessionId, data))),
-      term.onBinary((data) =>
-        fireAndForget(() => sessionWrite(sessionId, Uint8Array.from(data, (char) => char.charCodeAt(0) & 0xff))),
-      ),
+      term.onData((data) => send(data)),
+      term.onBinary((data) => send(Uint8Array.from(data, (char) => char.charCodeAt(0) & 0xff))),
       term.onResize(({ cols, rows }) => {
         reportSize(cols, rows);
         fireAndForget(() => sessionResize(sessionId, cols, rows));
@@ -127,6 +138,11 @@ export function TerminalView({ tab, visible }: { tab: Tab; visible: boolean }) {
     };
   }, [tab.id, sessionId]);
 
+  // The focused pane (click, Ctrl+Shift+←/→, after a split) gets the keyboard.
+  useEffect(() => {
+    if (focused) termRef.current?.focus();
+  }, [focused, sessionId]);
+
   // WebGL renderer only while visible; DOM fallback after a failure or with the "dom" setting.
   useEffect(() => {
     const term = termRef.current;
@@ -168,7 +184,6 @@ export function TerminalView({ tab, visible }: { tab: Tab; visible: boolean }) {
     // The PTY was opened with an estimated size; `onResize` only fires when xterm's size changes.
     fireAndForget(() => sessionResize(sessionId, term.cols, term.rows));
     useSessionsStore.getState().updateTab(tab.id, { cols: term.cols, rows: term.rows });
-    term.focus();
     const observer = new ResizeObserver(refit);
     observer.observe(container);
     return () => observer.disconnect();

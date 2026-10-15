@@ -2,9 +2,10 @@ import type { SessionEventDto } from "../ipc/api";
 import { type Tab, useSessionsStore } from "./sessions";
 
 /**
- * Terminal session events that arrived before their tab existed. The backend may report the end
- * of a session (nologin shell, ForceCommand, refused shell, invalid `$SHELL`) while
- * `connectSsh` / `sessionOpenLocal` is still returning; `addTab` applies and clears the entry.
+ * Terminal session events that arrived before their tab existed or while it still showed the pane
+ * picker. The backend may report the end of a session (nologin shell, ForceCommand, refused shell,
+ * invalid `$SHELL`) while `connectSsh` / `sessionOpenLocal` is still returning; `addTab` /
+ * `attachSession` apply and clear the entry.
  */
 const early = new Map<string, SessionEventDto>();
 
@@ -17,8 +18,10 @@ export function sessionEventPatch(event: SessionEventDto): Partial<Omit<Tab, "id
 export function sessionEventHandler(tabId: string): (event: SessionEventDto) => void {
   return (event) => {
     const sessions = useSessionsStore.getState();
-    if (sessions.tabs.some((tab) => tab.id === tabId)) sessions.updateTab(tabId, sessionEventPatch(event));
-    else early.set(tabId, event);
+    // A picking pane has no session yet: keep the event for `attachSession`.
+    if (sessions.tabs.some((tab) => tab.id === tabId && tab.status !== "picking")) {
+      sessions.updateTab(tabId, sessionEventPatch(event));
+    } else early.set(tabId, event);
   };
 }
 

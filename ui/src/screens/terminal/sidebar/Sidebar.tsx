@@ -39,7 +39,7 @@ export function Sidebar({ tab }: { tab: Tab }) {
         idBase={idBase}
       />
       <div role="tabpanel" id={tabPanelId(idBase, current)} aria-labelledby={tabId(idBase, current)}>
-        <Panel tab={tab} />
+        {tab.status === "picking" ? <p className={styles.hint}>{t.terminal.panes.noTerminal}</p> : <Panel tab={tab} />}
       </div>
       <p className={styles.hint}>{t.terminal.sidebar.tunnelLater}</p>
     </aside>

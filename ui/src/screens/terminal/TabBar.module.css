@@ -84,3 +84,23 @@
 .active .close {
   opacity: 1;
 }
+
+.tab[data-status="picking"] {
+  --tab-tone: var(--muted);
+}
+
+.broadcastState {
+  align-self: center;
+  margin-right: 6px;
+  color: var(--amber);
+  font-size: 12px;
+}
+
+.broadcastButton {
+  align-self: center;
+}
+
+.broadcastOn {
+  background: color-mix(in srgb, var(--amber) 18%, transparent);
+  color: var(--amber);
+}

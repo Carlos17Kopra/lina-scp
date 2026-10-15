@@ -64,6 +64,19 @@ fixed before the merge are not listed.
   - Insert/▶ are enabled by `tab.status` only, not by a registered paste target; clicking without one does nothing.
   - Enter during IME composition confirms the placeholder dialog (check `isComposing`).
   - ▶ on a command ending in a newline sends a second Enter (empty prompt line).
+- TP2c split panes and broadcast (from the branch review):
+  - Early session-event buffer leaks: a session closed after its pane/key is gone still emits Exit, which stays in
+    the `early` map forever. Drop events for keys that were closed.
+  - Divider drag has no `pointercancel`/`lostpointercapture` handler, and every `pointermove` refits all panes and
+    sends `sessionResize`; add cancel handling and rAF throttling.
+  - A picking pane hides all sidebar panels behind "Kein Terminal"; only the Sitzung panel needs it (Snippets
+    already locks insert/▶ by status).
+  - Ctrl+Shift+←/→ is taken from text fields (picker search, snippet search); skip pane focus for inputs outside
+    `[data-terminal]`.
+  - With broadcast on, every pane gets the same orange frame; the source pane is not visible. Combine focus and
+    broadcast frames.
+  - A pane connect whose pane disappeared ends silently (session closed, no notice).
+  - The terminal-reply filter for broadcast is a pattern match; a modified F3 (`ESC[1;2R`) is not broadcast either.
 
 ## Packaging / CI
 
