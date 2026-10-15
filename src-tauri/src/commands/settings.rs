@@ -1,8 +1,10 @@
-use std::ops::RangeInclusive;
-
 use linascp_core::error::{CoreError, Result};
 use linascp_core::sshconfig::Mirror;
-use linascp_core::store::{FIRST_RUN_DONE, SSH_MODE, Store, TERMINAL_FONT_SIZE, TERMINAL_RENDERER, THEME};
+use linascp_core::store::{
+    FIRST_RUN_DONE, SSH_MODE, Store, TERMINAL_FONT_SIZE, TERMINAL_RENDERER, TERMINAL_SCHEME, TERMINAL_SIDEBAR_OPEN,
+    THEME,
+};
+use linascp_core::validate::{TERMINAL_FONT_SIZES, is_valid_terminal_scheme};
 use tauri::State;
 
 use crate::dto::{Settings, SshMode, TerminalRenderer, Theme};
@@ -10,8 +12,6 @@ use crate::state::AppState;
 
 /// Store key of the WebKit compatibility switch (`"0"` / `"1"`); not part of core's key list.
 pub const COMPAT_RENDERING: &str = "compat_rendering";
-
-const FONT_SIZE_RANGE: RangeInclusive<u16> = 8..=32;
 
 fn parse_flag(value: Option<String>) -> Option<bool> {
     value.map(|v| matches!(v.as_str(), "1" | "true"))
@@ -35,8 +35,13 @@ pub(crate) fn load_settings(store: &Store) -> Result<Settings> {
         terminal_font_size: store
             .get_setting(TERMINAL_FONT_SIZE)?
             .and_then(|v| v.parse::<u16>().ok())
-            .filter(|size| FONT_SIZE_RANGE.contains(size))
+            .filter(|size| TERMINAL_FONT_SIZES.contains(size))
             .unwrap_or(d.terminal_font_size),
+        terminal_scheme: store
+            .get_setting(TERMINAL_SCHEME)?
+            .filter(|id| is_valid_terminal_scheme(id))
+            .unwrap_or(d.terminal_scheme),
+        terminal_sidebar_open: parse_flag(store.get_setting(TERMINAL_SIDEBAR_OPEN)?).unwrap_or(d.terminal_sidebar_open),
         first_run_done: parse_flag(store.get_setting(FIRST_RUN_DONE)?).unwrap_or(d.first_run_done),
         compat_rendering: parse_flag(store.get_setting(COMPAT_RENDERING)?).unwrap_or(d.compat_rendering),
     })
@@ -57,10 +62,13 @@ fn apply_ssh_mode(state: &AppState, mode: SshMode) -> Result<()> {
 
 /// Persists the settings; enables/disables the ssh-config mirror when `ssh_mode` changes.
 pub(crate) fn save_settings(state: &AppState, next: Settings) -> Result<Settings> {
-    if !FONT_SIZE_RANGE.contains(&next.terminal_font_size) {
+    if !TERMINAL_FONT_SIZES.contains(&next.terminal_font_size) {
         return Err(CoreError::Config {
-            message: format!("terminal font size must be between 8 and 32, got {}", next.terminal_font_size),
+            message: format!("terminal font size must be between 10 and 20, got {}", next.terminal_font_size),
         });
+    }
+    if !is_valid_terminal_scheme(&next.terminal_scheme) {
+        return Err(CoreError::Config { message: "invalid terminal color scheme id".to_string() });
     }
     let previous = load_settings(&state.store)?;
     if previous.ssh_mode != next.ssh_mode {
@@ -71,6 +79,8 @@ pub(crate) fn save_settings(state: &AppState, next: Settings) -> Result<Settings
     store.set_setting(SSH_MODE, next.ssh_mode.as_str())?;
     store.set_setting(TERMINAL_RENDERER, next.terminal_renderer.as_str())?;
     store.set_setting(TERMINAL_FONT_SIZE, &next.terminal_font_size.to_string())?;
+    store.set_setting(TERMINAL_SCHEME, &next.terminal_scheme)?;
+    store.set_setting(TERMINAL_SIDEBAR_OPEN, flag_str(next.terminal_sidebar_open))?;
     store.set_setting(FIRST_RUN_DONE, flag_str(next.first_run_done))?;
     store.set_setting(COMPAT_RENDERING, flag_str(next.compat_rendering))?;
     load_settings(store)
@@ -125,6 +135,8 @@ mod tests {
             ssh_mode: SshMode::Integrate,
             terminal_renderer: TerminalRenderer::Dom,
             terminal_font_size: 16,
+            terminal_scheme: "nord".into(),
+            terminal_sidebar_open: true,
             first_run_done: true,
             compat_rendering: true,
         };
@@ -139,9 +151,13 @@ mod tests {
         let (_dir, state) = setup();
         state.store.set_setting(THEME, "purple").unwrap();
         state.store.set_setting(TERMINAL_FONT_SIZE, "300").unwrap();
+        state.store.set_setting(TERMINAL_SCHEME, "../evil").unwrap();
         let s = load_settings(&state.store).unwrap();
         assert_eq!(s.theme, Theme::Dark);
         assert_eq!(s.terminal_font_size, 14);
+        assert_eq!(s.terminal_scheme, "auto");
+        state.store.set_setting(TERMINAL_FONT_SIZE, "9").unwrap();
+        assert_eq!(load_settings(&state.store).unwrap().terminal_font_size, 14);
     }
 
     #[test]
@@ -149,6 +165,15 @@ mod tests {
         let (_dir, state) = setup();
         let next = Settings { terminal_font_size: 4, ..Settings::default() };
         assert!(matches!(save_settings(&state, next), Err(CoreError::Config { .. })));
+    }
+
+    #[test]
+    fn rejects_invalid_scheme_and_out_of_range_font_size() {
+        let (_dir, state) = setup();
+        let bad_scheme = Settings { terminal_scheme: "a b".into(), ..Settings::default() };
+        assert!(matches!(save_settings(&state, bad_scheme), Err(CoreError::Config { .. })));
+        let too_big = Settings { terminal_font_size: 21, ..Settings::default() };
+        assert!(matches!(save_settings(&state, too_big), Err(CoreError::Config { .. })));
     }
 
     #[test]

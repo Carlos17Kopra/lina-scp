@@ -1,10 +1,12 @@
 import { act, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../ipc/api";
-import type { Tab } from "../../stores/sessions";
+import { useHostsStore } from "../../stores/hosts";
+import { type Tab, useSessionsStore } from "../../stores/sessions";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../../stores/settings";
 import { dropStream, registerStream } from "../../stores/streams";
 import { useUiStore } from "../../stores/ui";
+import { makeHost } from "../../test/fixtures";
 import { TerminalView } from "./TerminalView";
 
 const fakes = vi.hoisted(() => {
@@ -143,6 +145,8 @@ beforeEach(() => {
   Object.defineProperty(navigator, "clipboard", { value: webviewClipboard, configurable: true });
   useSettingsStore.setState(useSettingsStore.getInitialState(), true);
   useUiStore.setState(useUiStore.getInitialState(), true);
+  useSessionsStore.setState(useSessionsStore.getInitialState(), true);
+  useHostsStore.setState(useHostsStore.getInitialState(), true);
   registerStream(tab.id, stream as unknown as api.OutputStream);
 });
 
@@ -166,6 +170,14 @@ describe("TerminalView", () => {
     expect(term().written).toEqual([new Uint8Array([104, 105])]);
     expect(stream.ack).toHaveBeenCalledWith(2);
     expect(fakes.FakeWebgl.instances).toHaveLength(1);
+  });
+
+  it("reports the terminal size to the tab", () => {
+    useSessionsStore.setState({ tabs: [tab], activeId: tab.id });
+    render(<TerminalView tab={tab} visible />);
+    expect(useSessionsStore.getState().tabs[0]).toMatchObject({ cols: 80, rows: 24 });
+    act(() => term().resize.fire({ cols: 120, rows: 40 }));
+    expect(useSessionsStore.getState().tabs[0]).toMatchObject({ cols: 120, rows: 40 });
   });
 
   it("sends input and resizes to the session", () => {
@@ -238,6 +250,15 @@ describe("TerminalView", () => {
     expect(term().options.fontSize).toBe(16);
     act(() => useUiStore.getState().setTheme("light"));
     expect(term().options.theme).toMatchObject({ background: "#FFFFFF" });
+  });
+
+  it("applies the host's scheme and font size override and follows changes", () => {
+    useHostsStore.setState({ hosts: [makeHost({ id: "h", terminalScheme: "nord", terminalFontSize: 16 })] });
+    const { container } = render(<TerminalView tab={tab} visible />);
+    expect(term().options).toMatchObject({ fontSize: 16, theme: { background: "#2E3440" } });
+    expect((container.querySelector("[data-terminal]") as HTMLElement).style.background).toBe("rgb(46, 52, 64)");
+    act(() => useHostsStore.setState({ hosts: [makeHost({ id: "h", terminalScheme: null, terminalFontSize: null })] }));
+    expect(term().options).toMatchObject({ fontSize: 14, theme: { background: "#0B0E13" } });
   });
 
   it("detaches and disposes on unmount", () => {

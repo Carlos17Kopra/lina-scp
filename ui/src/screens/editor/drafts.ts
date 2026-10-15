@@ -46,6 +46,9 @@ export interface HostDraft {
   id: Id;
   source: HostSource;
   createdAt: number;
+  /** Terminal overrides are edited in the terminal sidebar, not here; carried through unchanged. */
+  terminalScheme: string | null;
+  terminalFontSize: number | null;
   name: string;
   address: string;
   port: string;
@@ -118,6 +121,8 @@ export function hostToDraft(host: Host): HostDraft {
     id: host.id,
     source: host.source,
     createdAt: host.createdAt,
+    terminalScheme: host.terminalScheme ?? null,
+    terminalFontSize: host.terminalFontSize ?? null,
     name: host.name,
     address: host.address,
     port: String(host.port),
@@ -191,6 +196,8 @@ export function draftToHost(draft: HostDraft, groupId: Id | null): Host {
     forwards: draft.forwards.map((forward) =>
       forward.kind === "dynamic" ? { ...forward, bind: forward.bind.trim(), target: "" } : { ...forward, bind: forward.bind.trim(), target: forward.target.trim() },
     ),
+    terminalScheme: draft.terminalScheme,
+    terminalFontSize: draft.terminalFontSize,
     source: "linascp",
     createdAt: draft.createdAt,
     updatedAt: nowSeconds(),

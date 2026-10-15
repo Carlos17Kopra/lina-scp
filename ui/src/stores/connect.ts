@@ -16,6 +16,7 @@ import {
   type PromptAnswer,
   type SecretOwner,
   type SessionEventDto,
+  type SessionInfo,
   secretSet,
   sessionClose,
   type Step,
@@ -179,11 +180,13 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
     scheduleAutoRetry();
   };
 
-  const onConnected = (flow: ConnectFlow, sessionId: string, tabId: string, stream: OutputStream) => {
+  const onConnected = (flow: ConnectFlow, sessionId: string, info: SessionInfo, tabId: string, stream: OutputStream) => {
     stream.bind(sessionId);
     registerStream(tabId, stream);
     const title = useHostsStore.getState().hosts.find((h) => h.id === flow.hostId)?.name ?? flow.hostId;
-    useSessionsStore.getState().addTab({ id: tabId, title, kind: "ssh", hostId: flow.hostId, sessionId, status: "connected" });
+    useSessionsStore
+      .getState()
+      .addTab({ id: tabId, title, kind: "ssh", hostId: flow.hostId, sessionId, status: "connected", info, connectedAt: Date.now() });
     close("terminal");
   };
 
@@ -197,13 +200,13 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
       const stream = createOutputStream();
       const events = createEventChannel<ConnectEvent>((event) => onEvent(connectId, event));
       const sessionEvents = createEventChannel<SessionEventDto>(sessionEventHandler(tabId));
-      const sessionId = await connectSsh(connectId, flow.hostId, flow.cols, flow.rows, events, stream.channel, sessionEvents);
+      const { sessionId, info } = await connectSsh(connectId, flow.hostId, flow.cols, flow.rows, events, stream.channel, sessionEvents);
       if (!isCurrent(connectId)) {
         discardEarlySessionEvent(tabId);
         fireAndForget(() => sessionClose(sessionId));
         return;
       }
-      onConnected(flow, sessionId, tabId, stream);
+      onConnected(flow, sessionId, info, tabId, stream);
     } catch (error) {
       if (tabId !== null) discardEarlySessionEvent(tabId);
       onFailure(connectId, asCoreError(error));

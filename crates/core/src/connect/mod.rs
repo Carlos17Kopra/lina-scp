@@ -8,7 +8,7 @@ pub mod ssh_session;
 
 use std::future::Future;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use russh::client;
@@ -26,7 +26,7 @@ pub use ssh_session::SshSession;
 
 use crate::error::{CoreError, NetworkKind, Result};
 use crate::known_hosts::KnownHosts;
-use crate::model::{Host, LoginProfile};
+use crate::model::{AuthMethod, Host, LoginProfile};
 use crate::secrets::SecretStore;
 use crate::session::{OutputSink, SessionId};
 
@@ -72,6 +72,24 @@ pub enum ConnectEvent {
         error: CoreError,
     },
 }
+
+/// What was negotiated for an established connection; shown in the terminal sidebar.
+/// Never add secrets (passwords, passphrases, key material, prompt answers) to this struct.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionInfo {
+    pub host_key_algorithm: String,
+    pub host_key_sha256: String,
+    pub kex: String,
+    pub cipher: String,
+    /// Client→server MAC exactly as russh names it (a placeholder for AEAD ciphers).
+    pub mac: String,
+    /// Methods of the successful login, in order (two for 2FA).
+    pub auth_methods: Vec<AuthMethod>,
+}
+
+/// Filled by the handler during the handshake (host key, negotiated algorithms).
+pub(crate) type InfoSlot = Arc<Mutex<SessionInfo>>;
 
 /// russh's default host-key algorithm list with the `known` types (from known_hosts) moved to the
 /// front; both parts keep the default order. A stored `ssh-rsa` key matches all RSA signature
@@ -169,6 +187,7 @@ struct Pipeline {
 struct Established {
     handle: client::Handle<ClientHandler>,
     jump: Option<client::Handle<ClientHandler>>,
+    info: SessionInfo,
 }
 
 impl Pipeline {
@@ -266,7 +285,12 @@ impl Pipeline {
     /// `host.timeout_s` only up to the moment the server's host key reaches
     /// the handler; time spent in a host-key prompt (or the rest of kex
     /// after that) is not counted.
-    async fn handshake(&self, host: &Host, stream: Box<dyn Transport>) -> Result<client::Handle<ClientHandler>> {
+    async fn handshake(
+        &self,
+        host: &Host,
+        stream: Box<dyn Transport>,
+        negotiated: InfoSlot,
+    ) -> Result<client::Handle<ClientHandler>> {
         let key_seen = Arc::new(Notify::new());
         let handler = ClientHandler::new(
             host.address.clone(),
@@ -276,6 +300,7 @@ impl Pipeline {
             self.emit.clone(),
             self.cancel.clone(),
             key_seen.clone(),
+            negotiated,
         );
         // Like OpenSSH: offer the key types known_hosts already holds for this host first, so a
         // host known only by e.g. its ecdsa/rsa key negotiates that type and verifies as Known.
@@ -300,7 +325,11 @@ impl Pipeline {
         .await
     }
 
-    async fn authenticate(&self, handle: &mut client::Handle<ClientHandler>, target: &ConnectTarget) -> Result<()> {
+    async fn authenticate(
+        &self,
+        handle: &mut client::Handle<ClientHandler>,
+        target: &ConnectTarget,
+    ) -> Result<Vec<AuthMethod>> {
         let user = auth::effective_user(target)?;
         let (auth_config, owner) = auth::resolve_auth(target)?;
         let ctx = auth::AuthContext {
@@ -322,7 +351,7 @@ impl Pipeline {
     async fn connect_jump(&self, jump: &ConnectTarget) -> Result<client::Handle<ClientHandler>> {
         self.log(format!("debug1: Connecting to jump host {}", jump.host.address));
         let stream = self.tcp_connect(&jump.host).await?;
-        let mut handle = self.handshake(&jump.host, Box::new(stream)).await?;
+        let mut handle = self.handshake(&jump.host, Box::new(stream), InfoSlot::default()).await?;
         self.authenticate(&mut handle, jump).await?;
         Ok(handle)
     }
@@ -373,9 +402,12 @@ impl Pipeline {
                 }
             })
             .await?;
-        let mut handle = self.step(Step::HostKey, self.handshake(host, stream)).await?;
-        self.step(Step::Auth, self.authenticate(&mut handle, &req.target)).await?;
-        Ok(Established { handle, jump })
+        let negotiated = InfoSlot::default();
+        let mut handle = self.step(Step::HostKey, self.handshake(host, stream, negotiated.clone())).await?;
+        let auth_methods = self.step(Step::Auth, self.authenticate(&mut handle, &req.target)).await?;
+        let mut info = negotiated.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        info.auth_methods = auth_methods;
+        Ok(Established { handle, jump, info })
     }
 
     /// Steps Channel -> Shell; returns the running session.
@@ -407,7 +439,7 @@ impl Pipeline {
             Ok(())
         })
         .await?;
-        Ok(SshSession::start(channel, est.handle, est.jump, sink))
+        Ok(SshSession::start(channel, est.handle, est.jump, est.info, sink))
     }
 }
 

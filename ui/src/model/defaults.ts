@@ -44,6 +44,8 @@ export function newHost(overrides: Partial<Host> = {}): Host {
     env: [],
     sftp: defaultSftpSettings(),
     forwards: [],
+    terminalScheme: null,
+    terminalFontSize: null,
     source: "linascp",
     createdAt: now,
     updatedAt: now,

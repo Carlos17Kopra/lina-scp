@@ -409,6 +409,30 @@ fn import_rejects_hosts_that_would_inject_ssh_config_directives() {
     assert!(!conf.contains("ProxyCommand") && !conf.contains("Match") && !conf.contains("pwned"), "{conf}");
 }
 
+#[test]
+fn import_clears_invalid_terminal_overrides_and_keeps_the_host() {
+    let src = Store::open_in_memory().unwrap();
+    let mut host = Host::new("future", "future.example");
+    host.terminal_scheme = Some("solarized neon".into());
+    host.terminal_font_size = Some(24);
+    let mut fine = Host::new("fine", "fine.example");
+    fine.terminal_scheme = Some("nord".into());
+    fine.terminal_font_size = Some(16);
+    src.save_host(&host).unwrap();
+    src.save_host(&fine).unwrap();
+    let bytes = export_data(&src, &MemorySecretStore::new(), &no_secrets()).unwrap().bytes;
+
+    let dst = Store::open_in_memory().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let report = import_apply(&bytes, None, &HashMap::new(), &dst, &MemorySecretStore::new(), tmp.path()).unwrap();
+
+    assert_eq!((report.imported, report.invalid), (2, 0), "{report:?}");
+    let loaded = dst.get_host(host.id).unwrap().unwrap();
+    assert_eq!((loaded.terminal_scheme, loaded.terminal_font_size), (None, None));
+    let kept = dst.get_host(fine.id).unwrap().unwrap();
+    assert_eq!((kept.terminal_scheme.as_deref(), kept.terminal_font_size), (Some("nord"), Some(16)));
+}
+
 fn key_host(name: &str, address: &str, key_path: &str) -> Host {
     let mut host = Host::new(name, address);
     host.auth = HostAuth::Custom {

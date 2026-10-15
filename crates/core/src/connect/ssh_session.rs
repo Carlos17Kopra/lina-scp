@@ -4,6 +4,7 @@ use russh::client::{self, Msg};
 use russh::{Channel, ChannelMsg, ChannelReadHalf, ChannelWriteHalf, Disconnect};
 use tokio::task::AbortHandle;
 
+use super::SessionInfo;
 use super::classify::map_russh_error;
 use super::handler::ClientHandler;
 use crate::error::Result;
@@ -16,6 +17,7 @@ pub struct SshSession {
     /// Keeps the jump host connection (and thus the tunnel) alive.
     jump: Option<client::Handle<ClientHandler>>,
     reader: AbortHandle,
+    info: SessionInfo,
 }
 
 impl SshSession {
@@ -24,11 +26,17 @@ impl SshSession {
         channel: Channel<Msg>,
         handle: client::Handle<ClientHandler>,
         jump: Option<client::Handle<ClientHandler>>,
+        info: SessionInfo,
         sink: OutputSink,
     ) -> Self {
         let (read_half, writer) = channel.split();
         let reader = spawn_guarded(forward_output(read_half, sink.clone()), sink);
-        Self { writer, handle, jump, reader }
+        Self { writer, handle, jump, reader, info }
+    }
+
+    /// Negotiated algorithms, host key and auth methods of this connection.
+    pub fn info(&self) -> &SessionInfo {
+        &self.info
     }
 }
 

@@ -6,6 +6,7 @@
 import { Channel } from "@tauri-apps/api/core";
 import { commands } from "./bindings";
 import type {
+  ConnectedSession,
   ConnectEvent,
   CoreError,
   ExportReport,
@@ -24,6 +25,7 @@ import type {
 } from "./bindings";
 
 export type {
+  ConnectedSession,
   AuthConfig,
   AuthMethod,
   Conflict,
@@ -53,6 +55,7 @@ export type {
   SecretKind,
   SecretOwner,
   SessionEventDto,
+  SessionInfo,
   Settings,
   SftpSettings,
   SshMode,
@@ -139,7 +142,7 @@ export function connectSsh(
   events: Channel<ConnectEvent>,
   output: Channel<ArrayBuffer>,
   sessionEvents: Channel<SessionEventDto>,
-): Promise<SessionId> {
+): Promise<ConnectedSession> {
   return unwrap(commands.connectSsh(connectId, hostId, cols, rows, events, output, sessionEvents));
 }
 /** Resolves `false` when the prompt was already answered, timed out or cancelled. */

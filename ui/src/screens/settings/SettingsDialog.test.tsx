@@ -64,6 +64,9 @@ describe("SettingsDialog", () => {
     await userEvent.selectOptions(screen.getByLabelText("Schriftgröße"), "16");
     expect(api.settingsSet).toHaveBeenLastCalledWith(expect.objectContaining({ terminalFontSize: 16 }));
     expect(screen.getByLabelText("Schriftgröße")).toHaveValue("16");
+    expect(screen.getByLabelText("Farbschema")).toHaveValue("auto");
+    await userEvent.selectOptions(screen.getByLabelText("Farbschema"), "nord");
+    expect(api.settingsSet).toHaveBeenLastCalledWith(expect.objectContaining({ terminalScheme: "nord" }));
     await userEvent.click(screen.getByRole("checkbox", { name: "Kompatibilitäts-Rendering (wirkt nach Neustart)" }));
     expect(api.settingsSet).toHaveBeenLastCalledWith(expect.objectContaining({ compatRendering: true }));
   });

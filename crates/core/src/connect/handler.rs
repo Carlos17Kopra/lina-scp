@@ -1,13 +1,14 @@
 //! russh client handler: host key verification against known_hosts.
 
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 
 use russh::client;
 use russh::keys::{PublicKey, PublicKeyOrCertificate};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
+use super::InfoSlot;
 use super::classify::map_russh_error;
 use super::log_line;
 use super::prompt::{EmitFn, HostKeyDecision, Prompt, PromptAnswer, PromptBroker};
@@ -100,6 +101,7 @@ pub struct ClientHandler {
     /// so the caller can stop counting its setup timeout against the
     /// (possibly slow) host-key prompt that follows.
     key_seen: Arc<Notify>,
+    negotiated: InfoSlot,
 }
 
 impl ClientHandler {
@@ -112,12 +114,18 @@ impl ClientHandler {
         emit: EmitFn,
         cancel: CancellationToken,
         key_seen: Arc<Notify>,
+        negotiated: InfoSlot,
     ) -> Self {
-        Self { host, port, known_hosts, broker, emit, cancel, key_seen }
+        Self { host, port, known_hosts, broker, emit, cancel, key_seen, negotiated }
     }
 
     async fn verify(&self, key: &PublicKey) -> Result<()> {
         let info = fingerprints(key);
+        {
+            let mut slot = self.negotiated.lock().unwrap_or_else(PoisonError::into_inner);
+            slot.host_key_algorithm = info.algorithm.clone();
+            slot.host_key_sha256 = info.sha256.clone();
+        }
         (self.emit)(log_line(format!("debug1: Server host key: {} {}", info.algorithm, info.sha256)));
         let status = self.known_hosts.check(&self.host, self.port, key)?;
         let status_text = match &status {
@@ -179,6 +187,19 @@ impl client::Handler for ClientHandler {
                 Err(HandlerError::Core(rejected("host certificates are not supported")))
             }
         }
+    }
+
+    async fn kex_done(
+        &mut self,
+        _shared_secret: Option<&[u8]>,
+        names: &russh::Names,
+        _session: &mut client::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        let mut slot = self.negotiated.lock().unwrap_or_else(PoisonError::into_inner);
+        slot.kex = names.kex.as_ref().to_string();
+        slot.cipher = names.cipher.as_ref().to_string();
+        slot.mac = names.client_mac.as_ref().to_string();
+        Ok(())
     }
 }
 

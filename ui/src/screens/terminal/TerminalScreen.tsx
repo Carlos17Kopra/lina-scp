@@ -2,8 +2,10 @@ import { Plus } from "lucide-react";
 import { Button } from "../../components";
 import { t } from "../../i18n/de";
 import { useSessionsStore } from "../../stores/sessions";
+import { useSettingsStore } from "../../stores/settings";
 import { useUiStore } from "../../stores/ui";
 import { SessionEnded } from "./SessionEnded";
+import { Sidebar } from "./sidebar/Sidebar";
 import { TabBar, tabButtonId, tabPanelId } from "./TabBar";
 import styles from "./TerminalScreen.module.css";
 import { TerminalView } from "./TerminalView";
@@ -14,6 +16,8 @@ export function TerminalScreen() {
   const activeId = useSessionsStore((state) => state.activeId);
   const openLocal = useSessionsStore((state) => state.openLocal);
   const shown = useUiStore((state) => state.view === "terminal");
+  const sidebarOpen = useSettingsStore((state) => state.settings.terminalSidebarOpen);
+  const activeTab = tabs.find((tab) => tab.id === activeId);
 
   return (
     <div className={styles.screen}>
@@ -29,20 +33,23 @@ export function TerminalScreen() {
       ) : (
         <>
           <TabBar />
-          <div className={styles.panels}>
-            {tabs.map((tab) => (
-              <div
-                key={tab.id}
-                role="tabpanel"
-                id={tabPanelId(tab.id)}
-                aria-labelledby={tabButtonId(tab.id)}
-                hidden={tab.id !== activeId}
-                className={styles.panel}
-              >
-                {tab.sessionId ? <TerminalView tab={tab} visible={shown && tab.id === activeId} /> : null}
-                {tab.status === "closed" || tab.status === "error" ? <SessionEnded tab={tab} /> : null}
-              </div>
-            ))}
+          <div className={styles.body}>
+            <div className={styles.panels}>
+              {tabs.map((tab) => (
+                <div
+                  key={tab.id}
+                  role="tabpanel"
+                  id={tabPanelId(tab.id)}
+                  aria-labelledby={tabButtonId(tab.id)}
+                  hidden={tab.id !== activeId}
+                  className={styles.panel}
+                >
+                  {tab.sessionId ? <TerminalView tab={tab} visible={shown && tab.id === activeId} /> : null}
+                  {tab.status === "closed" || tab.status === "error" ? <SessionEnded tab={tab} /> : null}
+                </div>
+              ))}
+            </div>
+            {sidebarOpen && activeTab ? <Sidebar tab={activeTab} /> : null}
           </div>
         </>
       )}

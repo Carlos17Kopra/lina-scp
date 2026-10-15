@@ -1,7 +1,7 @@
 use linascp_core::error::{CoreError, Result};
 use linascp_core::model::{Group, Host, HostSource, Id};
 use linascp_core::secrets::SecretOwner;
-use linascp_core::validate::validate_host;
+use linascp_core::validate::{validate_host, validate_terminal_overrides};
 use tauri::State;
 
 use super::secrets::purge_secrets;
@@ -11,6 +11,7 @@ use crate::state::AppState;
 /// Saves (upserts) a host; editing an ssh-config host turns it into an overriding LinaSCP host.
 pub(crate) fn save_host(state: &AppState, mut host: Host) -> Result<Host> {
     validate_host(&host)?;
+    validate_terminal_overrides(&host)?;
     host.source = HostSource::Linascp;
     state.store.save_host(&host)?;
     let saved = state
@@ -115,6 +116,12 @@ mod tests {
         let mut port = Host::new("port-zero", "192.0.2.43");
         port.port = 0;
         assert!(matches!(save_host(&state, port), Err(CoreError::Config { .. })));
+        let mut font = Host::new("font", "192.0.2.44");
+        font.terminal_font_size = Some(99);
+        assert!(matches!(save_host(&state, font), Err(CoreError::Config { .. })));
+        let mut scheme = Host::new("scheme", "192.0.2.45");
+        scheme.terminal_scheme = Some("../x".into());
+        assert!(matches!(save_host(&state, scheme), Err(CoreError::Config { .. })));
         assert!(state.store.list_hosts().unwrap().is_empty());
     }
 

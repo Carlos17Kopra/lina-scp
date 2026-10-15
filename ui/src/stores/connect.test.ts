@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../ipc/api";
-import { makeHost, makeProfile, withUsage } from "../test/fixtures";
+import { makeHost, makeProfile, makeSessionInfo, withUsage } from "../test/fixtures";
 import { MAX_ATTEMPTS, nextRetryDelay, useConnectStore } from "./connect";
 import { useHostsStore } from "./hosts";
 import { useNoticeStore } from "./notices";
@@ -43,8 +43,8 @@ beforeEach(() => {
   });
   vi.mocked(api.connectSsh).mockImplementation(
     () =>
-      new Promise<string>((resolve, reject) => {
-        attempts.push({ resolve, reject });
+      new Promise<api.ConnectedSession>((resolve, reject) => {
+        attempts.push({ resolve: (sessionId) => resolve({ sessionId, info: makeSessionInfo() }), reject });
       }),
   );
   vi.mocked(api.connectAnswer).mockResolvedValue(true);
@@ -89,12 +89,25 @@ describe("connect store", () => {
     expect(stream.bind).toHaveBeenCalledWith("s-1");
     expect(getStream("id-2")).toBe(stream);
     expect(useSessionsStore.getState().tabs).toEqual([
-      { id: "id-2", title: "web-prod-01", kind: "ssh", hostId: "h-web", sessionId: "s-1", status: "connected" },
+      expect.objectContaining({ id: "id-2", title: "web-prod-01", kind: "ssh", hostId: "h-web", sessionId: "s-1", status: "connected" }),
     ]);
     expect(useUiStore.getState()).toMatchObject({ view: "terminal", modal: null });
     expect(flow()).toBeNull();
     sessionEventsOf(0)({ kind: "exit", code: 0 });
     expect(useSessionsStore.getState().tabs[0]?.status).toBe("closed");
+  });
+
+  it("stores the session info and the connect time on the new tab", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 15, 14, 2));
+    const started = useConnectStore.getState().start("h-web", "ssh");
+    attempts[0]?.resolve("s-1");
+    await started;
+    expect(useSessionsStore.getState().tabs[0]).toMatchObject({
+      sessionId: "s-1",
+      info: makeSessionInfo(),
+      connectedAt: new Date(2026, 9, 15, 14, 2).getTime(),
+    });
   });
 
   it("applies a session exit that arrived before the connect resolved", async () => {

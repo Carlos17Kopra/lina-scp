@@ -1,8 +1,11 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ToastProvider } from "../../components";
+import * as api from "../../ipc/api";
 import { useConnectStore } from "../../stores/connect";
 import { type Tab, useSessionsStore } from "../../stores/sessions";
+import { DEFAULT_SETTINGS, useSettingsStore } from "../../stores/settings";
 import { useUiStore } from "../../stores/ui";
 import { TerminalScreen } from "./TerminalScreen";
 
@@ -27,6 +30,7 @@ beforeEach(() => {
   useSessionsStore.setState(useSessionsStore.getInitialState(), true);
   useUiStore.setState({ ...useUiStore.getInitialState(), view: "terminal" }, true);
   useConnectStore.setState({ ...useConnectStore.getInitialState(), start }, true);
+  useSettingsStore.setState({ settings: DEFAULT_SETTINGS, loaded: true });
 });
 
 describe("TerminalScreen", () => {
@@ -50,6 +54,30 @@ describe("TerminalScreen", () => {
     await userEvent.click(within(tablist).getByRole("tab", { name: "Lokales Terminal" }));
     expect(useSessionsStore.getState().activeId).toBe("b");
     expect(screen.getByTestId("term-b")).toHaveAttribute("data-visible", "true");
+  });
+
+  it("toggles the sidebar from the tab bar, remembers it and shows the active tab's session", async () => {
+    vi.mocked(api.settingsSet).mockImplementation(async (settings) => settings);
+    seed([web, local], "a");
+    render(
+      <ToastProvider>
+        <TerminalScreen />
+      </ToastProvider>,
+    );
+    expect(screen.queryByRole("complementary", { name: "Sitzungsdetails" })).toBeNull();
+    const toggle = screen.getByRole("button", { name: "Seitenleiste ein-/ausblenden (Ctrl+Shift+B)" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(toggle);
+    expect(api.settingsSet).toHaveBeenLastCalledWith(expect.objectContaining({ terminalSidebarOpen: true }));
+    const sidebar = screen.getByRole("complementary", { name: "Sitzungsdetails" });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(within(sidebar).getByRole("tab", { name: "Sitzung" })).toHaveAttribute("aria-selected", "true");
+    expect(within(sidebar).getByRole("tab", { name: "Tunnel" })).toBeDisabled();
+    await userEvent.click(within(sidebar).getByRole("tab", { name: "Design" }));
+    expect(within(sidebar).getByRole("radiogroup", { name: "Farbschema" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: "Lokales Terminal" }));
+    await userEvent.click(within(sidebar).getByRole("tab", { name: "Sitzung" }));
+    expect(within(sidebar).getByText("Lokale Shell")).toBeInTheDocument();
   });
 
   it("hides every terminal while another view is shown", () => {

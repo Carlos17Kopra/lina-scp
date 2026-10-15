@@ -38,6 +38,8 @@ describe("host drafts", () => {
     env: [{ key: "LANG", value: "C" }],
     jumpHostId: "h-jump",
     startCommand: "tmux",
+    terminalScheme: "nord",
+    terminalFontSize: 16,
     sftp: { remoteStart: "/srv", localStart: null, transferMode: "auto", parallel: 3, uploadPerms: "0644", bandwidthLimitKbps: 500, sftpServerCmd: null },
   });
 

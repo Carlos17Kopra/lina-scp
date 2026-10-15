@@ -24,12 +24,16 @@ pub const SSH_MODE: &str = "ssh_mode";
 pub const TERMINAL_RENDERER: &str = "terminal_renderer";
 /// Setting key: font size in px as decimal string.
 pub const TERMINAL_FONT_SIZE: &str = "terminal_font_size";
+/// Setting key: terminal color scheme id (`"auto"` or a `schemes.json` id).
+pub const TERMINAL_SCHEME: &str = "terminal_scheme";
+/// Setting key: `"1"` while the terminal sidebar is open.
+pub const TERMINAL_SIDEBAR_OPEN: &str = "terminal_sidebar_open";
 /// Setting key: `"true"` once the first-run dialog was completed.
 pub const FIRST_RUN_DONE: &str = "first_run_done";
 
 const HOST_COLUMNS: &str = "id, name, address, port, user, group_id, color, notes, protocol_ssh, protocol_sftp, \
     login_profile_id, auth_method, key_path, has_secret, jump_host_id, keepalive_s, timeout_s, start_command, \
-    env, sftp_settings, source, created_at, updated_at";
+    env, sftp_settings, source, created_at, updated_at, terminal_scheme, terminal_font_size";
 
 const PROFILE_COLUMNS: &str = "id, name, user, method, key_path, has_secret, created_at, updated_at";
 
@@ -259,7 +263,7 @@ fn upsert_host(tx: &Transaction<'_>, host: &Host) -> Result<()> {
     let sftp = serde_json::to_string(&host.sftp).map_err(|e| CoreError::internal(e.to_string()))?;
     let sql = format!(
         "INSERT INTO hosts ({HOST_COLUMNS}) VALUES \
-         (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23) \
+         (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25) \
          ON CONFLICT(id) DO UPDATE SET name = excluded.name, address = excluded.address, port = excluded.port, \
          user = excluded.user, group_id = excluded.group_id, color = excluded.color, notes = excluded.notes, \
          protocol_ssh = excluded.protocol_ssh, protocol_sftp = excluded.protocol_sftp, \
@@ -267,7 +271,8 @@ fn upsert_host(tx: &Transaction<'_>, host: &Host) -> Result<()> {
          key_path = excluded.key_path, has_secret = excluded.has_secret, jump_host_id = excluded.jump_host_id, \
          keepalive_s = excluded.keepalive_s, timeout_s = excluded.timeout_s, \
          start_command = excluded.start_command, env = excluded.env, sftp_settings = excluded.sftp_settings, \
-         source = excluded.source, updated_at = excluded.updated_at"
+         source = excluded.source, updated_at = excluded.updated_at, \
+         terminal_scheme = excluded.terminal_scheme, terminal_font_size = excluded.terminal_font_size"
     );
     tx.execute(
         &sql,
@@ -295,6 +300,8 @@ fn upsert_host(tx: &Transaction<'_>, host: &Host) -> Result<()> {
             source_to_db(host.source),
             host.created_at,
             now_unix(),
+            host.terminal_scheme,
+            host.terminal_font_size,
         ],
     )?;
 
@@ -386,6 +393,8 @@ fn host_from_row(row: &Row<'_>) -> rusqlite::Result<Host> {
         env: serde_json::from_str(&env).map_err(|e| conv_err(18, e))?,
         sftp: serde_json::from_str(&sftp).map_err(|e| conv_err(19, e))?,
         forwards: Vec::new(),
+        terminal_scheme: row.get(23)?,
+        terminal_font_size: row.get(24)?,
         source: source_from_db(&source).map_err(|e| conv_err(20, e))?,
         created_at: row.get(21)?,
         updated_at: row.get(22)?,

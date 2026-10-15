@@ -86,6 +86,8 @@ pub struct Settings {
     pub ssh_mode: SshMode,
     pub terminal_renderer: TerminalRenderer,
     pub terminal_font_size: u16,
+    pub terminal_scheme: String,
+    pub terminal_sidebar_open: bool,
     pub first_run_done: bool,
     pub compat_rendering: bool,
 }
@@ -97,6 +99,8 @@ impl Default for Settings {
             ssh_mode: SshMode::Integrate,
             terminal_renderer: TerminalRenderer::Auto,
             terminal_font_size: 14,
+            terminal_scheme: "auto".to_string(),
+            terminal_sidebar_open: false,
             first_run_done: false,
             compat_rendering: false,
         }
@@ -108,6 +112,14 @@ impl Default for Settings {
 pub struct ProfileWithUsage {
     pub profile: LoginProfile,
     pub used_by: u32,
+}
+
+/// Result of `connect_ssh`: the registered session and what was negotiated for it.
+#[derive(Debug, Clone, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectedSession {
+    pub session_id: linascp_core::session::SessionId,
+    pub info: linascp_core::connect::SessionInfo,
 }
 
 #[cfg(test)]
@@ -135,7 +147,8 @@ mod tests {
             json,
             serde_json::json!({
                 "theme": "dark", "sshMode": "integrate", "terminalRenderer": "auto",
-                "terminalFontSize": 14, "firstRunDone": false, "compatRendering": false
+                "terminalFontSize": 14, "terminalScheme": "auto", "terminalSidebarOpen": false,
+                "firstRunDone": false, "compatRendering": false
             })
         );
     }

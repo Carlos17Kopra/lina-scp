@@ -125,6 +125,12 @@ pub struct Host {
     pub env: Vec<EnvVar>,
     pub sftp: SftpSettings,
     pub forwards: Vec<PortForward>,
+    /// Terminal color scheme override (`"auto"` or a `schemes.json` id); `None` = global setting.
+    #[serde(default)]
+    pub terminal_scheme: Option<String>,
+    /// Terminal font size override in px; `None` = global setting.
+    #[serde(default)]
+    pub terminal_font_size: Option<u16>,
     pub source: HostSource,
     pub created_at: i64,
     pub updated_at: i64,
@@ -161,6 +167,8 @@ impl Host {
             env: Vec::new(),
             sftp: SftpSettings::default(),
             forwards: Vec::new(),
+            terminal_scheme: None,
+            terminal_font_size: None,
             source: HostSource::Linascp,
             created_at: now,
             updated_at: now,
@@ -211,6 +219,16 @@ impl Group {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn host_without_terminal_fields_deserializes_to_none() {
+        let mut json = serde_json::to_value(Host::new("a", "a.example")).unwrap();
+        let object = json.as_object_mut().unwrap();
+        object.remove("terminalScheme");
+        object.remove("terminalFontSize");
+        let host: Host = serde_json::from_value(json).unwrap();
+        assert_eq!((host.terminal_scheme, host.terminal_font_size), (None, None));
+    }
 
     #[test]
     fn host_new_has_contract_defaults() {

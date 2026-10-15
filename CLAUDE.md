@@ -27,7 +27,9 @@ non-commercial open-source release later. Target platform is Linux only: Debian 
   - `stores/`, `screens/`, `components/` (kit with CSS modules, tokens only).
 - `docs/superpowers/specs/2026-10-11-linascp-tp1-design.md`: TP1 spec. It is the binding authority for TP1 behaviour.
 - `docs/superpowers/plans/`: TP1 implementation plan (done).
-- `docs/acceptance-tp1.md`: manual acceptance checklist.
+- `docs/superpowers/specs/2026-10-15-linascp-tp2a-sidebar-design.md`: TP2a spec (terminal sidebar, color schemes,
+  session info).
+- `docs/acceptance-tp1.md`: manual acceptance checklist (`docs/acceptance-tp2a.md` for TP2a).
 - `docs/backlog-after-tp1.md`: deferred review findings. Start TP2 planning there.
 
 ## Commands (run from the repo root)

@@ -17,7 +17,7 @@ export const commands = {
 	secretDelete: (owner: SecretOwner, kind: SecretKind) => typedError<null, CoreError>(__TAURI_INVOKE("secret_delete", { owner, kind })),
 	settingsGet: () => typedError<Settings, CoreError>(__TAURI_INVOKE("settings_get")),
 	settingsSet: (settings: Settings) => typedError<Settings, CoreError>(__TAURI_INVOKE("settings_set", { settings })),
-	connectSsh: (connectId: string, hostId: string, cols: number, rows: number, events: Channel<ConnectEvent>, output: Channel<ArrayBuffer>, sessionEvents: Channel<SessionEventDto>) => typedError<string, CoreError>(__TAURI_INVOKE("connect_ssh", { connectId, hostId, cols, rows, events, output, sessionEvents })),
+	connectSsh: (connectId: string, hostId: string, cols: number, rows: number, events: Channel<ConnectEvent>, output: Channel<ArrayBuffer>, sessionEvents: Channel<SessionEventDto>) => typedError<ConnectedSession, CoreError>(__TAURI_INVOKE("connect_ssh", { connectId, hostId, cols, rows, events, output, sessionEvents })),
 	/**  Returns `false` when the prompt id is unknown (already answered, timed out or cancelled). */
 	connectAnswer: (promptId: number, answer: PromptAnswer) => typedError<boolean, CoreError>(__TAURI_INVOKE("connect_answer", { promptId, answer })),
 	connectCancel: (connectId: string) => typedError<null, CoreError>(__TAURI_INVOKE("connect_cancel", { connectId })),
@@ -49,6 +49,12 @@ export type Conflict = "sameId" | "sameName";
 export type ConnectEvent = { kind: "steps"; steps: Step[] } | { kind: "stepStarted"; step: Step } | { kind: "stepDone"; step: Step } | { kind: "stepFailed"; step: Step; error: CoreError } | 
 /**  Sanitized `ssh -v` style log line. */
 { kind: "log"; line: string } | { kind: "prompt"; promptId: number; prompt: Prompt } | { kind: "connected"; sessionId: string } | { kind: "failed"; error: CoreError };
+
+/**  Result of `connect_ssh`: the registered session and what was negotiated for it. */
+export type ConnectedSession = {
+	sessionId: string,
+	info: SessionInfo,
+};
 
 /**
  *  The single error type of `linascp-core`.
@@ -98,6 +104,10 @@ export type Host = {
 	env: EnvVar[],
 	sftp: SftpSettings,
 	forwards: PortForward[],
+	/**  Terminal color scheme override (`"auto"` or a `schemes.json` id); `None` = global setting. */
+	terminalScheme?: string | null,
+	/**  Terminal font size override in px; `None` = global setting. */
+	terminalFontSize?: number | null,
 	source: HostSource,
 	createdAt: number,
 	updatedAt: number,
@@ -199,12 +209,29 @@ export type SecretOwner = { kind: "host"; id: string } | { kind: "profile"; id: 
 /**  Non-output session events, sent on the `session_events` channel. */
 export type SessionEventDto = { kind: "exit"; code: number | null } | { kind: "error"; error: CoreError };
 
+/**
+ *  What was negotiated for an established connection; shown in the terminal sidebar.
+ *  Never add secrets (passwords, passphrases, key material, prompt answers) to this struct.
+ */
+export type SessionInfo = {
+	hostKeyAlgorithm: string,
+	hostKeySha256: string,
+	kex: string,
+	cipher: string,
+	/**  Client→server MAC exactly as russh names it (a placeholder for AEAD ciphers). */
+	mac: string,
+	/**  Methods of the successful login, in order (two for 2FA). */
+	authMethods: AuthMethod[],
+};
+
 /**  All user-facing settings, stored as individual keys in the `settings` table. */
 export type Settings = {
 	theme: Theme,
 	sshMode: SshMode,
 	terminalRenderer: TerminalRenderer,
 	terminalFontSize: number,
+	terminalScheme: string,
+	terminalSidebarOpen: boolean,
 	firstRunDone: boolean,
 	compatRendering: boolean,
 };

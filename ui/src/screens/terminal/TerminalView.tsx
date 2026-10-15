@@ -8,11 +8,12 @@ import { useEffect, useRef, useState } from "react";
 import { t } from "../../i18n/de";
 import { sessionResize, sessionWrite } from "../../ipc/api";
 import { fireAndForget } from "../../stores/connectProgress";
-import type { Tab } from "../../stores/sessions";
+import { type Tab, useSessionsStore } from "../../stores/sessions";
 import { useSettingsStore } from "../../stores/settings";
 import { getStream } from "../../stores/streams";
 import { useUiStore } from "../../stores/ui";
 import { copyText, readText } from "./clipboard";
+import { useTerminalPrefs } from "./prefs";
 import { clipboardShortcut, shouldUseWebgl } from "./terminalConfig";
 import styles from "./TerminalView.module.css";
 import { TERMINAL_FONT_FAMILY, terminalTheme } from "./theme";
@@ -27,11 +28,11 @@ export function TerminalView({ tab, visible }: { tab: Tab; visible: boolean }) {
   const fitRef = useRef<FitAddon | null>(null);
   const webglRef = useRef<WebglAddon | null>(null);
   const [webglFailed, setWebglFailed] = useState(false);
-  const theme = useUiStore((state) => state.theme);
-  const fontSize = useSettingsStore((state) => state.settings.terminalFontSize);
+  const appTheme = useUiStore((state) => state.theme);
+  const { scheme, fontSize } = useTerminalPrefs(tab.hostId);
   const renderer = useSettingsStore((state) => state.settings.terminalRenderer);
-  const initial = useRef({ theme, fontSize });
-  initial.current = { theme, fontSize };
+  const initial = useRef({ scheme, appTheme, fontSize });
+  initial.current = { scheme, appTheme, fontSize };
   const sessionId = tab.sessionId;
 
   // Terminal lifetime = session lifetime.
@@ -45,7 +46,7 @@ export function TerminalView({ tab, visible }: { tab: Tab; visible: boolean }) {
       fontFamily: TERMINAL_FONT_FAMILY,
       fontSize: initial.current.fontSize,
       scrollback: 10_000,
-      theme: terminalTheme(initial.current.theme),
+      theme: terminalTheme(initial.current.scheme, initial.current.appTheme),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -56,12 +57,16 @@ export function TerminalView({ tab, visible }: { tab: Tab; visible: boolean }) {
     termRef.current = term;
     fitRef.current = fit;
 
+    const reportSize = (cols: number, rows: number) => useSessionsStore.getState().updateTab(tab.id, { cols, rows });
     const subscriptions = [
       term.onData((data) => fireAndForget(() => sessionWrite(sessionId, data))),
       term.onBinary((data) =>
         fireAndForget(() => sessionWrite(sessionId, Uint8Array.from(data, (char) => char.charCodeAt(0) & 0xff))),
       ),
-      term.onResize(({ cols, rows }) => fireAndForget(() => sessionResize(sessionId, cols, rows))),
+      term.onResize(({ cols, rows }) => {
+        reportSize(cols, rows);
+        fireAndForget(() => sessionResize(sessionId, cols, rows));
+      }),
       term.onSelectionChange(() => {
         if (term.hasSelection()) void copyText(term.getSelection());
       }),
@@ -148,6 +153,7 @@ export function TerminalView({ tab, visible }: { tab: Tab; visible: boolean }) {
     refit();
     // The PTY was opened with an estimated size; `onResize` only fires when xterm's size changes.
     fireAndForget(() => sessionResize(sessionId, term.cols, term.rows));
+    useSessionsStore.getState().updateTab(tab.id, { cols: term.cols, rows: term.rows });
     term.focus();
     const observer = new ResizeObserver(refit);
     observer.observe(container);
@@ -156,8 +162,8 @@ export function TerminalView({ tab, visible }: { tab: Tab; visible: boolean }) {
 
   useEffect(() => {
     const term = termRef.current;
-    if (term) term.options.theme = terminalTheme(theme);
-  }, [theme, sessionId]);
+    if (term) term.options.theme = terminalTheme(scheme, appTheme);
+  }, [scheme, appTheme, sessionId]);
 
   useEffect(() => {
     const term = termRef.current;
@@ -173,7 +179,7 @@ export function TerminalView({ tab, visible }: { tab: Tab; visible: boolean }) {
   }, [fontSize, sessionId, visible]);
 
   return (
-    <div className={styles.frame} style={{ background: terminalTheme(theme).background }} data-terminal="">
+    <div className={styles.frame} style={{ background: terminalTheme(scheme, appTheme).background }} data-terminal="">
       <div ref={containerRef} className={styles.host} aria-label={t.terminal.label(tab.title)} />
     </div>
   );

@@ -1,4 +1,4 @@
-import type { Host, LoginProfile, ProfileWithUsage } from "../ipc/api";
+import type { Host, LoginProfile, ProfileWithUsage, SessionInfo } from "../ipc/api";
 
 /** Complete host with deterministic ids (tests must not rely on `newId()`, which is automocked). */
 export function makeHost(overrides: Partial<Host> = {}): Host {
@@ -30,6 +30,8 @@ export function makeHost(overrides: Partial<Host> = {}): Host {
       sftpServerCmd: null,
     },
     forwards: [],
+    terminalScheme: null,
+    terminalFontSize: null,
     source: "linascp",
     createdAt: 1,
     updatedAt: 1,
@@ -51,4 +53,16 @@ export function makeProfile(overrides: Partial<LoginProfile> = {}): LoginProfile
 
 export function withUsage(profile: LoginProfile, usedBy: number): ProfileWithUsage {
   return { profile, usedBy };
+}
+
+export function makeSessionInfo(overrides: Partial<SessionInfo> = {}): SessionInfo {
+  return {
+    hostKeyAlgorithm: "ssh-ed25519",
+    hostKeySha256: "SHA256:abc",
+    kex: "curve25519-sha256",
+    cipher: "chacha20-poly1305@openssh.com",
+    mac: "none",
+    authMethods: ["key"],
+    ...overrides,
+  };
 }
