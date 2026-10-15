@@ -11,9 +11,6 @@ fixed before the merge are not listed.
   - A `ProxyJump` to a jump host that was skipped because its alias collides with another host's resolves to that other host. Omit `ProxyJump` when the jump host itself was not rendered.
   - The alias of a jump host imported from ssh-config is also ASCII-sanitized in `ProxyJump`, so a non-ASCII imported alias produces a wrong `ProxyJump`. Use the raw alias for `source != Linascp`.
   - `merge_hosts` also hides a hand-written ssh-config alias that equals a stored host's sanitized name.
-- **known_hosts:**
-  - `@revoked` lines are ignored.
-  - `replace()` renames over a symlinked `known_hosts`, and its read-modify-write can lose a concurrent `ssh` append.
 - **Sessions:**
   - Spec §9: panics in session tasks are not caught (no `catch_unwind`; `SessionEvent::Error` is never produced for them).
   - The local PTY writer thread stays parked after close if a write is stuck on a full PTY. Use a non-blocking fd plus poll.

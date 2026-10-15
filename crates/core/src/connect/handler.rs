@@ -46,6 +46,7 @@ where
 {
     match status {
         HostKeyStatus::Known => Ok(HostKeyAction::Accept),
+        HostKeyStatus::Revoked => Err(rejected("host key is marked @revoked in known_hosts; connection refused")),
         HostKeyStatus::Unknown => {
             let prompt = Prompt::HostKeyUnknown { host: host.to_string(), port, info: current, other_key_types_known };
             let answer = ask(prompt).await;
@@ -123,6 +124,7 @@ impl ClientHandler {
             HostKeyStatus::Known => "known",
             HostKeyStatus::Unknown => "unknown",
             HostKeyStatus::Changed { .. } => "CHANGED",
+            HostKeyStatus::Revoked => "REVOKED",
         };
         (self.emit)(log_line(format!("debug1: Host '{}' key is {status_text}", self.host)));
         let other_key_types = match status {
@@ -210,6 +212,15 @@ mod tests {
         })
         .await;
         assert_eq!(result.unwrap(), HostKeyAction::Accept);
+    }
+
+    #[tokio::test]
+    async fn revoked_key_is_rejected_without_prompt() {
+        let result = decide_host_key(HostKeyStatus::Revoked, "h", 22, info("SHA256:a"), Vec::new(), |_| async {
+            panic!("must not ask for revoked keys")
+        })
+        .await;
+        assert!(matches!(result, Err(CoreError::HostKeyRejected { .. })));
     }
 
     #[tokio::test]

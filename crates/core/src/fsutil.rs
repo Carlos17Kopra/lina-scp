@@ -19,15 +19,29 @@ pub(crate) fn create_private_dir(dir: &Path) -> Result<()> {
 /// Atomically replaces `path` with `contents` (temp file + rename), mode 0600.
 /// The parent directory must exist.
 pub(crate) fn write_private(path: &Path, contents: &[u8]) -> Result<()> {
+    write_private_if(path, contents, || Ok(true)).map(|_| ())
+}
+
+/// Like `write_private`, but only renames the temp file into place if `precondition` (checked
+/// right before the rename) still holds. Returns whether `path` was replaced.
+// ponytail: optimistic check, not a lock; a write between the check and the rename can still be lost.
+pub(crate) fn write_private_if(
+    path: &Path,
+    contents: &[u8],
+    precondition: impl FnOnce() -> Result<bool>,
+) -> Result<bool> {
     let tmp = temp_path(path)?;
-    let result = (|| -> Result<()> {
+    let result = (|| -> Result<bool> {
         let mut file = OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
         file.write_all(contents)?;
         file.sync_all()?;
+        if !precondition()? {
+            return Ok(false);
+        }
         fs::rename(&tmp, path)?;
-        Ok(())
+        Ok(true)
     })();
-    if result.is_err() {
+    if !matches!(result, Ok(true)) {
         let _ = fs::remove_file(&tmp);
     }
     result
@@ -55,6 +69,18 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), b"two");
         assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
         assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn write_private_if_skips_rename_when_precondition_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("f");
+        fs::write(&path, b"old").unwrap();
+        assert!(!write_private_if(&path, b"new", || Ok(false)).unwrap());
+        assert_eq!(fs::read(&path).unwrap(), b"old");
+        assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 1);
+        assert!(write_private_if(&path, b"new", || Ok(true)).unwrap());
+        assert_eq!(fs::read(&path).unwrap(), b"new");
     }
 
     #[test]
