@@ -156,4 +156,39 @@ describe("TerminalScreen", () => {
     expect(screen.getByRole("button", { name: "Nebeneinander teilen" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Untereinander teilen" })).toBeDisabled();
   });
+
+  it("offers retry, reconnect and close when the connection was lost", async () => {
+    vi.mocked(api.sessionReconnectNow).mockResolvedValue(undefined);
+    seed([{ ...web, status: "lost", error: { type: "network", kind: "timeout", message: "timed out" } }], "a");
+    render(<TerminalScreen />);
+    expect(screen.getByRole("heading", { name: "Verbindung verloren" })).toBeInTheDocument();
+    expect(screen.getByText("timed out")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /web-prod-01\s*– Verbindung verloren/ })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Erneut versuchen" }));
+    expect(api.sessionReconnectNow).toHaveBeenCalledWith("s-a");
+    expect(screen.getByRole("button", { name: "Neu verbinden" })).toBeInTheDocument();
+  });
+
+  it("only offers an interactive reconnect when input is required", () => {
+    seed([{ ...web, status: "lost", error: { type: "inputRequired" } }], "a");
+    render(<TerminalScreen />);
+    expect(screen.getByText("Für die Verbindung ist eine Eingabe nötig (Passwort, Host-Key …).")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Erneut versuchen" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Neu verbinden" })).toBeInTheDocument();
+  });
+
+  it("only offers close when the host is gone", () => {
+    seed([{ ...web, status: "lost", error: { type: "config", message: "host h-web not found" } }], "a");
+    render(<TerminalScreen />);
+    expect(screen.queryByRole("button", { name: "Erneut versuchen" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Neu verbinden" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Schließen" })).toBeInTheDocument();
+  });
+
+  it("marks a reconnecting tab for screen readers", () => {
+    const reason = { type: "network", kind: "other", message: "x" } as const;
+    seed([{ ...web, status: "reconnecting", reconnect: { attempt: 1, maxAttempts: 8, retryAt: Date.now() + 1000, reason } }], "a");
+    render(<TerminalScreen />);
+    expect(screen.getByRole("tab", { name: /web-prod-01\s*– Verbindung unterbrochen/ })).toBeInTheDocument();
+  });
 });

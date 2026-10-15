@@ -130,6 +130,11 @@ export function SettingsDialog() {
             checked={settings.compatRendering}
             onChange={(compatRendering) => persist({ compatRendering })}
           />
+          <Checkbox
+            label={t.settings.autoReconnect}
+            checked={settings.terminalAutoReconnect}
+            onChange={(terminalAutoReconnect) => persist({ terminalAutoReconnect })}
+          />
         </section>
         <section className={styles.section} aria-labelledby={ids.data}>
           <h3 id={ids.data} className={styles.heading}>

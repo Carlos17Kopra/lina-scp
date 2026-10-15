@@ -523,6 +523,7 @@ export const t = {
     fontSize: "Schriftgröße",
     fontSizeOption: (size: number) => `${size} px`,
     compat: "Kompatibilitäts-Rendering (wirkt nach Neustart)",
+    autoReconnect: "Abgebrochene SSH-Verbindungen automatisch wiederherstellen",
     compatHint: "Setzt WEBKIT_DISABLE_DMABUF_RENDERER=1. Nur bei Darstellungsfehlern aktivieren.",
     data: "Daten",
     dataHint: "Hosts, Gruppen, Login-Profile und Einstellungen sichern oder auf ein anderes Gerät übertragen.",
