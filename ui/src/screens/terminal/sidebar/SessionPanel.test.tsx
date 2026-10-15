@@ -37,6 +37,7 @@ beforeEach(() => {
     hosts: [
       makeHost({
         id: "h-web",
+        user: null,
         address: "10.0.1.12",
         port: 2222,
         jumpHostId: "h-bastion",
@@ -65,6 +66,14 @@ describe("SessionPanel", () => {
     expect(value("Terminal")).toBe("xterm-256color · 120×40");
     expect(value("Keepalive")).toBe("alle 30 s");
     expect(value("Verbunden seit")).toBe("14:02 (1 Std. 15 Min.)");
+  });
+
+  it("shows the user the core logs in with: host user before profile user", () => {
+    useHostsStore.setState({
+      hosts: [makeHost({ id: "h-web", user: "root", address: "10.0.1.12", port: 22, auth: { kind: "profile", profileId: "p1" } })],
+    });
+    render(<SessionPanel tab={sshTab} />);
+    expect(value("Host")).toBe("root@10.0.1.12:22");
   });
 
   it("copies the fingerprint", async () => {

@@ -47,6 +47,8 @@ export function useGlobalShortcuts(): void {
       const ui = useUiStore.getState();
       if (ui.modal) return;
       if (!TERMINAL_SAFE.has(shortcut) && insideTerminal(event.target)) return;
+      // The sidebar belongs to the terminal view; elsewhere the key stays unused.
+      if (shortcut === "toggleSidebar" && ui.view !== "terminal") return;
       event.preventDefault();
       event.stopPropagation();
       switch (shortcut) {

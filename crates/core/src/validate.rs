@@ -48,7 +48,6 @@ fn check_auth(auth: &AuthConfig) -> Result<()> {
     }
 }
 
-/// Checks a host's own fields. A referenced login profile is checked by [`validate_profile`].
 /// Allowed terminal font sizes in px (`schemes.json` `fontSize.min/max`).
 pub const TERMINAL_FONT_SIZES: RangeInclusive<u16> = 10..=20;
 
@@ -58,6 +57,23 @@ pub fn is_valid_terminal_scheme(id: &str) -> bool {
     (1..=32).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphabetic())
 }
 
+/// Checks the per-host terminal overrides. They are cosmetic: unlike [`validate_host`] a failure
+/// here never drops a host from the mirror or an import; imports clear invalid overrides instead.
+pub fn validate_terminal_overrides(host: &Host) -> Result<()> {
+    if let Some(scheme) = &host.terminal_scheme
+        && !is_valid_terminal_scheme(scheme)
+    {
+        return Err(CoreError::config("Ungültiges Farbschema"));
+    }
+    if let Some(size) = host.terminal_font_size
+        && !TERMINAL_FONT_SIZES.contains(&size)
+    {
+        return Err(CoreError::config("Schriftgröße muss zwischen 10 und 20 px liegen"));
+    }
+    Ok(())
+}
+
+/// Checks a host's own fields. A referenced login profile is checked by [`validate_profile`].
 pub fn validate_host(host: &Host) -> Result<()> {
     check_text("Name", &host.name)?;
     check_value("Adresse", &host.address)?;
@@ -69,16 +85,6 @@ pub fn validate_host(host: &Host) -> Result<()> {
     }
     if let Some(user) = &host.user {
         check_value("Benutzer", user)?;
-    }
-    if let Some(scheme) = &host.terminal_scheme
-        && !is_valid_terminal_scheme(scheme)
-    {
-        return Err(CoreError::config("Ungültiges Farbschema"));
-    }
-    if let Some(size) = host.terminal_font_size
-        && !TERMINAL_FONT_SIZES.contains(&size)
-    {
-        return Err(CoreError::config("Schriftgröße muss zwischen 10 und 20 px liegen"));
     }
     match &host.auth {
         HostAuth::Custom { auth } => check_auth(auth),
@@ -173,22 +179,24 @@ mod tests {
         let mut host = Host::new("h", "h.example");
         for size in [10, 20] {
             host.terminal_font_size = Some(size);
-            assert!(validate_host(&host).is_ok(), "size {size}");
+            assert!(validate_terminal_overrides(&host).is_ok(), "size {size}");
         }
         for size in [9, 21] {
             host.terminal_font_size = Some(size);
-            assert!(validate_host(&host).is_err(), "size {size}");
+            assert!(validate_terminal_overrides(&host).is_err(), "size {size}");
         }
         host.terminal_font_size = None;
         let longest = "x".repeat(32);
         for scheme in ["auto", "nord", "solDark", longest.as_str()] {
             host.terminal_scheme = Some(scheme.into());
-            assert!(validate_host(&host).is_ok(), "scheme {scheme:?}");
+            assert!(validate_terminal_overrides(&host).is_ok(), "scheme {scheme:?}");
         }
         let too_long = "x".repeat(33);
         for scheme in ["", "a b", "../x", "nörd", too_long.as_str()] {
             host.terminal_scheme = Some(scheme.into());
-            assert!(validate_host(&host).is_err(), "scheme {scheme:?}");
+            assert!(validate_terminal_overrides(&host).is_err(), "scheme {scheme:?}");
+            // Cosmetic: never a reason to drop the host from the mirror or an import.
+            assert!(validate_host(&host).is_ok(), "scheme {scheme:?}");
         }
     }
 }

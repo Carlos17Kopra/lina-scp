@@ -60,7 +60,8 @@ export function SessionPanel({ tab }: { tab: Tab }) {
 
   const profileId = host?.auth.kind === "profile" ? host.auth.profileId : undefined;
   const profile = profileId === undefined ? undefined : profiles.find((entry) => entry.profile.id === profileId)?.profile;
-  const user = profileId === undefined ? host?.user : profile?.user;
+  // Same order as core's `effective_user` (the local $USER fallback is not known here).
+  const user = host?.user?.trim() ? host.user : profile?.user;
   const address = host ? `${user ? `${user}@` : ""}${host.address}:${host.port}` : null;
   const jump = host?.jumpHostId ? hosts.find((candidate) => candidate.id === host.jumpHostId)?.name : null;
   const info = tab.info;

@@ -256,6 +256,11 @@ mod tests {
             host.terminal_font_size = Some(16);
         }
         assert_eq!(Mirror::render(&hosts, &profiles), plain);
+        for host in &mut hosts {
+            host.terminal_scheme = Some("../x".into());
+            host.terminal_font_size = Some(99);
+        }
+        assert_eq!(Mirror::render(&hosts, &profiles), plain, "invalid overrides never drop a host");
     }
 
     fn sample() -> (Vec<Host>, Vec<LoginProfile>) {

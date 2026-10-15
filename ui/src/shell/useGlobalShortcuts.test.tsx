@@ -53,10 +53,21 @@ describe("useGlobalShortcuts", () => {
   it("Ctrl+Shift+B toggles the terminal sidebar, also inside the terminal", async () => {
     vi.mocked(api.settingsSet).mockImplementation(async (settings) => settings);
     useSettingsStore.setState({ settings: DEFAULT_SETTINGS, loaded: true });
+    useUiStore.getState().setView("terminal");
     render(<Harness />);
     fireEvent.keyDown(screen.getByLabelText("Terminal-Eingabe"), { key: "B", ctrlKey: true, shiftKey: true });
     await vi.waitFor(() => expect(useSettingsStore.getState().settings.terminalSidebarOpen).toBe(true));
     expect(api.settingsSet).toHaveBeenLastCalledWith(expect.objectContaining({ terminalSidebarOpen: true }));
+  });
+
+  it("Ctrl+Shift+B does nothing outside the terminal view", () => {
+    useSettingsStore.setState({ settings: DEFAULT_SETTINGS, loaded: true });
+    useUiStore.getState().setView("hosts");
+    render(<Harness />);
+    const event = createEvent.keyDown(document.body, { key: "B", ctrlKey: true, shiftKey: true });
+    fireEvent(document.body, event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(api.settingsSet).not.toHaveBeenCalled();
   });
 
   it("Ctrl+, opens the settings", () => {

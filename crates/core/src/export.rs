@@ -20,7 +20,7 @@ use crate::model::{AuthConfig, AuthMethod, Group, Host, HostAuth, Id, LoginProfi
 use crate::paths::expand_tilde;
 use crate::secrets::{SecretKind, SecretOwner, SecretStore, account_name, parse_account_name};
 use crate::store::{self, Store};
-use crate::validate::{validate_host, validate_profile};
+use crate::validate::{validate_host, validate_profile, validate_terminal_overrides};
 
 pub const FORMAT_VERSION: u32 = 1;
 
@@ -217,6 +217,14 @@ pub fn import_apply(
     key_dir: &Path,
 ) -> Result<ImportReport> {
     let mut doc = parse_doc(bytes)?;
+    // Overrides from a newer build may be out of range here; they are cosmetic, so drop them
+    // instead of rejecting the host.
+    for host in &mut doc.hosts {
+        if validate_terminal_overrides(host).is_err() {
+            host.terminal_scheme = None;
+            host.terminal_font_size = None;
+        }
+    }
     let payload = match (&doc.secrets, passphrase) {
         (Some(block), Some(pass)) => Some(decrypt_payload(block, pass)?),
         _ => None,
