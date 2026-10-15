@@ -36,7 +36,7 @@ export const HOST_FIELD_TAB: Record<HostField, EditorTab> = {
   bandwidthLimit: "sftp",
 };
 
-const TAB_ORDER: readonly EditorTab[] = ["general", "auth", "connection", "sftp"];
+export const EDITOR_TAB_ORDER: readonly EditorTab[] = ["general", "auth", "connection", "sftp"];
 const INT_RE = /^\d+$/;
 /** Upload file mode: three octal digits, optionally with a leading 0 (mirrors core `is_upload_mode`). */
 const MODE_RE = /^0?[0-7]{3}$/;
@@ -122,5 +122,5 @@ export function hasErrors(errors: object): boolean {
 /** Tabs that contain at least one error, in tab order. */
 export function errorTabs(errors: FieldErrors<HostField>): EditorTab[] {
   const tabs = new Set((Object.keys(errors) as HostField[]).map((field) => HOST_FIELD_TAB[field]));
-  return TAB_ORDER.filter((tab) => tabs.has(tab));
+  return EDITOR_TAB_ORDER.filter((tab) => tabs.has(tab));
 }

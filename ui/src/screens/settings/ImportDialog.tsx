@@ -34,7 +34,7 @@ export function ImportDialog() {
     try {
       path = await openDialog({ title: texts.pickTitle, multiple: false, directory: false, filters: [LINASCP_FILTER] });
     } catch (error) {
-      toast.show({ tone: "red", message: t.editor.pickKeyFailed, details: errorDetails(error) });
+      toast.show({ tone: "red", message: t.common.pickFileFailed, details: errorDetails(error) });
       return;
     }
     if (typeof path !== "string") return;

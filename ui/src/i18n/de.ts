@@ -8,6 +8,7 @@ export const t = {
   },
   common: {
     cancel: "Abbrechen",
+    pickFileFailed: "Dateiauswahl fehlgeschlagen",
     close: "Schließen",
     save: "Speichern",
     back: "Zurück",
@@ -46,17 +47,8 @@ export const t = {
     saveFailed: "Speichern fehlgeschlagen",
   },
   stubs: {
-    hosts: "Server-Übersicht",
-    terminal: "Terminal",
     sftp: "SFTP",
     sftpText: "Der SFTP-Dateimanager folgt in einer späteren Version.",
-    editorHost: "Host bearbeiten",
-    editorProfile: "Login-Profil bearbeiten",
-    settings: "Einstellungen",
-    firstRun: "Willkommen bei LinaSCP",
-    export: "Exportieren",
-    import: "Importieren",
-    connect: "Verbindung",
   },
   auth: {
     password: "Passwort",
@@ -201,7 +193,6 @@ export const t = {
     keyPathPlaceholder: "~/.ssh/id_ed25519",
     pickKey: "Datei wählen …",
     pickKeyTitle: "Privaten Schlüssel wählen",
-    pickKeyFailed: "Dateiauswahl fehlgeschlagen",
     passphrase: "Passphrase",
     passphrasePlaceholder: "Optional",
     agentInfo: "Schlüssel werden vom laufenden SSH-Agent bezogen (SSH_AUTH_SOCK).",

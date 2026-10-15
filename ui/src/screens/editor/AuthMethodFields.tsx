@@ -32,7 +32,7 @@ export function AuthMethodFields({
       const path = await open({ multiple: false, directory: false, title: t.editor.pickKeyTitle });
       if (typeof path === "string") set({ keyPath: path });
     } catch (error) {
-      toast.show({ tone: "red", message: t.editor.pickKeyFailed, details: errorDetails(error) });
+      toast.show({ tone: "red", message: t.common.pickFileFailed, details: errorDetails(error) });
     }
   };
 
