@@ -14,6 +14,7 @@ describe("App", () => {
     vi.mocked(api.hostsList).mockResolvedValue([]);
     vi.mocked(api.groupsList).mockResolvedValue([]);
     vi.mocked(api.profilesList).mockResolvedValue([]);
+    vi.mocked(api.snippetsList).mockResolvedValue([]);
     render(<App />);
     expect(screen.getByRole("navigation", { name: "Hauptnavigation" })).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: "Server-Übersicht" })).toBeInTheDocument();

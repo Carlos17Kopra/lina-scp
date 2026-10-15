@@ -4,6 +4,7 @@ import { t } from "../i18n/de";
 import { errorDetails } from "../ipc/errors";
 import { HostsScreen } from "../screens/hosts/HostsScreen";
 import { SftpPlaceholder } from "../screens/sftp/SftpPlaceholder";
+import { SnippetsScreen } from "../screens/snippets/SnippetsScreen";
 import { TerminalScreen } from "../screens/terminal/TerminalScreen";
 import { useHostsStore } from "../stores/hosts";
 import { useSettingsStore } from "../stores/settings";
@@ -16,7 +17,7 @@ import { useGlobalShortcuts } from "./useGlobalShortcuts";
 import { useNoticeToasts } from "./useNoticeToasts";
 
 /**
- * Rail + the three views + modal layer. All views stay mounted (inactive ones are `hidden`)
+ * Rail + the views + modal layer. All views stay mounted (inactive ones are `hidden`)
  * so terminal sessions survive view switches.
  */
 export function AppShell() {
@@ -62,6 +63,9 @@ export function AppShell() {
         </section>
         <section className={styles.view} hidden={view !== "sftp"}>
           <SftpPlaceholder />
+        </section>
+        <section className={styles.view} hidden={view !== "snippets"}>
+          <SnippetsScreen />
         </section>
       </main>
       <ModalLayer />
