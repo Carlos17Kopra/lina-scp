@@ -1,7 +1,7 @@
 use std::os::unix::fs::PermissionsExt;
 
 use super::*;
-use crate::model::{ForwardKind, PortForward};
+use crate::model::{ForwardKind, PortForward, Snippet};
 use crate::secrets::MemorySecretStore;
 
 fn pass(s: &str) -> SecretString {
@@ -453,6 +453,7 @@ fn doc_with_keys(hosts: Vec<Host>, key_files: &[(&str, &[u8])]) -> Vec<u8> {
         groups: vec![Group::new("G", 0)],
         profiles: vec![],
         hosts,
+        snippets: vec![],
         settings: BTreeMap::new(),
         secrets: Some(encrypt(&serde_json::to_vec(&payload).unwrap(), &pass("pw")).unwrap()),
     };
@@ -591,4 +592,139 @@ fn plaintext_json_is_built_without_reallocating() {
     let json = plaintext_json(&payload).unwrap();
     assert_eq!(json.len(), json.capacity());
     assert_eq!(*json, serde_json::to_vec(&payload).unwrap());
+}
+
+/// host "web" + snippet bound to it + global snippet; list order: "Nginx neu laden", "Speicher".
+fn snippet_source() -> (Store, Host, Snippet, Snippet) {
+    let store = Store::open_in_memory().unwrap();
+    let host = Host::new("web", "10.0.0.5");
+    store.save_host(&host).unwrap();
+    let bound = Snippet::new("Nginx neu laden", "sudo nginx -t &&\nsudo systemctl reload nginx", Some(host.id));
+    let global = Snippet::new("Speicher", "df -h", None);
+    store.save_snippet(&bound).unwrap();
+    store.save_snippet(&global).unwrap();
+    (store, host, bound, global)
+}
+
+fn import_into(dst: &Store, bytes: &[u8], resolutions: &HashMap<Id, Resolution>) -> ImportReport {
+    let tmp = tempfile::tempdir().unwrap();
+    import_apply(bytes, None, resolutions, dst, &MemorySecretStore::new(), tmp.path()).unwrap()
+}
+
+fn export_json(store: &Store) -> serde_json::Value {
+    serde_json::from_slice(&export_data(store, &MemorySecretStore::new(), &no_secrets()).unwrap().bytes).unwrap()
+}
+
+#[test]
+fn snippets_roundtrip_with_their_host() {
+    let (src, host, bound, global) = snippet_source();
+    let bytes = export_data(&src, &MemorySecretStore::new(), &no_secrets()).unwrap().bytes;
+    let dst = Store::open_in_memory().unwrap();
+
+    let preview = import_preview(&bytes, &dst).unwrap();
+    assert_eq!(preview.items.iter().filter(|i| i.kind == ItemKind::Snippet).count(), 2);
+    let report = import_into(&dst, &bytes, &HashMap::new());
+
+    assert_eq!(report, ImportReport { imported: 3, skipped: 0, secrets_restored: 0, invalid: 0 });
+    let loaded = dst.get_snippet(bound.id).unwrap().unwrap();
+    assert_eq!((loaded.command.as_str(), loaded.host_id), (bound.command.as_str(), Some(host.id)));
+    assert_eq!(dst.get_snippet(global.id).unwrap().unwrap().host_id, None);
+}
+
+#[test]
+fn files_without_snippets_still_import() {
+    let src = source(None);
+    let mut json = export_json(&src.store);
+    json.as_object_mut().unwrap().remove("snippets");
+    let dst = Store::open_in_memory().unwrap();
+
+    let report = import_into(&dst, &serde_json::to_vec(&json).unwrap(), &HashMap::new());
+
+    assert_eq!((report.imported, report.invalid), (3, 0));
+    assert!(dst.list_snippets().unwrap().is_empty());
+}
+
+#[test]
+fn snippet_of_a_host_that_is_not_imported_becomes_global() {
+    let (src, _host, bound, _global) = snippet_source();
+    let mut json = export_json(&src);
+    json["hosts"] = serde_json::Value::Array(Vec::new());
+    let dst = Store::open_in_memory().unwrap();
+
+    import_into(&dst, &serde_json::to_vec(&json).unwrap(), &HashMap::new());
+
+    assert_eq!(dst.get_snippet(bound.id).unwrap().unwrap().host_id, None);
+}
+
+#[test]
+fn duplicated_host_takes_its_duplicated_snippets_along() {
+    let (src, host, bound, _global) = snippet_source();
+    let bytes = export_data(&src, &MemorySecretStore::new(), &no_secrets()).unwrap().bytes;
+    let resolutions = HashMap::from([(host.id, Resolution::Duplicate), (bound.id, Resolution::Duplicate)]);
+
+    import_into(&src, &bytes, &resolutions);
+
+    let copy_host = src.list_hosts().unwrap().into_iter().find(|h| h.name == "web (Import)").unwrap();
+    let copy = src.list_snippets().unwrap().into_iter().find(|s| s.name == "Nginx neu laden (Import)").unwrap();
+    assert_eq!(copy.host_id, Some(copy_host.id));
+    assert_eq!(src.get_snippet(bound.id).unwrap().unwrap().host_id, Some(host.id));
+}
+
+#[test]
+fn snippet_conflicts_skip_by_default_and_replace_on_request() {
+    let (src, _host, bound, _global) = snippet_source();
+    let bytes = export_data(&src, &MemorySecretStore::new(), &no_secrets()).unwrap().bytes;
+    let mut changed = bound.clone();
+    changed.command = "changed".into();
+    src.save_snippet(&changed).unwrap();
+
+    let report = import_into(&src, &bytes, &HashMap::new());
+    assert_eq!((report.imported, report.skipped), (0, 3));
+    assert_eq!(src.get_snippet(bound.id).unwrap().unwrap().command, "changed");
+
+    let report = import_into(&src, &bytes, &HashMap::from([(bound.id, Resolution::Replace)]));
+    assert_eq!((report.imported, report.skipped), (1, 2));
+    assert_eq!(src.get_snippet(bound.id).unwrap().unwrap().command, bound.command);
+}
+
+#[test]
+fn invalid_snippets_are_counted_and_not_written() {
+    let (src, _host, bound, global) = snippet_source();
+    let mut json = export_json(&src);
+    json["snippets"][0]["command"] = serde_json::Value::String(String::new());
+    let dst = Store::open_in_memory().unwrap();
+
+    let report = import_into(&dst, &serde_json::to_vec(&json).unwrap(), &HashMap::new());
+
+    assert_eq!((report.imported, report.invalid), (2, 1));
+    assert_eq!(dst.get_snippet(bound.id).unwrap(), None);
+    assert!(dst.get_snippet(global.id).unwrap().is_some());
+}
+
+#[test]
+fn equally_named_snippets_are_not_name_conflicts() {
+    let src = Store::open_in_memory().unwrap();
+    let web = Host::new("web", "10.0.0.5");
+    let db = Host::new("db", "10.0.0.6");
+    src.save_host(&web).unwrap();
+    src.save_host(&db).unwrap();
+    let web_logs = Snippet::new("Logs", "journalctl -u nginx", Some(web.id));
+    let db_logs = Snippet::new("Logs", "journalctl -u postgresql", Some(db.id));
+    src.save_snippet(&web_logs).unwrap();
+    src.save_snippet(&db_logs).unwrap();
+    let bytes = export_data(&src, &MemorySecretStore::new(), &no_secrets()).unwrap().bytes;
+
+    let dst = Store::open_in_memory().unwrap();
+    dst.save_host(&db).unwrap();
+    let local = Snippet::new("Logs", "tail -f /var/log/syslog", Some(db.id));
+    dst.save_snippet(&local).unwrap();
+
+    let preview = import_preview(&bytes, &dst).unwrap();
+    assert!(preview.items.iter().filter(|i| i.kind == ItemKind::Snippet).all(|i| i.conflict.is_none()));
+    let all_replace = HashMap::from([(web_logs.id, Resolution::Replace), (db_logs.id, Resolution::Replace)]);
+    import_into(&dst, &bytes, &all_replace);
+
+    assert_eq!(dst.get_snippet(local.id).unwrap().unwrap().command, "tail -f /var/log/syslog");
+    assert_eq!(dst.get_snippet(web_logs.id).unwrap().unwrap().host_id, Some(web.id));
+    assert_eq!(dst.get_snippet(db_logs.id).unwrap().unwrap().host_id, Some(db.id));
 }

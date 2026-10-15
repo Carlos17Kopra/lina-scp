@@ -1,4 +1,4 @@
-import type { Host, LoginProfile, ProfileWithUsage, SessionInfo } from "../ipc/api";
+import type { Host, LoginProfile, ProfileWithUsage, SessionInfo, Snippet } from "../ipc/api";
 
 /** Complete host with deterministic ids (tests must not rely on `newId()`, which is automocked). */
 export function makeHost(overrides: Partial<Host> = {}): Host {
@@ -63,6 +63,18 @@ export function makeSessionInfo(overrides: Partial<SessionInfo> = {}): SessionIn
     cipher: "chacha20-poly1305@openssh.com",
     mac: "none",
     authMethods: ["key"],
+    ...overrides,
+  };
+}
+
+export function makeSnippet(overrides: Partial<Snippet> = {}): Snippet {
+  return {
+    id: "sn-1",
+    name: "Logs folgen",
+    command: "docker compose logs -f",
+    hostId: null,
+    createdAt: 1,
+    updatedAt: 1,
     ...overrides,
   };
 }

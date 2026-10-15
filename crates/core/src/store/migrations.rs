@@ -81,7 +81,20 @@ ALTER TABLE hosts ADD COLUMN terminal_scheme TEXT;
 ALTER TABLE hosts ADD COLUMN terminal_font_size INTEGER;
 "#;
 
-const MIGRATIONS: &[&str] = &[V1, V2];
+/// TP2b: snippets, global (host_id NULL) or bound to one host.
+const V3: &str = r#"
+CREATE TABLE snippets (
+    id          TEXT PRIMARY KEY NOT NULL,
+    name        TEXT NOT NULL,
+    command     TEXT NOT NULL,
+    host_id     TEXT REFERENCES hosts(id) ON DELETE CASCADE,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+CREATE INDEX snippets_host_id ON snippets(host_id);
+"#;
+
+const MIGRATIONS: &[&str] = &[V1, V2, V3];
 
 /// Latest schema version known to this build.
 pub(crate) const LATEST_VERSION: i64 = MIGRATIONS.len() as i64;
@@ -130,6 +143,6 @@ mod tests {
             .unwrap();
         assert_eq!(row, (None, None));
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, LATEST_VERSION);
     }
 }

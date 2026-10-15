@@ -4,9 +4,11 @@ import { t } from "../i18n/de";
 import { errorDetails } from "../ipc/errors";
 import { HostsScreen } from "../screens/hosts/HostsScreen";
 import { SftpPlaceholder } from "../screens/sftp/SftpPlaceholder";
+import { SnippetsScreen } from "../screens/snippets/SnippetsScreen";
 import { TerminalScreen } from "../screens/terminal/TerminalScreen";
 import { useHostsStore } from "../stores/hosts";
 import { useSettingsStore } from "../stores/settings";
+import { useSnippetsStore } from "../stores/snippets";
 import { useUiStore } from "../stores/ui";
 import styles from "./AppShell.module.css";
 import { ModalLayer } from "./ModalLayer";
@@ -15,7 +17,7 @@ import { useGlobalShortcuts } from "./useGlobalShortcuts";
 import { useNoticeToasts } from "./useNoticeToasts";
 
 /**
- * Rail + the three views + modal layer. All views stay mounted (inactive ones are `hidden`)
+ * Rail + the views + modal layer. All views stay mounted (inactive ones are `hidden`)
  * so terminal sessions survive view switches.
  */
 export function AppShell() {
@@ -27,6 +29,7 @@ export function AppShell() {
   const settingsLoaded = useSettingsStore((state) => state.loaded);
   const loadSettings = useSettingsStore((state) => state.load);
   const loadHosts = useHostsStore((state) => state.load);
+  const loadSnippets = useSnippetsStore((state) => state.load);
   const toast = useToast();
 
   useGlobalShortcuts();
@@ -37,7 +40,8 @@ export function AppShell() {
       toast.show({ tone: "red", message: t.shell.loadFailed, details: errorDetails(error) });
     loadSettings().catch(report);
     loadHosts().catch(report);
-  }, [loadSettings, loadHosts, toast]);
+    loadSnippets().catch(report);
+  }, [loadSettings, loadHosts, loadSnippets, toast]);
 
   useEffect(() => {
     setTheme(theme);
@@ -59,6 +63,9 @@ export function AppShell() {
         </section>
         <section className={styles.view} hidden={view !== "sftp"}>
           <SftpPlaceholder />
+        </section>
+        <section className={styles.view} hidden={view !== "snippets"}>
+          <SnippetsScreen />
         </section>
       </main>
       <ModalLayer />

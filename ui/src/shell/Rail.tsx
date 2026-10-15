@@ -21,10 +21,10 @@ const VIEW_ITEMS: ReadonlyArray<{ view: View; label: string; icon: LucideIcon }>
   { view: "hosts", label: t.rail.hosts, icon: Server },
   { view: "terminal", label: t.rail.terminal, icon: SquareTerminal },
   { view: "sftp", label: t.rail.sftp, icon: FolderSync },
+  { view: "snippets", label: t.rail.snippets, icon: CodeXml },
 ];
 
 const LATER_ITEMS: ReadonlyArray<{ label: string; icon: LucideIcon }> = [
-  { label: t.rail.snippets, icon: CodeXml },
   { label: t.rail.keychain, icon: KeyRound },
   { label: t.rail.portForwarding, icon: ArrowRightLeft },
 ];

@@ -34,11 +34,13 @@ describe("Rail", () => {
     expect(screen.getByRole("button", { name: "Hosts" })).not.toHaveAttribute("aria-current");
     await userEvent.click(screen.getByRole("button", { name: "SFTP" }));
     expect(useUiStore.getState().view).toBe("sftp");
+    await userEvent.click(screen.getByRole("button", { name: "Snippets" }));
+    expect(useUiStore.getState().view).toBe("snippets");
   });
 
   it("shows later features as disabled with a tooltip", async () => {
     renderRail();
-    for (const name of ["Snippets", "Schlüsselbund", "Port-Forwarding"]) {
+    for (const name of ["Schlüsselbund", "Port-Forwarding"]) {
       const item = screen.getByRole("button", { name });
       expect(item).toHaveAttribute("aria-disabled", "true");
       expect(item).toHaveAttribute("title", `${name} – Folgt in einer späteren Version`);

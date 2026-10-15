@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Id, Theme } from "../ipc/api";
 
-export type View = "hosts" | "terminal" | "sftp";
+export type View = "hosts" | "terminal" | "sftp" | "snippets";
 
 /** `id` undefined = create a new host/profile. */
 export type EditorTarget = { kind: "host"; id?: Id } | { kind: "profile"; id?: Id };
@@ -12,7 +12,9 @@ export type ModalState =
   | { type: "firstRun" }
   | { type: "export" }
   | { type: "import" }
-  | { type: "connect" };
+  | { type: "connect" }
+  /** `id` undefined = new snippet; `hostId` preselects its scope. */
+  | { type: "snippet"; id?: Id; hostId?: Id | null };
 
 export interface UiState {
   view: View;

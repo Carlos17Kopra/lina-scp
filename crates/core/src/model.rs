@@ -215,6 +215,32 @@ impl Group {
     }
 }
 
+/// A saved command, global (`host_id == None`) or bound to one stored host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct Snippet {
+    pub id: Id,
+    pub name: String,
+    pub command: String,
+    pub host_id: Option<Id>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl Snippet {
+    pub fn new(name: &str, command: &str, host_id: Option<Id>) -> Self {
+        let now = now_unix();
+        Self {
+            id: uuid::Uuid::new_v4(),
+            name: name.to_string(),
+            command: command.to_string(),
+            host_id,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

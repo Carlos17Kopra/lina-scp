@@ -29,7 +29,9 @@ non-commercial open-source release later. Target platform is Linux only: Debian 
 - `docs/superpowers/plans/`: TP1 implementation plan (done).
 - `docs/superpowers/specs/2026-10-15-linascp-tp2a-sidebar-design.md`: TP2a spec (terminal sidebar, color schemes,
   session info).
-- `docs/acceptance-tp1.md`: manual acceptance checklist (`docs/acceptance-tp2a.md` for TP2a).
+- `docs/superpowers/specs/2026-10-15-linascp-tp2b-snippets-design.md`: TP2b spec (snippets).
+- `docs/acceptance-tp1.md`: manual acceptance checklist (`docs/acceptance-tp2a.md`, `docs/acceptance-tp2b.md` for
+  TP2a/TP2b).
 - `docs/backlog-after-tp1.md`: deferred review findings. Start TP2 planning there.
 
 ## Commands (run from the repo root)

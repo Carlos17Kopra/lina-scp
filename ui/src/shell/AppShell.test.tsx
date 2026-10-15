@@ -18,6 +18,7 @@ function mockBackend(settings: Partial<api.Settings> = {}) {
   vi.mocked(api.hostsList).mockResolvedValue([]);
   vi.mocked(api.groupsList).mockResolvedValue([]);
   vi.mocked(api.profilesList).mockResolvedValue([]);
+  vi.mocked(api.snippetsList).mockResolvedValue([]);
 }
 
 function renderShell() {
@@ -79,6 +80,7 @@ describe("AppShell", () => {
       [{ type: "firstRun" }, "Willkommen bei LinaSCP"],
       [{ type: "export" }, "Exportieren"],
       [{ type: "import" }, "Importieren"],
+      [{ type: "snippet" }, "Snippet anlegen"],
     ];
     for (const [modal, title] of cases) {
       act(() => useUiStore.getState().openModal(modal));
@@ -89,6 +91,12 @@ describe("AppShell", () => {
     // Without an active connect flow the connect overlay renders nothing.
     act(() => useUiStore.getState().openModal({ type: "connect" }));
     expect(screen.queryByRole("region", { name: /Verbindung zu/ })).not.toBeInTheDocument();
+  });
+
+  it("loads the snippets on start", async () => {
+    mockBackend();
+    renderShell();
+    await waitFor(() => expect(api.snippetsList).toHaveBeenCalled());
   });
 
   it("reports load failures as an error toast", async () => {

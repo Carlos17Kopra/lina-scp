@@ -54,6 +54,16 @@ fixed before the merge are not listed.
   - The "Tunnel folgen …" hint shows below every sidebar panel instead of on the disabled Tunnel tab.
   - The scheme radiogroup has no roving tabindex / arrow keys (10 tab stops).
   - Every xterm resize calls `updateTab`, re-rendering all terminal tabs while the window is dragged.
+- TP2b snippets (from the branch review):
+  - Import "Duplizieren" appends " (Import)" after validation, so a 64-character name is stored with 73; editing it
+    later fails until the name is shortened. Truncate before adding the suffix.
+  - The spec asks for field-level validation errors; core returns `Config` without a field and the editor shows a
+    toast. Either add field errors or update the spec.
+  - The placeholder send after the dialog closes relies on React flushing passive effects for discrete events before
+    the `queueMicrotask`; send from an effect after `pending === null` commits instead.
+  - Insert/▶ are enabled by `tab.status` only, not by a registered paste target; clicking without one does nothing.
+  - Enter during IME composition confirms the placeholder dialog (check `isComposing`).
+  - ▶ on a command ending in a newline sends a second Enter (empty prompt line).
 
 ## Packaging / CI
 

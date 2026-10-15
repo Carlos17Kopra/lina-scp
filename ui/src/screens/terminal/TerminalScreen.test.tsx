@@ -73,6 +73,9 @@ describe("TerminalScreen", () => {
     expect(toggle).toHaveAttribute("aria-pressed", "true");
     expect(within(sidebar).getByRole("tab", { name: "Sitzung" })).toHaveAttribute("aria-selected", "true");
     expect(within(sidebar).getByRole("tab", { name: "Tunnel" })).toBeDisabled();
+    await userEvent.click(within(sidebar).getByRole("tab", { name: "Snippets" }));
+    expect(within(sidebar).getByRole("searchbox", { name: "Snippets suchen" })).toBeInTheDocument();
+    await userEvent.click(within(sidebar).getByRole("tab", { name: "Sitzung" }));
     await userEvent.click(within(sidebar).getByRole("tab", { name: "Design" }));
     expect(within(sidebar).getByRole("radiogroup", { name: "Farbschema" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("tab", { name: "Lokales Terminal" }));

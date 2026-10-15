@@ -22,6 +22,7 @@ import type {
   SecretOwner,
   SessionEventDto,
   Settings,
+  Snippet,
 } from "./bindings";
 
 export type {
@@ -58,6 +59,7 @@ export type {
   SessionInfo,
   Settings,
   SftpSettings,
+  Snippet,
   SshMode,
   Step,
   TerminalRenderer,
@@ -123,6 +125,17 @@ export function secretSet(owner: SecretOwner, kind: SecretKind, value: string): 
 }
 export function secretDelete(owner: SecretOwner, kind: SecretKind): Promise<void> {
   return unwrapVoid(commands.secretDelete(owner, kind));
+}
+
+// Snippets
+export function snippetsList(): Promise<Snippet[]> {
+  return unwrap(commands.snippetsList());
+}
+export function snippetSave(snippet: Snippet): Promise<Snippet> {
+  return unwrap(commands.snippetSave(snippet));
+}
+export function snippetDelete(id: Id): Promise<void> {
+  return unwrapVoid(commands.snippetDelete(id));
 }
 
 // Settings

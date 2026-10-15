@@ -7,6 +7,7 @@ import { DEFAULT_SETTINGS, useSettingsStore } from "../../stores/settings";
 import { dropStream, registerStream } from "../../stores/streams";
 import { useUiStore } from "../../stores/ui";
 import { makeHost } from "../../test/fixtures";
+import { getPasteTarget } from "./pasteTargets";
 import { TerminalView } from "./TerminalView";
 
 const fakes = vi.hoisted(() => {
@@ -30,6 +31,7 @@ const fakes = vi.hoisted(() => {
     written: Array<string | Uint8Array> = [];
     selection = "";
     pasted: string[] = [];
+    inputs: string[] = [];
     keyHandler: ((event: KeyboardEvent) => boolean) | null = null;
     disposed = false;
     data = new Emitter<string>();
@@ -65,6 +67,9 @@ const fakes = vi.hoisted(() => {
     }
     paste(text: string) {
       this.pasted.push(text);
+    }
+    input(data: string) {
+      this.inputs.push(data);
     }
     focus() {}
     dispose() {
@@ -259,6 +264,18 @@ describe("TerminalView", () => {
     expect((container.querySelector("[data-terminal]") as HTMLElement).style.background).toBe("rgb(46, 52, 64)");
     act(() => useHostsStore.setState({ hosts: [makeHost({ id: "h", terminalScheme: null, terminalFontSize: null })] }));
     expect(term().options).toMatchObject({ fontSize: 14, theme: { background: "#0B0E13" } });
+  });
+
+  it("registers a paste target: insert pastes, run pastes then sends Enter through xterm input", () => {
+    const { unmount } = render(<TerminalView tab={tab} visible />);
+    const target = getPasteTarget(tab.id);
+    target?.insert("ls -la");
+    target?.run("cd /srv\ngit pull");
+    expect(term().pasted).toEqual(["ls -la", "cd /srv\ngit pull"]);
+    // Enter goes through term.input → onData → the same ordered sessionWrite queue as the paste.
+    expect(term().inputs).toEqual(["\r"]);
+    unmount();
+    expect(getPasteTarget(tab.id)).toBeUndefined();
   });
 
   it("detaches and disposes on unmount", () => {

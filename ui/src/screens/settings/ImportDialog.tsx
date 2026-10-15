@@ -6,6 +6,7 @@ import { type Id, type ImportPreview, importApply, importPreview, type Resolutio
 import { errorDetails } from "../../ipc/errors";
 import { useHostsStore } from "../../stores/hosts";
 import { useSettingsStore } from "../../stores/settings";
+import { useSnippetsStore } from "../../stores/snippets";
 import { useUiStore } from "../../stores/ui";
 import styles from "./Settings.module.css";
 import { defaultResolutions, isWrongPassphrase, LINASCP_FILTER, reportMessage } from "./transfer";
@@ -57,7 +58,11 @@ export function ImportDialog() {
       const report = await importApply(stage.path, stage.preview.hasSecrets && passphrase ? passphrase : null, resolutions);
       toast.show({ tone: report.invalid > 0 ? "amber" : "green", message: reportMessage(report) });
       try {
-        await Promise.all([useHostsStore.getState().load(), useSettingsStore.getState().load()]);
+        await Promise.all([
+          useHostsStore.getState().load(),
+          useSettingsStore.getState().load(),
+          useSnippetsStore.getState().load(),
+        ]);
       } catch (error) {
         toast.show({ tone: "red", message: t.shell.loadFailed, details: errorDetails(error) });
       }
