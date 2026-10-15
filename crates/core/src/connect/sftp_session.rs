@@ -116,8 +116,9 @@ impl SftpSession {
         name.files.into_iter().next().map(|f| f.filename).ok_or_else(|| CoreError::internal("empty realpath reply"))
     }
 
-    async fn link_target(&self, path: &str) -> Option<LinkTarget> {
-        let attrs = self.raw.stat(path).await.ok()?.attrs;
+    /// Target kind of a symlink at `path`; `None` for non-links and dangling links.
+    async fn link_target(&self, path: Option<String>) -> Option<LinkTarget> {
+        let attrs = self.raw.stat(path?).await.ok()?.attrs;
         Some(if attrs.is_dir() {
             LinkTarget::Dir
         } else if attrs.is_regular() {
@@ -144,13 +145,10 @@ impl SftpSession {
         let _ = self.raw.close(handle.as_str()).await;
         let files: Vec<_> = files.into_iter().filter(|f| f.filename != "." && f.filename != "..").collect();
         // One `stat` per link, pipelined: sequential round trips make link-heavy dirs (/etc/alternatives) crawl.
-        let targets: Vec<Option<LinkTarget>> = stream::iter(&files)
-            .map(|file| async {
-                if file.attrs.is_symlink() { self.link_target(&join(&path, &file.filename)).await } else { None }
-            })
-            .buffered(LINK_STAT_CONCURRENCY)
-            .collect()
-            .await;
+        let links: Vec<Option<String>> =
+            files.iter().map(|f| f.attrs.is_symlink().then(|| join(&path, &f.filename))).collect();
+        let targets: Vec<Option<LinkTarget>> =
+            stream::iter(links).map(|link| self.link_target(link)).buffered(LINK_STAT_CONCURRENCY).collect().await;
         let mut entries = Vec::with_capacity(files.len());
         for (file, target) in files.into_iter().zip(targets) {
             let attrs: &FileAttributes = &file.attrs;
