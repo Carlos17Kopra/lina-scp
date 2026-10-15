@@ -30,6 +30,8 @@ export function makeHost(overrides: Partial<Host> = {}): Host {
       sftpServerCmd: null,
     },
     forwards: [],
+    terminalScheme: null,
+    terminalFontSize: null,
     source: "linascp",
     createdAt: 1,
     updatedAt: 1,

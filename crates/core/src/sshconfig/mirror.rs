@@ -247,6 +247,17 @@ mod tests {
     use crate::model::Id;
     use std::os::unix::fs::PermissionsExt;
 
+    #[test]
+    fn render_ignores_terminal_overrides() {
+        let (mut hosts, profiles) = sample();
+        let plain = Mirror::render(&hosts, &profiles);
+        for host in &mut hosts {
+            host.terminal_scheme = Some("nord".into());
+            host.terminal_font_size = Some(16);
+        }
+        assert_eq!(Mirror::render(&hosts, &profiles), plain);
+    }
+
     fn sample() -> (Vec<Host>, Vec<LoginProfile>) {
         let profile = LoginProfile::new(
             "ops",

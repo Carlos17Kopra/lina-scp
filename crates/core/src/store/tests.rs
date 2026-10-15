@@ -19,6 +19,8 @@ fn full_host() -> Host {
     h.keepalive_s = 10;
     h.timeout_s = 5;
     h.start_command = Some("tmux attach".into());
+    h.terminal_scheme = Some("nord".into());
+    h.terminal_font_size = Some(16);
     h.env = vec![EnvVar { key: "LANG".into(), value: "C.UTF-8".into() }];
     h.sftp = SftpSettings {
         remote_start: Some("/var/www".into()),

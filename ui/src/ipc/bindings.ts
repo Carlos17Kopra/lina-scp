@@ -98,6 +98,10 @@ export type Host = {
 	env: EnvVar[],
 	sftp: SftpSettings,
 	forwards: PortForward[],
+	/**  Terminal color scheme override (`"auto"` or a `schemes.json` id); `None` = global setting. */
+	terminalScheme?: string | null,
+	/**  Terminal font size override in px; `None` = global setting. */
+	terminalFontSize?: number | null,
 	source: HostSource,
 	createdAt: number,
 	updatedAt: number,

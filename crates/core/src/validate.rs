@@ -4,6 +4,8 @@
 //! that contains a line break, another control character or a double quote could break out of
 //! its `~/.ssh/config.d/linascp.conf` line and inject directives such as `ProxyCommand`.
 
+use std::ops::RangeInclusive;
+
 use crate::error::{CoreError, Result};
 use crate::model::{AuthConfig, Host, HostAuth, LoginProfile};
 
@@ -47,6 +49,15 @@ fn check_auth(auth: &AuthConfig) -> Result<()> {
 }
 
 /// Checks a host's own fields. A referenced login profile is checked by [`validate_profile`].
+/// Allowed terminal font sizes in px (`schemes.json` `fontSize.min/max`).
+pub const TERMINAL_FONT_SIZES: RangeInclusive<u16> = 10..=20;
+
+/// `"auto"` or a scheme id from `schemes.json`. The core only checks the format; the UI maps
+/// ids it does not know (e.g. from a newer build) to `"auto"`.
+pub fn is_valid_terminal_scheme(id: &str) -> bool {
+    (1..=32).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphabetic())
+}
+
 pub fn validate_host(host: &Host) -> Result<()> {
     check_text("Name", &host.name)?;
     check_value("Adresse", &host.address)?;
@@ -58,6 +69,16 @@ pub fn validate_host(host: &Host) -> Result<()> {
     }
     if let Some(user) = &host.user {
         check_value("Benutzer", user)?;
+    }
+    if let Some(scheme) = &host.terminal_scheme
+        && !is_valid_terminal_scheme(scheme)
+    {
+        return Err(CoreError::config("Ungültiges Farbschema"));
+    }
+    if let Some(size) = host.terminal_font_size
+        && !TERMINAL_FONT_SIZES.contains(&size)
+    {
+        return Err(CoreError::config("Schriftgröße muss zwischen 10 und 20 px liegen"));
     }
     match &host.auth {
         HostAuth::Custom { auth } => check_auth(auth),
@@ -145,5 +166,29 @@ mod tests {
         let mut host = Host::new("O'Reilly #1 \\ server", "h.example");
         host.user = Some("a#b".into());
         assert!(validate_host(&host).is_ok());
+    }
+
+    #[test]
+    fn terminal_overrides_are_range_and_format_checked() {
+        let mut host = Host::new("h", "h.example");
+        for size in [10, 20] {
+            host.terminal_font_size = Some(size);
+            assert!(validate_host(&host).is_ok(), "size {size}");
+        }
+        for size in [9, 21] {
+            host.terminal_font_size = Some(size);
+            assert!(validate_host(&host).is_err(), "size {size}");
+        }
+        host.terminal_font_size = None;
+        let longest = "x".repeat(32);
+        for scheme in ["auto", "nord", "solDark", longest.as_str()] {
+            host.terminal_scheme = Some(scheme.into());
+            assert!(validate_host(&host).is_ok(), "scheme {scheme:?}");
+        }
+        let too_long = "x".repeat(33);
+        for scheme in ["", "a b", "../x", "nörd", too_long.as_str()] {
+            host.terminal_scheme = Some(scheme.into());
+            assert!(validate_host(&host).is_err(), "scheme {scheme:?}");
+        }
     }
 }

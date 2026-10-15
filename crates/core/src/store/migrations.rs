@@ -75,7 +75,13 @@ CREATE TABLE settings (
 );
 "#;
 
-const MIGRATIONS: &[&str] = &[V1];
+/// TP2a: per-host terminal scheme / font size overrides (NULL = global setting).
+const V2: &str = r#"
+ALTER TABLE hosts ADD COLUMN terminal_scheme TEXT;
+ALTER TABLE hosts ADD COLUMN terminal_font_size INTEGER;
+"#;
+
+const MIGRATIONS: &[&str] = &[V1, V2];
 
 /// Latest schema version known to this build.
 pub(crate) const LATEST_VERSION: i64 = MIGRATIONS.len() as i64;
@@ -99,4 +105,31 @@ pub(crate) fn run(conn: &mut Connection) -> Result<()> {
         tx.commit()?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v2_adds_nullable_terminal_columns_to_existing_hosts() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(V1).unwrap();
+        conn.execute_batch("PRAGMA user_version = 1").unwrap();
+        conn.execute(
+            "INSERT INTO hosts (id, name, address, auth_method, created_at, updated_at) \
+             VALUES ('a', 'n', 'h', 'password', 0, 0)",
+            [],
+        )
+        .unwrap();
+        run(&mut conn).unwrap();
+        let row: (Option<String>, Option<i64>) = conn
+            .query_row("SELECT terminal_scheme, terminal_font_size FROM hosts WHERE id = 'a'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(row, (None, None));
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(version, 2);
+    }
 }
