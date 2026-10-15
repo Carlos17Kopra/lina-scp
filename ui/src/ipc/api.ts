@@ -166,10 +166,55 @@ export function sessionOpenLocal(
 
 const encoder = new TextEncoder();
 
-/** Accepts xterm `onData` strings (UTF-8 encoded here) or raw bytes. */
+/** Input typed while a session's write is in flight, sent as one batch afterwards. */
+interface WriteBatch {
+  chunks: Uint8Array[];
+  done: Promise<void>;
+  resolve: () => void;
+  reject: (error: unknown) => void;
+}
+
+/** Key present = a write of that session is in flight; value = the batch waiting behind it. */
+const writeQueues = new Map<SessionId, WriteBatch | undefined>();
+
+async function sendInput(sessionId: SessionId, chunks: Uint8Array[]): Promise<void> {
+  try {
+    await unwrapVoid(commands.sessionWrite(sessionId, chunks.flatMap((chunk) => Array.from(chunk))));
+  } finally {
+    const next = writeQueues.get(sessionId);
+    if (next) {
+      writeQueues.set(sessionId, undefined);
+      sendInput(sessionId, next.chunks).then(next.resolve, next.reject);
+    } else {
+      writeQueues.delete(sessionId);
+    }
+  }
+}
+
+/**
+ * Accepts xterm `onData` strings (UTF-8 encoded here) or raw bytes. Tauri runs invokes
+ * concurrently, so separate writes could overtake each other: per session only one write is in
+ * flight, and input arriving meanwhile is batched behind it in order.
+ */
 export function sessionWrite(sessionId: SessionId, data: string | Uint8Array): Promise<void> {
   const bytes = typeof data === "string" ? encoder.encode(data) : data;
-  return unwrapVoid(commands.sessionWrite(sessionId, Array.from(bytes)));
+  if (!writeQueues.has(sessionId)) {
+    writeQueues.set(sessionId, undefined);
+    return sendInput(sessionId, [bytes]);
+  }
+  let batch = writeQueues.get(sessionId);
+  if (!batch) {
+    let resolve!: () => void;
+    let reject!: (error: unknown) => void;
+    const done = new Promise<void>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    batch = { chunks: [], done, resolve, reject };
+    writeQueues.set(sessionId, batch);
+  }
+  batch.chunks.push(bytes);
+  return batch.done;
 }
 export function sessionResize(sessionId: SessionId, cols: number, rows: number): Promise<void> {
   return unwrapVoid(commands.sessionResize(sessionId, cols, rows));

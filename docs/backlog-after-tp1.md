@@ -6,25 +6,8 @@ fixed before the merge are not listed.
 
 ## Security / robustness (prioritise in TP2)
 
-- **Mirror mode:**
-  - A crafted import can define a `Host` alias equal to a real hostname (e.g. `github.com`) with an attacker `HostName`. This is inherent to import plus mirror. Consider namespacing aliases or confirming imported hosts.
-  - A `ProxyJump` to a jump host that was skipped because its alias collides with another host's resolves to that other host. Omit `ProxyJump` when the jump host itself was not rendered.
-  - The alias of a jump host imported from ssh-config is also ASCII-sanitized in `ProxyJump`, so a non-ASCII imported alias produces a wrong `ProxyJump`. Use the raw alias for `source != Linascp`.
-  - `merge_hosts` also hides a hand-written ssh-config alias that equals a stored host's sanitized name.
-- **known_hosts:**
-  - `@revoked` lines are ignored.
-  - `replace()` renames over a symlinked `known_hosts`, and its read-modify-write can lose a concurrent `ssh` append.
-- **Sessions:**
-  - Spec §9: panics in session tasks are not caught (no `catch_unwind`; `SessionEvent::Error` is never produced for them).
-  - The local PTY writer thread stays parked after close if a write is stuck on a full PTY. Use a non-blocking fd plus poll.
-- **Import:**
-  - Embedded key files of rejected import entries are still written to `~/.ssh/linascp`.
-  - Jump-chain rejection runs in a single pass.
-  - Import writes are not one DB transaction.
-- **Secrets hygiene:** the plaintext export JSON, keyboard-interactive responses and key text are not zeroized. The passphrase is saved after local decrypt, before the server has accepted it.
-- **Connect:**
-  - A cancel invoke processed before `connect_ssh` registers its token is still lost; the window is tiny now.
-  - Terminal input order across separate `session_write` invokes is not guaranteed.
+- **Mirror mode:** a crafted import can still define an undotted alias that is a real host name (`localhost`, a search-domain short name like `gitlab`) with an attacker `HostName`; only dotted aliases must equal their address. Full fix: confirm imported hosts before they reach the mirror, or namespace aliases.
+- **Secrets hygiene:** keyboard-interactive responses are not zeroized: russh takes the `Vec<String>` by value, and the answer has already passed through IPC/serde copies. Needs an upstream API taking secret buffers.
 
 ## Behaviour / UX
 
@@ -72,6 +55,8 @@ fixed before the merge are not listed.
 - The README apt/backports commands were not verified on a clean system.
 
 ## Tests / code quality
+
+- `local_pty_roundtrip` and `a_session_that_exits_on_its_own_is_removed_from_both_maps` (src-tauri) spawn the developer's real `$SHELL`; a slow or interactive rc file (e.g. fastfetch waiting for terminal replies) makes them time out. Make them hermetic.
 
 - Test gaps:
   - Prompter events are never asserted.

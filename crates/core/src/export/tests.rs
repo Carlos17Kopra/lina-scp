@@ -294,7 +294,8 @@ fn encrypt_uses_fixed_work_factor_decryptable_regardless_of_machine_speed() {
 #[test]
 fn decrypt_payload_accepts_the_fixed_work_factor() {
     let passphrase = pass("whatever");
-    let payload = SecretPayload { secrets: BTreeMap::from([("a".to_string(), "b".to_string())]), ..Default::default() };
+    let payload =
+        SecretPayload { secrets: BTreeMap::from([("a".to_string(), "b".to_string())]), key_files: BTreeMap::new() };
     let json = serde_json::to_vec(&payload).unwrap();
     let block = encrypt(&json, &passphrase).unwrap();
     let decoded = decrypt_payload(&block, &passphrase).unwrap();
@@ -406,4 +407,164 @@ fn import_rejects_hosts_that_would_inject_ssh_config_directives() {
     let conf = fs::read_to_string(ssh_dir.join("config.d/linascp.conf")).unwrap();
     assert!(conf.contains("Host good\n"), "{conf}");
     assert!(!conf.contains("ProxyCommand") && !conf.contains("Match") && !conf.contains("pwned"), "{conf}");
+}
+
+fn key_host(name: &str, address: &str, key_path: &str) -> Host {
+    let mut host = Host::new(name, address);
+    host.auth = HostAuth::Custom {
+        auth: AuthConfig { method: AuthMethod::Key, key_path: Some(key_path.into()), has_secret: false },
+    };
+    host
+}
+
+/// An export file with the given hosts and embedded key files (path -> content), passphrase "pw".
+fn doc_with_keys(hosts: Vec<Host>, key_files: &[(&str, &[u8])]) -> Vec<u8> {
+    let payload = SecretPayload {
+        secrets: BTreeMap::new(),
+        key_files: key_files.iter().map(|(path, content)| (path.to_string(), B64.encode(content))).collect(),
+    };
+    let doc = ExportDoc {
+        format_version: FORMAT_VERSION,
+        exported_at: 0,
+        groups: vec![Group::new("G", 0)],
+        profiles: vec![],
+        hosts,
+        settings: BTreeMap::new(),
+        secrets: Some(encrypt(&serde_json::to_vec(&payload).unwrap(), &pass("pw")).unwrap()),
+    };
+    serde_json::to_vec(&doc).unwrap()
+}
+
+#[test]
+fn key_files_of_rejected_or_skipped_hosts_are_not_written() {
+    let existing = Host::new("taken", "t.example");
+    let dst = Store::open_in_memory().unwrap();
+    dst.save_host(&existing).unwrap();
+    let bytes = doc_with_keys(
+        vec![
+            key_host("good", "g.example", "/k/id_good"),
+            key_host("evil", "x.example\n    ProxyCommand touch /tmp/pwned", "/k/id_evil"),
+            key_host("taken", "t.example", "/k/id_taken"),
+        ],
+        &[("/k/id_good", b"GOOD"), ("/k/id_evil", b"EVIL"), ("/k/id_taken", b"TAKEN")],
+    );
+    let tmp = tempfile::tempdir().unwrap();
+    let key_dir = tmp.path().join("keys");
+
+    let report =
+        import_apply(&bytes, Some(&pass("pw")), &HashMap::new(), &dst, &MemorySecretStore::new(), &key_dir).unwrap();
+
+    assert_eq!((report.invalid, report.skipped), (1, 1), "{report:?}");
+    let mut written: Vec<_> = fs::read_dir(&key_dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+    written.sort();
+    assert_eq!(written, vec!["id_good"]);
+}
+
+#[test]
+fn rejection_follows_jump_chains_in_any_order() {
+    let bad = Host::new("c-bad", "x.example\n    ProxyCommand touch /tmp/pwned");
+    let mut middle = Host::new("b-middle", "m.example");
+    middle.jump_host_id = Some(bad.id);
+    let mut last = Host::new("a-last", "l.example");
+    last.jump_host_id = Some(middle.id);
+    let src = Store::open_in_memory().unwrap();
+    for host in [&bad, &middle, &last] {
+        src.save_host(host).unwrap();
+    }
+    let bytes = export_data(&src, &MemorySecretStore::new(), &no_secrets()).unwrap().bytes;
+
+    let dst = Store::open_in_memory().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let report = import_apply(&bytes, None, &HashMap::new(), &dst, &MemorySecretStore::new(), tmp.path()).unwrap();
+
+    assert_eq!((report.imported, report.invalid), (0, 3), "{report:?}");
+    assert!(dst.list_hosts().unwrap().is_empty());
+}
+
+#[test]
+fn failed_import_writes_nothing() {
+    // Two hosts sharing a port forward id make the second insert fail half-way.
+    let forward = PortForward {
+        id: Id::new_v4(),
+        kind: ForwardKind::Local,
+        bind: "8080".into(),
+        target: "localhost:80".into(),
+        autostart: false,
+    };
+    let mut first = key_host("first", "f.example", "/k/id_first");
+    first.forwards = vec![forward.clone()];
+    let mut second = Host::new("second", "s.example");
+    second.forwards = vec![forward];
+    let bytes = doc_with_keys(vec![first, second], &[("/k/id_first", b"FIRST")]);
+    let dst = Store::open_in_memory().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let key_dir = tmp.path().join("keys");
+
+    let result = import_apply(&bytes, Some(&pass("pw")), &HashMap::new(), &dst, &MemorySecretStore::new(), &key_dir);
+
+    assert!(result.is_err());
+    assert!(dst.list_groups().unwrap().is_empty() && dst.list_hosts().unwrap().is_empty());
+    assert!(fs::read_dir(&key_dir).map(|mut d| d.next().is_none()).unwrap_or(true), "no key file left behind");
+}
+
+/// Fails every `set` after the first `ok` ones; otherwise a `MemorySecretStore`.
+struct FlakyKeyring {
+    inner: MemorySecretStore,
+    ok: std::sync::atomic::AtomicUsize,
+}
+
+impl SecretStore for FlakyKeyring {
+    fn get(&self, owner: SecretOwner, kind: SecretKind) -> Result<Option<SecretString>> {
+        self.inner.get(owner, kind)
+    }
+    fn set(&self, owner: SecretOwner, kind: SecretKind, value: &SecretString) -> Result<()> {
+        let left = self.ok.load(std::sync::atomic::Ordering::SeqCst);
+        if left == 0 {
+            return Err(CoreError::Keyring { message: "locked".into() });
+        }
+        self.ok.store(left - 1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.set(owner, kind, value)
+    }
+    fn delete(&self, owner: SecretOwner, kind: SecretKind) -> Result<()> {
+        self.inner.delete(owner, kind)
+    }
+}
+
+#[test]
+fn keyring_failure_rolls_the_whole_import_back() {
+    let tmp = tempfile::tempdir().unwrap();
+    let key_src = tmp.path().join("id_test");
+    fs::write(&key_src, b"PRIVATE KEY DATA").unwrap();
+    let src = source(Some(&key_src));
+    let bytes = export_data(&src.store, &src.secrets, &with_secrets("pw", true)).unwrap().bytes;
+
+    // The destination already holds the profile (replaced by the import) with an older secret.
+    let dst = Store::open_in_memory().unwrap();
+    dst.save_profile(&src.profile).unwrap();
+    let keyring = FlakyKeyring { inner: MemorySecretStore::new(), ok: 1.into() };
+    keyring.inner.set(SecretOwner::Profile(src.profile.id), SecretKind::Password, &pass("old")).unwrap();
+    let resolutions = HashMap::from([(src.profile.id, Resolution::Replace)]);
+    let key_dir = tmp.path().join("keys");
+
+    let result = import_apply(&bytes, Some(&pass("pw")), &resolutions, &dst, &keyring, &key_dir);
+
+    assert!(matches!(result, Err(CoreError::Keyring { .. })), "{result:?}");
+    assert!(dst.list_hosts().unwrap().is_empty() && dst.list_groups().unwrap().is_empty());
+    let profile_secret = keyring.inner.get(SecretOwner::Profile(src.profile.id), SecretKind::Password).unwrap();
+    assert_eq!(profile_secret.unwrap().expose_secret(), "old", "overwritten secret is restored");
+    for host in src.store.list_hosts().unwrap() {
+        assert!(keyring.inner.get(SecretOwner::Host(host.id), SecretKind::Passphrase).unwrap().is_none());
+    }
+    assert!(fs::read_dir(&key_dir).map(|mut d| d.next().is_none()).unwrap_or(true), "no key file left behind");
+}
+
+#[test]
+fn plaintext_json_is_built_without_reallocating() {
+    let payload = SecretPayload {
+        secrets: (0..200).map(|i| (format!("host:{i}:password"), "x".repeat(i))).collect(),
+        key_files: BTreeMap::new(),
+    };
+    let json = plaintext_json(&payload).unwrap();
+    assert_eq!(json.len(), json.capacity());
+    assert_eq!(*json, serde_json::to_vec(&payload).unwrap());
 }

@@ -7,6 +7,7 @@ use russh::MethodSet;
 use russh::client::{self, KeyboardInteractiveAuthResponse};
 use russh::keys::agent::client::AgentClient;
 use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg};
+use secrecy::zeroize::Zeroizing;
 use secrecy::{ExposeSecret, SecretString};
 use tokio_util::sync::CancellationToken;
 
@@ -278,14 +279,18 @@ fn decode_key(text: &str, passphrase: Option<&str>) -> std::result::Result<Priva
     russh::keys::decode_secret_key(text, passphrase)
 }
 
-async fn load_key(ctx: &AuthContext<'_>, key_path: &str) -> Result<PrivateKey> {
+/// Loads (and if needed decrypts) the key. Also returns a typed passphrase the user asked to
+/// save; the caller saves it only once the server accepted the key.
+async fn load_key(ctx: &AuthContext<'_>, key_path: &str) -> Result<(PrivateKey, Option<SecretString>)> {
     let home = std::env::var("HOME").unwrap_or_default();
     let path = expand_tilde(key_path, Path::new(&home));
-    let text = tokio::fs::read_to_string(&path)
-        .await
-        .map_err(|e| CoreError::Config { message: format!("cannot read key file {}: {e}", path.display()) })?;
+    let text = Zeroizing::new(
+        tokio::fs::read_to_string(&path)
+            .await
+            .map_err(|e| CoreError::Config { message: format!("cannot read key file {}: {e}", path.display()) })?,
+    );
     match decode_key(&text, None) {
-        Ok(key) => return Ok(key),
+        Ok(key) => return Ok((key, None)),
         Err(russh::keys::Error::KeyIsEncrypted) => {}
         Err(e) => {
             return Err(CoreError::Config { message: format!("invalid key file {}: {e}", path.display()) });
@@ -298,12 +303,7 @@ async fn load_key(ctx: &AuthContext<'_>, key_path: &str) -> Result<PrivateKey> {
             None => ctx.ask_secret(Prompt::Passphrase { key_path: key_path.to_string() }).await?,
         };
         match decode_key(&text, Some(passphrase.expose_secret())) {
-            Ok(key) => {
-                if save {
-                    ctx.save_secret(SecretKind::Passphrase, passphrase).await;
-                }
-                return Ok(key);
-            }
+            Ok(key) => return Ok((key, save.then_some(passphrase))),
             Err(_) => ctx.log("debug1: Wrong passphrase for key".to_string()),
         }
     }
@@ -316,13 +316,19 @@ async fn load_key(ctx: &AuthContext<'_>, key_path: &str) -> Result<PrivateKey> {
 async fn key_flow(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -> Result<MethodOutcome> {
     let key_path =
         ctx.auth.key_path.clone().ok_or_else(|| CoreError::Config { message: "no key file configured".to_string() })?;
-    let key = load_key(ctx, &key_path).await?;
+    let (key, to_save) = load_key(ctx, &key_path).await?;
     ctx.log(format!("debug1: Offering public key: {key_path}"));
-    match auth.publickey(&ctx.user, key).await? {
-        AuthOutcome::Success => Ok(MethodOutcome::Done),
-        AuthOutcome::Partial { remaining } => Ok(MethodOutcome::Partial(remaining)),
-        AuthOutcome::Rejected { remaining } => Err(auth_error(remaining, "publickey", "public key was rejected")),
+    let outcome = match auth.publickey(&ctx.user, key).await? {
+        AuthOutcome::Success => MethodOutcome::Done,
+        AuthOutcome::Partial { remaining } => MethodOutcome::Partial(remaining),
+        AuthOutcome::Rejected { remaining } => {
+            return Err(auth_error(remaining, "publickey", "public key was rejected"));
+        }
+    };
+    if let Some(passphrase) = to_save {
+        ctx.save_secret(SecretKind::Passphrase, passphrase).await;
     }
+    Ok(outcome)
 }
 
 async fn agent_flow(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -> Result<MethodOutcome> {
@@ -723,6 +729,19 @@ NKGOvMLy4gKjk9jA==
         assert!(matches!(h.prompts()[0], Prompt::Passphrase { .. }));
         let saved = h.secrets.get(h.owner, SecretKind::Passphrase).unwrap().unwrap();
         assert_eq!(saved.expose_secret(), "secret");
+    }
+
+    #[tokio::test]
+    async fn passphrase_is_not_saved_when_the_server_rejects_the_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("id_ed25519");
+        std::fs::write(&key_path, ENCRYPTED_KEY).unwrap();
+        let h = Harness::new(vec![secret("secret", true)]);
+        let mut fake = FakeAuth { publickey_results: VecDeque::from([rejected(&["password"])]), ..Default::default() };
+        let err =
+            authenticate(&mut fake, &h.ctx(AuthMethod::Key, Some(key_path.display().to_string()))).await.unwrap_err();
+        assert!(matches!(err, CoreError::Auth { .. }));
+        assert!(h.secrets.get(h.owner, SecretKind::Passphrase).unwrap().is_none());
     }
 
     #[tokio::test]

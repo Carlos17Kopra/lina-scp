@@ -32,7 +32,11 @@ pub struct HostKeyInfo {
 pub enum HostKeyStatus {
     Known,
     Unknown,
-    Changed { stored: HostKeyInfo },
+    Changed {
+        stored: HostKeyInfo,
+    },
+    /// The key is marked `@revoked` for this host. Never accepted.
+    Revoked,
 }
 
 pub fn fingerprints(key: &PublicKey) -> HostKeyInfo {
@@ -55,23 +59,35 @@ impl KnownHosts {
         Self { path }
     }
 
+    /// `Revoked` if a matching `@revoked` line has this key (wins over everything, like OpenSSH),
     /// `Known` if any matching entry has exactly this key, `Changed` if a matching entry has
     /// a different key of the same algorithm, otherwise `Unknown`.
     pub fn check(&self, host: &str, port: u16, key: &PublicKey) -> Result<HostKeyStatus> {
         let content = self.read()?;
         let name = lookup_name(host, port);
+        let mut known = false;
         let mut changed: Option<PublicKey> = None;
         for line in content.lines() {
-            let Some(entry) = parse_line(line) else { continue };
+            let Some((marker, entry)) = parse_any_line(line) else { continue };
             if !patterns_match(entry.patterns, &name) {
                 continue;
             }
-            if entry.key.key_data() == key.key_data() {
-                return Ok(HostKeyStatus::Known);
+            let same_key = entry.key.key_data() == key.key_data();
+            match marker {
+                Marker::Revoked if same_key => return Ok(HostKeyStatus::Revoked),
+                Marker::Revoked => continue,
+                Marker::None => {}
+            }
+            if same_key {
+                known = true;
+                continue;
             }
             if changed.is_none() && entry.key.algorithm() == key.algorithm() {
                 changed = Some(entry.key);
             }
+        }
+        if known {
+            return Ok(HostKeyStatus::Known);
         }
         Ok(match changed {
             Some(stored) => HostKeyStatus::Changed { stored: fingerprints(&stored) },
@@ -131,28 +147,49 @@ impl KnownHosts {
     /// Removes the entries for this host that hold a key of the same algorithm,
     /// then adds the new key as a hashed entry. Entries of other hosts are kept;
     /// on plain multi-host lines only the matching host pattern is removed.
+    ///
+    /// A symlinked file is rewritten at its target. If the file changes while it is rewritten
+    /// (e.g. `ssh` appends a key), the rewrite starts over so that change is not lost.
     pub fn replace(&self, host: &str, port: u16, key: &PublicKey) -> Result<()> {
-        let content = self.read()?;
+        let path = match fs::canonicalize(&self.path) {
+            Ok(path) => path,
+            Err(err) if err.kind() == ErrorKind::NotFound => self.path.clone(),
+            Err(err) => return Err(err.into()),
+        };
         let name = lookup_name(host, port);
-        let mut out = String::with_capacity(content.len());
-        for line in content.lines() {
-            if let Some(kept) = rewrite_line(line, &name, key) {
-                out.push_str(&kept);
-                out.push('\n');
+        let mut attempts = 0;
+        loop {
+            let content = read_or_empty(&path)?;
+            let mut out = String::with_capacity(content.len());
+            for line in content.lines() {
+                if let Some(kept) = rewrite_line(line, &name, key) {
+                    out.push_str(&kept);
+                    out.push('\n');
+                }
             }
-        }
-        if out != content {
-            fsutil::write_private(&self.path, out.as_bytes())?;
+            if out == content
+                || fsutil::write_private_if(&path, out.as_bytes(), || Ok(read_or_empty(&path)? == content))?
+            {
+                break;
+            }
+            attempts += 1;
+            if attempts == 5 {
+                return Err(CoreError::internal("known_hosts keeps changing; host key not replaced"));
+            }
         }
         self.add(host, port, key, true)
     }
 
     fn read(&self) -> Result<String> {
-        match fs::read_to_string(&self.path) {
-            Ok(content) => Ok(content),
-            Err(err) if err.kind() == ErrorKind::NotFound => Ok(String::new()),
-            Err(err) => Err(err.into()),
-        }
+        read_or_empty(&self.path)
+    }
+}
+
+fn read_or_empty(path: &std::path::Path) -> Result<String> {
+    match fs::read_to_string(path) {
+        Ok(content) => Ok(content),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(String::new()),
+        Err(err) => Err(err.into()),
     }
 }
 
@@ -161,19 +198,43 @@ struct Entry<'a> {
     key: PublicKey,
 }
 
-/// Parses a known_hosts line. Comments, blank lines, marker lines
+enum Marker {
+    None,
+    Revoked,
+}
+
+/// Parses a plain key line. Comments, blank lines, marker lines
 /// (`@cert-authority`, `@revoked`) and unparsable keys yield `None`.
 fn parse_line(line: &str) -> Option<Entry<'_>> {
+    match parse_any_line(line)? {
+        (Marker::None, entry) => Some(entry),
+        (Marker::Revoked, _) => None,
+    }
+}
+
+/// Like `parse_line`, but also returns `@revoked` lines. `@cert-authority` lines yield `None`
+/// (certificates are not supported).
+fn parse_any_line(line: &str) -> Option<(Marker, Entry<'_>)> {
     let trimmed = line.trim();
-    if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('@') {
+    if trimmed.is_empty() || trimmed.starts_with('#') {
         return None;
     }
-    let mut parts = trimmed.split_whitespace();
+    let (marker, rest) = match trimmed.strip_prefix('@') {
+        Some(rest) => {
+            let (name, rest) = rest.split_once(char::is_whitespace)?;
+            if name != "revoked" {
+                return None;
+            }
+            (Marker::Revoked, rest)
+        }
+        None => (Marker::None, trimmed),
+    };
+    let mut parts = rest.split_whitespace();
     let patterns = parts.next()?;
     let algorithm = parts.next()?;
     let data = parts.next()?;
     let key = PublicKey::from_openssh(&format!("{algorithm} {data}")).ok()?;
-    Some(Entry { patterns, key })
+    Some((marker, Entry { patterns, key }))
 }
 
 /// Returns the line to keep (possibly with fewer host patterns) or `None` to drop it.
@@ -418,6 +479,43 @@ mod tests {
         assert_eq!(kh.check("example.com", 22, &key(KEY_C)).unwrap(), HostKeyStatus::Known);
         assert_eq!(kh.check("keep.example", 22, &key(KEY_A)).unwrap(), HostKeyStatus::Known);
         assert_eq!(fs::metadata(&kh.path).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+
+    #[test]
+    fn revoked_key_wins_over_known_entry_for_matching_hosts_only() {
+        let (_d, kh) = kh_with(&format!("example.com {KEY_A}\n@revoked *.example.com,example.com {KEY_A}\n"));
+        assert_eq!(kh.check("example.com", 22, &key(KEY_A)).unwrap(), HostKeyStatus::Revoked);
+        assert_eq!(
+            kh.check("example.com", 22, &key(KEY_B)).unwrap(),
+            HostKeyStatus::Changed { stored: fingerprints(&key(KEY_A)) }
+        );
+        assert_eq!(kh.check("example.org", 22, &key(KEY_A)).unwrap(), HostKeyStatus::Unknown);
+        // A revoked line is not a stored key of the host.
+        assert_eq!(kh.known_algorithms("web.example.com", 22).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn replace_keeps_revoked_lines() {
+        let (_d, kh) = kh_with(&format!("@revoked example.com {KEY_A}\nexample.com {KEY_A}\n"));
+        kh.replace("example.com", 22, &key(KEY_B)).unwrap();
+        let after = fs::read_to_string(&kh.path).unwrap();
+        assert!(after.starts_with(&format!("@revoked example.com {KEY_A}\n")), "{after}");
+        assert_eq!(after.lines().count(), 2);
+    }
+
+    #[test]
+    fn replace_writes_through_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("real_known_hosts");
+        fs::write(&target, format!("example.com {KEY_A}\n")).unwrap();
+        let link = dir.path().join("known_hosts");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        KnownHosts::new(link.clone()).replace("example.com", 22, &key(KEY_B)).unwrap();
+
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        let content = fs::read_to_string(&target).unwrap();
+        assert!(!content.contains(KEY_A) && content.contains(KEY_B), "{content}");
     }
 }
 

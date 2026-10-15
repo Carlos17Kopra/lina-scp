@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use linascp_core::connect::{ConnectEvent, PromptBroker};
 use linascp_core::error::Result;
@@ -29,6 +30,8 @@ pub struct AppState {
     pub broker: Arc<PromptBroker>,
     /// Running connection attempts keyed by the UI-generated connect id.
     pub connects: Mutex<HashMap<Uuid, CancellationToken>>,
+    /// Cancels that arrived before their attempt registered (see `cancel_connect`).
+    pub early_cancels: Mutex<HashMap<Uuid, Instant>>,
     /// Output pumps of open sessions (needed by `session_ack` / `session_close`). `Arc`-wrapped
     /// for the same self-cleanup reason as `sessions`.
     pub outputs: Arc<Mutex<HashMap<SessionId, Arc<OutputPump>>>>,
@@ -43,6 +46,7 @@ impl AppState {
             sessions: Arc::new(SessionManager::default()),
             broker: Arc::new(PromptBroker::new(Arc::new(|_event: ConnectEvent| {}))),
             connects: Mutex::new(HashMap::new()),
+            early_cancels: Mutex::new(HashMap::new()),
             outputs: Arc::new(Mutex::new(HashMap::new())),
         }
     }

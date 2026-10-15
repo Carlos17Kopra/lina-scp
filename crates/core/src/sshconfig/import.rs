@@ -36,11 +36,17 @@ pub fn import_ssh_config(path: &Path) -> Result<Vec<Host>> {
 /// Stored hosts win over imported hosts with the same name. Result is sorted by name
 /// (case-insensitive).
 pub fn merge_hosts(stored: Vec<Host>, imported: Vec<Host>) -> Vec<Host> {
-    // A stored name also hides the imported alias it is mirrored as (see `Mirror::render`).
-    let names: HashSet<String> =
-        stored.iter().flat_map(|h| [h.name.clone(), super::mirror::host_alias(&h.name)]).collect();
+    // A stored name also hides the imported alias it is mirrored as (see `Mirror::render`), but
+    // only when that alias resolves to the stored address: otherwise it is the user's own entry.
+    let names: HashSet<&str> = stored.iter().map(|h| h.name.as_str()).collect();
+    let mirrored: HashSet<(String, &str)> =
+        stored.iter().map(|h| (super::mirror::host_alias(&h.name), h.address.as_str())).collect();
+    let kept: Vec<Host> = imported
+        .into_iter()
+        .filter(|h| !names.contains(h.name.as_str()) && !mirrored.contains(&(h.name.clone(), h.address.as_str())))
+        .collect();
     let mut merged = stored;
-    merged.extend(imported.into_iter().filter(|h| !names.contains(&h.name)));
+    merged.extend(kept);
     merged.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.name.cmp(&b.name)));
     merged
 }
@@ -254,5 +260,15 @@ mod review_focus_tests {
         let merged = merge_hosts(stored, vec![mirrored, other]);
         let names: Vec<_> = merged.iter().map(|h| h.name.as_str()).collect();
         assert_eq!(names, vec!["O'Reilly server", "other"]);
+    }
+
+    #[test]
+    fn stored_host_keeps_a_hand_written_alias_that_points_elsewhere() {
+        let stored = vec![Host::new("Web Server", "a.example")];
+        let mut own = Host::new("Web-Server", "b.example");
+        own.source = HostSource::SshConfig;
+        let merged = merge_hosts(stored, vec![own]);
+        let names: Vec<_> = merged.iter().map(|h| h.name.as_str()).collect();
+        assert_eq!(names, vec!["Web Server", "Web-Server"]);
     }
 }

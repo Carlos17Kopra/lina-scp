@@ -131,6 +131,14 @@ pub struct Host {
 }
 
 impl Host {
+    /// The host's own auth settings; `None` when it uses a login profile.
+    pub fn custom_auth(&self) -> Option<&AuthConfig> {
+        match &self.auth {
+            HostAuth::Custom { auth } => Some(auth),
+            HostAuth::Profile { .. } => None,
+        }
+    }
+
     pub fn new(name: &str, address: &str) -> Self {
         let now = now_unix();
         Self {

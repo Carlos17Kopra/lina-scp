@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use age::armor::{ArmoredReader, ArmoredWriter, Format};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
+use secrecy::zeroize::{Zeroize, Zeroizing};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
@@ -138,6 +139,14 @@ struct SecretPayload {
     key_files: BTreeMap<String, String>,
 }
 
+impl Drop for SecretPayload {
+    fn drop(&mut self) {
+        for value in self.secrets.values_mut().chain(self.key_files.values_mut()) {
+            value.zeroize();
+        }
+    }
+}
+
 /// Serializes the whole store. Files containing secrets must be written with mode 0600.
 pub fn export_data(store: &Store, secrets: &dyn SecretStore, opts: &ExportOptions) -> Result<ExportOutput> {
     if opts.include_key_files && !opts.include_secrets {
@@ -162,7 +171,7 @@ pub fn export_data(store: &Store, secrets: &dyn SecretStore, opts: &ExportOption
             .ok_or_else(|| CoreError::config("passphrase required to export secrets"))?;
         let payload =
             collect_secrets(&hosts, &profiles, secrets, opts.include_key_files.then_some(&opts.home), &mut report)?;
-        let json = serde_json::to_vec(&payload).map_err(|e| CoreError::internal(e.to_string()))?;
+        let json = plaintext_json(&payload)?;
         Some(encrypt(&json, passphrase)?)
     } else {
         None
@@ -212,16 +221,11 @@ pub fn import_apply(
         (Some(block), Some(pass)) => Some(decrypt_payload(block, pass)?),
         _ => None,
     };
-
-    let mut report = ImportReport { imported: 0, skipped: 0, secrets_restored: 0, invalid: 0 };
-    match &payload {
-        Some(payload) => {
-            let paths = write_key_files(&payload.key_files, key_dir)?;
-            rewrite_key_paths(&mut doc, &paths);
-        }
-        None => clear_has_secret(&mut doc),
+    if payload.is_none() {
+        clear_has_secret(&mut doc);
     }
 
+    let mut report = ImportReport { imported: 0, skipped: 0, secrets_restored: 0, invalid: 0 };
     let existing = Existing::load(store)?;
     let mut plan = Plan::default();
     for g in &doc.groups {
@@ -233,41 +237,49 @@ pub fn import_apply(
     for h in &doc.hosts {
         plan.decide(&existing, resolutions, ItemKind::Host, h.id, &h.name);
     }
-    // Invalid entries are never written (nor their secrets restored); a host that uses a
-    // rejected profile or jump host from this file is rejected as well.
+    // Invalid entries are never written (nor their secrets or key files restored); a host that
+    // uses a rejected profile or jump host from this file is rejected as well, along whole chains.
     for p in doc.profiles.iter().filter(|p| validate_profile(p).is_err()) {
         plan.reject(p.id);
     }
     for h in doc.hosts.iter().filter(|h| validate_host(h).is_err()) {
         plan.reject(h.id);
     }
-    for h in &doc.hosts {
-        let uses_rejected_profile = matches!(h.auth, HostAuth::Profile { profile_id } if plan.is_rejected(profile_id));
-        let uses_rejected_jump = h.jump_host_id.is_some_and(|j| plan.is_rejected(j));
-        if uses_rejected_profile || uses_rejected_jump {
-            plan.reject(h.id);
+    loop {
+        let newly: Vec<Id> = doc
+            .hosts
+            .iter()
+            .filter(|h| !plan.is_rejected(h.id))
+            .filter(|h| {
+                matches!(h.auth, HostAuth::Profile { profile_id } if plan.is_rejected(profile_id))
+                    || h.jump_host_id.is_some_and(|j| plan.is_rejected(j))
+            })
+            .map(|h| h.id)
+            .collect();
+        if newly.is_empty() {
+            break;
+        }
+        for id in newly {
+            plan.reject(id);
         }
     }
 
+    let mut groups = Vec::new();
     for g in &doc.groups {
         match plan.action(g.id) {
-            Action::Write { id, name } => {
-                store.save_group(&Group { id, name, sort_order: g.sort_order })?;
-                report.imported += 1;
-            }
+            Action::Write { id, name } => groups.push(Group { id, name, sort_order: g.sort_order }),
             Action::Skip => report.skipped += 1,
         }
     }
+    let mut profiles = Vec::new();
     for p in &doc.profiles {
         match plan.action(p.id) {
-            Action::Write { id, name } => {
-                store.save_profile(&LoginProfile { id, name, ..p.clone() })?;
-                report.imported += 1;
-            }
+            Action::Write { id, name } => profiles.push(LoginProfile { id, name, ..p.clone() }),
             Action::Skip if plan.is_rejected(p.id) => report.invalid += 1,
             Action::Skip => report.skipped += 1,
         }
     }
+    let mut hosts = Vec::new();
     for h in &doc.hosts {
         match plan.action(h.id) {
             Action::Write { id, name } => {
@@ -284,32 +296,64 @@ pub fn import_apply(
                 if let HostAuth::Profile { profile_id } = &mut host.auth {
                     *profile_id = plan.map_id(*profile_id);
                 }
-                store.save_host(&host)?;
-                report.imported += 1;
+                hosts.push(host);
             }
             Action::Skip if plan.is_rejected(h.id) => report.invalid += 1,
             Action::Skip => report.skipped += 1,
         }
     }
+    let settings: Vec<(&str, &str)> = doc
+        .settings
+        .iter()
+        .filter(|(key, _)| EXPORTED_SETTINGS.contains(&key.as_str()))
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect();
 
-    if let Some(payload) = &payload {
-        for (account, value) in &payload.secrets {
-            let Some((owner, kind)) = parse_account_name(account) else { continue };
-            let Action::Write { id, .. } = plan.action(owner.id()) else { continue };
-            let owner = match owner {
-                SecretOwner::Host(_) => SecretOwner::Host(id),
-                SecretOwner::Profile(_) => SecretOwner::Profile(id),
+    // Key files and secrets are written before the DB transaction; if anything fails, the key
+    // files created here are removed, overwritten secrets restored (new ones deleted), and the
+    // store is left untouched. Keyring rollback is best effort: it can fail like the write did.
+    let mut created_keys = Vec::new();
+    let mut previous_secrets: Vec<(SecretOwner, SecretKind, Option<SecretString>)> = Vec::new();
+    let written = (|| -> Result<()> {
+        if let Some(payload) = &payload {
+            let used: HashSet<&str> = profiles
+                .iter()
+                .map(|p| &p.auth)
+                .chain(hosts.iter().filter_map(Host::custom_auth))
+                .filter_map(key_path)
+                .collect();
+            let files: BTreeMap<&String, &String> =
+                payload.key_files.iter().filter(|(path, _)| used.contains(path.as_str())).collect();
+            let paths = write_key_files(&files, key_dir, &mut created_keys)?;
+            rewrite_key_paths(&mut profiles, &mut hosts, &paths);
+
+            for (account, value) in &payload.secrets {
+                let Some((owner, kind)) = parse_account_name(account) else { continue };
+                let Action::Write { id, .. } = plan.action(owner.id()) else { continue };
+                let owner = match owner {
+                    SecretOwner::Host(_) => SecretOwner::Host(id),
+                    SecretOwner::Profile(_) => SecretOwner::Profile(id),
+                };
+                previous_secrets.push((owner, kind, secrets.get(owner, kind)?));
+                secrets.set(owner, kind, &SecretString::from(value.clone()))?;
+                report.secrets_restored += 1;
+            }
+        }
+        store.save_import(&groups, &profiles, &hosts, &settings)
+    })();
+    if let Err(err) = written {
+        for (owner, kind, previous) in previous_secrets.iter().rev() {
+            let _ = match previous {
+                Some(value) => secrets.set(*owner, *kind, value),
+                None => secrets.delete(*owner, *kind),
             };
-            secrets.set(owner, kind, &SecretString::from(value.clone()))?;
-            report.secrets_restored += 1;
         }
-    }
-
-    for (key, value) in &doc.settings {
-        if EXPORTED_SETTINGS.contains(&key.as_str()) {
-            store.set_setting(key, value)?;
+        for path in &created_keys {
+            let _ = fs::remove_file(path);
         }
+        return Err(err);
     }
+    report.imported = (groups.len() + profiles.len() + hosts.len()) as u32;
     Ok(report)
 }
 
@@ -436,13 +480,7 @@ fn collect_secrets(
         }
     }
     if let Some(home) = key_files_home {
-        let auths = hosts
-            .iter()
-            .filter_map(|h| match &h.auth {
-                HostAuth::Custom { auth } => Some(auth),
-                HostAuth::Profile { .. } => None,
-            })
-            .chain(profiles.iter().map(|p| &p.auth));
+        let auths = hosts.iter().filter_map(Host::custom_auth).chain(profiles.iter().map(|p| &p.auth));
         for auth in auths {
             let Some(path) = key_path(auth) else { continue };
             if payload.key_files.contains_key(path) || report.skipped_keys.iter().any(|p| p == path) {
@@ -451,7 +489,7 @@ fn collect_secrets(
             // Keyed by the configured path: import rewrites exactly that value.
             match fs::read(expand_tilde(path, home)) {
                 Ok(content) => {
-                    payload.key_files.insert(path.to_string(), B64.encode(content));
+                    payload.key_files.insert(path.to_string(), B64.encode(Zeroizing::new(content)));
                 }
                 // Missing or unreadable keys are reported, not fatal: the rest of the export stays useful.
                 Err(err) => {
@@ -472,52 +510,63 @@ fn key_path(auth: &AuthConfig) -> Option<&str> {
 }
 
 /// Writes key files into `key_dir` (0700) as 0600 files and returns original -> new path.
-fn write_key_files(files: &BTreeMap<String, String>, key_dir: &Path) -> Result<HashMap<String, String>> {
+/// Files it creates (not reused identical ones) are pushed to `created` as they are written.
+fn write_key_files(
+    files: &BTreeMap<&String, &String>,
+    key_dir: &Path,
+    created: &mut Vec<PathBuf>,
+) -> Result<HashMap<String, String>> {
     let mut mapping = HashMap::new();
     if files.is_empty() {
         return Ok(mapping);
     }
     fsutil::create_private_dir(key_dir)?;
     for (original, encoded) in files {
-        let content = B64.decode(encoded).map_err(|e| CoreError::config(format!("invalid key file in export: {e}")))?;
+        let content = Zeroizing::new(
+            B64.decode(encoded).map_err(|e| CoreError::config(format!("invalid key file in export: {e}")))?,
+        );
         let base = Path::new(original)
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "key".to_string());
-        let target = unique_key_path(key_dir, &base, &content)?;
-        fsutil::write_private(&target, &content)?;
-        mapping.insert(original.clone(), target.to_string_lossy().into_owned());
+        let (target, exists) = unique_key_path(key_dir, &base, &content)?;
+        if !exists {
+            fsutil::write_private(&target, &content)?;
+            created.push(target.clone());
+        }
+        mapping.insert(original.to_string(), target.to_string_lossy().into_owned());
     }
     Ok(mapping)
 }
 
-/// `base`, `base-1`, `base-2`, ...; an existing file with identical content is reused.
-fn unique_key_path(dir: &Path, base: &str, content: &[u8]) -> Result<PathBuf> {
+/// `base`, `base-1`, `base-2`, ...; an existing file with identical content is reused
+/// (returned with `true`).
+fn unique_key_path(dir: &Path, base: &str, content: &[u8]) -> Result<(PathBuf, bool)> {
     for n in 0u32.. {
         let name = if n == 0 { base.to_string() } else { format!("{base}-{n}") };
         let candidate = dir.join(name);
-        match fs::read(&candidate) {
-            Ok(existing) if existing == content => return Ok(candidate),
+        match fs::read(&candidate).map(Zeroizing::new) {
+            Ok(existing) if existing.as_slice() == content => return Ok((candidate, true)),
             Ok(_) => continue,
-            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(candidate),
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok((candidate, false)),
             Err(err) => return Err(err.into()),
         }
     }
     unreachable!("u32 range exhausted while choosing a key file name")
 }
 
-fn rewrite_key_paths(doc: &mut ExportDoc, paths: &HashMap<String, String>) {
+fn rewrite_key_paths(profiles: &mut [LoginProfile], hosts: &mut [Host], paths: &HashMap<String, String>) {
     let rewrite = |auth: &mut AuthConfig| {
         if let Some(new_path) = auth.key_path.as_ref().and_then(|p| paths.get(p)) {
             auth.key_path = Some(new_path.clone());
         }
     };
-    for host in &mut doc.hosts {
+    for host in hosts {
         if let HostAuth::Custom { auth } = &mut host.auth {
             rewrite(auth);
         }
     }
-    for profile in &mut doc.profiles {
+    for profile in profiles {
         rewrite(&mut profile.auth);
     }
 }
@@ -532,6 +581,26 @@ fn clear_has_secret(doc: &mut ExportDoc) {
     for profile in &mut doc.profiles {
         profile.auth.has_secret = false;
     }
+}
+
+/// Serializes the secrets payload into a buffer sized exactly up front (a growing `Vec` would
+/// leave unzeroized copies of the plaintext behind on reallocation) that is zeroized on drop.
+fn plaintext_json(payload: &SecretPayload) -> Result<Zeroizing<Vec<u8>>> {
+    struct Count(usize);
+    impl Write for Count {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0 += buf.len();
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    serde_json::to_writer(&mut count, payload).map_err(|e| CoreError::internal(e.to_string()))?;
+    let mut json = Zeroizing::new(Vec::with_capacity(count.0));
+    serde_json::to_writer(&mut *json, payload).map_err(|e| CoreError::internal(e.to_string()))?;
+    Ok(json)
 }
 
 fn encrypt(plaintext: &[u8], passphrase: &SecretString) -> Result<String> {
@@ -572,7 +641,9 @@ fn decrypt_payload(block: &str, passphrase: &SecretString) -> Result<SecretPaylo
     let mut identity = age::scrypt::Identity::new(passphrase.clone());
     identity.set_max_work_factor(SCRYPT_MAX_WORK_FACTOR);
     let mut reader = decryptor.decrypt(iter::once(&identity as &dyn age::Identity)).map_err(map_decrypt_error)?;
-    let mut plaintext = Vec::new();
+    // The ciphertext is longer than the plaintext: reserving that much up front means the buffer
+    // never reallocates, so no unzeroized copy of the plaintext is left behind.
+    let mut plaintext = Zeroizing::new(Vec::with_capacity(block.len()));
     reader.read_to_end(&mut plaintext)?;
     serde_json::from_slice(&plaintext).map_err(|e| CoreError::config(format!("invalid secrets block: {e}")))
 }

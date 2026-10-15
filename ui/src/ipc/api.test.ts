@@ -45,6 +45,48 @@ describe("command wrappers", () => {
     expect(invoke).toHaveBeenCalledWith("session_write", { sessionId: "s1", data: [104, 195, 169] });
   });
 
+  it("keep terminal input in order: one write in flight per session, the rest batched", async () => {
+    const pending: Array<(value: null) => void> = [];
+    invoke.mockImplementation((command: string) =>
+      command === "session_write" ? new Promise((resolve) => pending.push(resolve)) : Promise.resolve(null),
+    );
+    const release = (index: number) => {
+      const resolve = pending[index];
+      if (!resolve) throw new Error(`write ${index} was never sent`);
+      resolve(null);
+    };
+
+    const first = sessionWrite("s1", "a");
+    const second = sessionWrite("s1", "b");
+    const third = sessionWrite("s1", new Uint8Array([0x80]));
+    const other = sessionWrite("s2", "x");
+    expect(invoke.mock.calls).toEqual([
+      ["session_write", { sessionId: "s1", data: [97] }],
+      ["session_write", { sessionId: "s2", data: [120] }],
+    ]);
+
+    release(0);
+    await first;
+    expect(invoke).toHaveBeenLastCalledWith("session_write", { sessionId: "s1", data: [98, 0x80] });
+    release(1);
+    release(2);
+    await Promise.all([second, third, other]);
+
+    void sessionWrite("s1", "c");
+    expect(invoke).toHaveBeenLastCalledWith("session_write", { sessionId: "s1", data: [99] });
+    release(3);
+  });
+
+  it("reject a batched write when its own send fails, and keep going", async () => {
+    let call = 0;
+    invoke.mockImplementation(() => (++call === 2 ? Promise.reject({ type: "io", message: "x" }) : Promise.resolve(null)));
+    const first = sessionWrite("s3", "a");
+    const second = sessionWrite("s3", "b");
+    await expect(first).resolves.toBeUndefined();
+    await expect(second).rejects.toEqual({ type: "io", message: "x" });
+    await expect(sessionWrite("s3", "c")).resolves.toBeUndefined();
+  });
+
   it("pass import resolutions keyed by id", async () => {
     invoke.mockResolvedValue({ imported: 1, skipped: 0, secretsRestored: 0 });
     await importApply("/tmp/x.linascp", null, { h1: "replace" });

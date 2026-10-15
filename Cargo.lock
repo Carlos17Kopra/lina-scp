@@ -2837,6 +2837,7 @@ dependencies = [
  "getrandom 0.4.3",
  "hmac 0.13.0",
  "keyring-core",
+ "libc",
  "md-5",
  "portable-pty",
  "rusqlite",
