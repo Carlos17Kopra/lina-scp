@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use russh::client;
 use russh::keys::Algorithm;
+use russh_sftp::client::RawSftpSession;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
@@ -25,6 +26,7 @@ pub use classify::{classify_io, classify_resolve_error, map_russh_error, network
 pub use handler::{ClientHandler, HandlerError, HostKeyAction, decide_host_key};
 pub use prompt::{EmitFn, HostKeyDecision, KbdPrompt, Prompt, PromptAnswer, PromptBroker};
 pub use reconnect::{BACKOFF_SECS, ConnectFuture, Connector, Enabled, MAX_ATTEMPTS, ReconnectingSession, is_fatal};
+pub use sftp_session::{LostFn, SftpSession};
 pub use ssh_session::SshSession;
 
 use crate::error::{CoreError, NetworkKind, Result};
@@ -32,6 +34,7 @@ use crate::known_hosts::KnownHosts;
 use crate::model::{AuthMethod, Host, LoginProfile};
 use crate::secrets::SecretStore;
 use crate::session::{OutputSink, SessionId};
+use crate::sftp::{Listing, join};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
@@ -461,6 +464,85 @@ async fn disconnect(est: Established) {
     if let Some(jump) = est.jump {
         let _ = jump.disconnect(russh::Disconnect::ByApplication, "", "en").await;
     }
+}
+
+impl Pipeline {
+    /// Steps Subsystem -> Directory; closes the connection again on failure.
+    async fn open_sftp(
+        &self,
+        req: &ConnectRequest,
+        est: Established,
+        on_lost: LostFn,
+    ) -> Result<(SftpSession, Listing)> {
+        let host = &req.target.host;
+        let Established { handle, jump, info } = est;
+        let opened = self
+            .step(Step::Subsystem, async {
+                self.log("debug1: Requesting subsystem sftp");
+                let channel = handle.channel_open_session().await.map_err(map_russh_error)?;
+                channel.request_subsystem(false, "sftp").await.map_err(map_russh_error)?;
+                let raw = RawSftpSession::new(channel.into_stream());
+                if host.timeout_s > 0 {
+                    raw.set_timeout(u64::from(host.timeout_s));
+                }
+                let version = raw.init().await.map_err(|e| sftp_session::map_sftp_error(e, ""))?;
+                self.log(format!("debug1: SFTP protocol version {}", version.version));
+                Ok((raw, version.version))
+            })
+            .await;
+        let (raw, version) = match opened {
+            Ok(opened) => opened,
+            Err(error) => {
+                disconnect(Established { handle, jump, info }).await;
+                return Err(error);
+            }
+        };
+        let session = SftpSession::start(raw, version, handle, jump, info, on_lost);
+        let listing = self
+            .step(Step::Directory, async {
+                let start = match host.sftp.remote_start.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                    Some("~") => session.home().await?,
+                    Some(start) => match start.strip_prefix("~/") {
+                        Some(rest) => join(&session.home().await?, rest),
+                        None => start.to_string(),
+                    },
+                    None => session.home().await?,
+                };
+                self.log(format!("debug1: Listing {start}"));
+                session.list(&start).await
+            })
+            .await;
+        match listing {
+            Ok(listing) => Ok((session, listing)),
+            Err(error) => {
+                session.close().await;
+                Err(error)
+            }
+        }
+    }
+}
+
+/// Run the pipeline up to an SFTP session in the start directory.
+/// The caller registers the session and emits `ConnectEvent::Connected`.
+pub async fn connect_sftp(
+    req: ConnectRequest,
+    deps: ConnectDeps,
+    broker: Arc<PromptBroker>,
+    emit: EmitFn,
+    on_lost: LostFn,
+    cancel: CancellationToken,
+) -> Result<(SftpSession, Listing)> {
+    emit(ConnectEvent::Steps { steps: plan_sftp_steps(&req) });
+    let pipeline = Pipeline::new(deps, broker, emit.clone(), cancel);
+    let result = async {
+        let est = pipeline.establish(&req).await?;
+        pipeline.open_sftp(&req, est, on_lost).await
+    }
+    .await;
+    if let Err(error) = &result {
+        emit(ConnectEvent::Failed { error: error.clone() });
+    }
+    result
 }
 
 /// Run the full pipeline and return the interactive session.

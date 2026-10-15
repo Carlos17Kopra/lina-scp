@@ -7,14 +7,15 @@ mod support;
 use std::sync::Arc;
 
 use linascp_core::connect::{
-    ConnectDeps, ConnectEvent, ConnectRequest, ConnectTarget, HostKeyDecision, Prompt, PromptAnswer, SshSession, Step,
-    connect_ssh, test_connection,
+    ConnectDeps, ConnectEvent, ConnectRequest, ConnectTarget, HostKeyDecision, LostFn, Prompt, PromptAnswer,
+    SshSession, Step, connect_sftp, connect_ssh, test_connection,
 };
-use linascp_core::error::{CoreError, NetworkKind, Result};
+use linascp_core::error::{CoreError, FsKind, NetworkKind, Result};
 use linascp_core::known_hosts::{HostKeyStatus, KnownHosts};
 use linascp_core::model::{AuthMethod, EnvVar, Host};
 use linascp_core::secrets::{MemorySecretStore, SecretKind, SecretOwner, SecretStore};
 use linascp_core::session::Session;
+use linascp_core::sftp::{EntryKind, LinkTarget};
 use secrecy::{ExposeSecret, SecretString};
 use support::{Agent, Container, KEY_PASSPHRASE, Network, Output, Prompter, free_port, host, prompter};
 use tokio_util::sync::CancellationToken;
@@ -446,4 +447,141 @@ async fn lost_connection_reconnects_on_the_same_session() {
     session.write(b"echo after-$((2+2))\n").await.unwrap();
     output.wait_for("after-4").await;
     session.close().await.unwrap();
+}
+
+async fn sftp(
+    env: &Env,
+    h: Host,
+    lost: LostFn,
+) -> (linascp_core::connect::SftpSession, linascp_core::sftp::Listing, Vec<ConnectEvent>) {
+    let p = prompter(trust_all);
+    let (session, listing) = connect_sftp(
+        request(h, None),
+        env.deps(None),
+        p.broker.clone(),
+        p.emit.clone(),
+        lost,
+        CancellationToken::new(),
+    )
+    .await
+    .expect("sftp connected");
+    (session, listing, p.events())
+}
+
+fn no_lost() -> LostFn {
+    Arc::new(|e| panic!("unexpected lost: {e:?}"))
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn sftp_connects_into_home_with_sftp_steps() {
+    let c = Container::start(None);
+    let env = Env::new();
+    let h = host(c.port, "pwuser", AuthMethod::Password, None);
+    env.store_password(&h, "pwpass");
+    let (session, listing, events) = sftp(&env, h, no_lost()).await;
+    assert_eq!(listing.path, "/home/pwuser");
+    assert!(listing.entries.iter().any(|e| e.name == ".bashrc" && e.owner.as_deref() == Some("pwuser")));
+    assert!(events.iter().any(|e| matches!(e, ConnectEvent::StepDone { step: Step::Subsystem })));
+    assert!(events.iter().any(|e| matches!(e, ConnectEvent::StepDone { step: Step::Directory })));
+    assert_eq!(session.version(), 3);
+    session.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn sftp_unreadable_remote_start_fails_the_directory_step_once() {
+    let c = Container::start(None);
+    let env = Env::new();
+    let mut h = host(c.port, "pwuser", AuthMethod::Password, None);
+    h.sftp.remote_start = Some("/root".into());
+    env.store_password(&h, "pwpass");
+    let p = prompter(trust_all);
+    let result = connect_sftp(
+        request(h, None),
+        env.deps(None),
+        p.broker.clone(),
+        p.emit.clone(),
+        no_lost(),
+        CancellationToken::new(),
+    )
+    .await;
+    assert!(matches!(result, Err(CoreError::Fs { kind: FsKind::PermissionDenied, .. })), "{:?}", result.err());
+    let events = p.events();
+    assert!(events.iter().any(|e| matches!(e, ConnectEvent::StepFailed { step: Step::Directory, .. })));
+    assert_eq!(events.iter().filter(|e| matches!(e, ConnectEvent::Failed { .. })).count(), 1);
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn sftp_mkdir_rename_and_errors() {
+    let c = Container::start(None);
+    let env = Env::new();
+    let h = host(c.port, "pwuser", AuthMethod::Password, None);
+    env.store_password(&h, "pwpass");
+    let (s, home, _) = sftp(&env, h, no_lost()).await;
+    let d = home.path;
+    s.mkdir(&d, "a").await.unwrap();
+    s.mkdir(&d, "b").await.unwrap();
+    assert!(matches!(s.mkdir(&d, "a").await, Err(CoreError::Fs { kind: FsKind::AlreadyExists, .. })));
+    assert!(matches!(s.rename(&d, "a", "b").await, Err(CoreError::Fs { kind: FsKind::AlreadyExists, .. })));
+    s.rename(&d, "a", "c").await.unwrap();
+    let names: Vec<_> = s.list(&d).await.unwrap().entries.into_iter().map(|e| e.name).collect();
+    assert!(names.contains(&"c".into()) && names.contains(&"b".into()) && !names.contains(&"a".into()));
+    assert!(matches!(s.list("/root").await, Err(CoreError::Fs { kind: FsKind::PermissionDenied, .. })));
+    assert!(matches!(s.mkdir(&d, "x/y").await, Err(CoreError::Config { .. })));
+    s.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn sftp_delete_removes_links_not_targets() {
+    let c = Container::start(None);
+    let env = Env::new();
+    let h = host(c.port, "pwuser", AuthMethod::Password, None);
+    env.store_password(&h, "pwpass");
+    let setup = "mkdir -p /home/pwuser/keep /home/pwuser/tree/inner && touch /home/pwuser/keep/k /home/pwuser/tree/inner/x \
+        && ln -s /home/pwuser/keep /home/pwuser/tree/link && ln -s / /home/pwuser/rootlink && ln -s loop /home/pwuser/loop \
+        && chown -R pwuser: /home/pwuser";
+    let out = std::process::Command::new("docker").args(["exec", &c.id, "sh", "-c", setup]).output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let (s, home, _) = sftp(&env, h, no_lost()).await;
+    let kind = |name: &str| home.entries.iter().find(|e| e.name == name).unwrap().kind.clone();
+    assert_eq!(kind("rootlink"), EntryKind::Symlink { target: Some(LinkTarget::Dir) });
+    assert_eq!(kind("loop"), EntryKind::Symlink { target: None });
+    s.delete(&home.path, &["tree".into(), "rootlink".into(), "loop".into()]).await.unwrap();
+    let after: Vec<_> = s.list(&home.path).await.unwrap().entries.into_iter().map(|e| e.name).collect();
+    assert!(!after.iter().any(|n| n == "tree" || n == "rootlink" || n == "loop"), "{after:?}");
+    assert!(s.list("/home/pwuser/keep").await.unwrap().entries.iter().any(|e| e.name == "k"));
+    s.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn sftp_killed_session_reports_lost_once() {
+    use std::sync::Mutex;
+    let c = Container::start(None);
+    let env = Env::new();
+    let mut h = host(c.port, "pwuser", AuthMethod::Password, None);
+    h.keepalive_s = 1;
+    h.timeout_s = 3;
+    env.store_password(&h, "pwpass");
+    let lost: Arc<Mutex<Vec<CoreError>>> = Arc::default();
+    let on_lost: LostFn = {
+        let lost = lost.clone();
+        Arc::new(move |e| lost.lock().unwrap().push(e))
+    };
+    let (s, home, _) = sftp(&env, h, on_lost).await;
+    let kill = r#"for p in /proc/[0-9]*; do grep -qaE 'sshd(-session)?[:] pwuser' "$p/cmdline" 2>/dev/null && kill -9 "${p#/proc/}"; done; true"#;
+    let _ = std::process::Command::new("docker").args(["exec", &c.id, "sh", "-c", kill]).output();
+    let _ = s.list(&home.path).await;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while lost.lock().unwrap().is_empty() {
+        assert!(std::time::Instant::now() < deadline, "no lost event");
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    assert!(matches!(s.list(&home.path).await, Err(CoreError::Network { .. })));
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    assert_eq!(lost.lock().unwrap().len(), 1);
+    s.close().await;
 }
