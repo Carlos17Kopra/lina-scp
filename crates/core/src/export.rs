@@ -424,7 +424,8 @@ impl Existing {
     fn conflict(&self, kind: ItemKind, id: Id, name: &str) -> Option<Conflict> {
         if self.items.iter().any(|(k, i, _)| *k == kind && *i == id) {
             Some(Conflict::SameId)
-        } else if self.same_name(kind, name).is_some() {
+        // Snippet names are not unique (one "Logs" per host is normal), so only ids conflict.
+        } else if kind != ItemKind::Snippet && self.same_name(kind, name).is_some() {
             Some(Conflict::SameName)
         } else {
             None

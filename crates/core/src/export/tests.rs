@@ -700,3 +700,31 @@ fn invalid_snippets_are_counted_and_not_written() {
     assert_eq!(dst.get_snippet(bound.id).unwrap(), None);
     assert!(dst.get_snippet(global.id).unwrap().is_some());
 }
+
+#[test]
+fn equally_named_snippets_are_not_name_conflicts() {
+    let src = Store::open_in_memory().unwrap();
+    let web = Host::new("web", "10.0.0.5");
+    let db = Host::new("db", "10.0.0.6");
+    src.save_host(&web).unwrap();
+    src.save_host(&db).unwrap();
+    let web_logs = Snippet::new("Logs", "journalctl -u nginx", Some(web.id));
+    let db_logs = Snippet::new("Logs", "journalctl -u postgresql", Some(db.id));
+    src.save_snippet(&web_logs).unwrap();
+    src.save_snippet(&db_logs).unwrap();
+    let bytes = export_data(&src, &MemorySecretStore::new(), &no_secrets()).unwrap().bytes;
+
+    let dst = Store::open_in_memory().unwrap();
+    dst.save_host(&db).unwrap();
+    let local = Snippet::new("Logs", "tail -f /var/log/syslog", Some(db.id));
+    dst.save_snippet(&local).unwrap();
+
+    let preview = import_preview(&bytes, &dst).unwrap();
+    assert!(preview.items.iter().filter(|i| i.kind == ItemKind::Snippet).all(|i| i.conflict.is_none()));
+    let all_replace = HashMap::from([(web_logs.id, Resolution::Replace), (db_logs.id, Resolution::Replace)]);
+    import_into(&dst, &bytes, &all_replace);
+
+    assert_eq!(dst.get_snippet(local.id).unwrap().unwrap().command, "tail -f /var/log/syslog");
+    assert_eq!(dst.get_snippet(web_logs.id).unwrap().unwrap().host_id, Some(web.id));
+    assert_eq!(dst.get_snippet(db_logs.id).unwrap().unwrap().host_id, Some(db.id));
+}

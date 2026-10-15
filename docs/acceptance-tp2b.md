@@ -25,4 +25,6 @@ Before the first start of this build: `cp ~/.local/share/linascp/linascp.db ~/.l
 - [ ] Delete a host that owns snippets → its snippets disappear from sidebar and screen.
 - [ ] Export → import into a fresh profile: snippets come back, bound to their host.
 - [ ] Import the export again: snippets show up as conflicts ("Snippet", gleiche ID).
+- [ ] Imported snippets appear in sidebar and screen right after the import (no restart).
+- [ ] Two equally named snippets for different hosts both import; a local snippet with that name stays untouched.
 - [ ] An export from v0.1.0 (no snippets) still imports.
