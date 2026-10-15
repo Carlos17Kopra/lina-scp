@@ -57,4 +57,17 @@ describe("PaneLayout", () => {
     expect(screen.queryByRole("separator")).toBeNull();
     expect(screen.getByTestId("term-a")).toHaveAttribute("data-focused", "true");
   });
+
+  it("shows the reconnect bar over a reconnecting pane and keeps its terminal", () => {
+    const reason = { type: "network", kind: "other", message: "x" } as const;
+    act(() =>
+      useSessionsStore.getState().updateTab("a", {
+        status: "reconnecting",
+        reconnect: { attempt: 1, maxAttempts: 8, retryAt: Date.now() + 1000, reason },
+      }),
+    );
+    render(<PaneLayout group={group()} visible />);
+    expect(screen.getByRole("status")).toHaveTextContent("Versuch 1 von 8");
+    expect(screen.getByTestId("term-a")).toBeInTheDocument();
+  });
 });

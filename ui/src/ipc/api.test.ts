@@ -121,6 +121,20 @@ describe("createOutputStream", () => {
     invoke.mockResolvedValue(null);
   });
 
+  it("delivers injected bytes in order and never acks them (Review Focus 5)", () => {
+    const stream = createOutputStream();
+    stream.bind("s1");
+    const received: number[][] = [];
+    stream.attach((bytes) => received.push(Array.from(bytes)));
+    stream.inject(new Uint8Array([7, 7]));
+    stream.channel.onmessage(new Uint8Array([1]).buffer);
+    expect(received).toEqual([[7, 7], [1]]);
+    stream.ack(2); // xterm consumed the injected bytes
+    expect(invoke).not.toHaveBeenCalled();
+    stream.ack(1);
+    expect(invoke).toHaveBeenLastCalledWith("session_ack", { sessionId: "s1", bytes: 1 });
+  });
+
   it("buffers output until a consumer attaches", () => {
     const stream = createOutputStream();
     stream.channel.onmessage(new Uint8Array([1, 2]).buffer);

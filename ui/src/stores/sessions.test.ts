@@ -166,6 +166,8 @@ describe("sessions store — groups and panes", () => {
     useSessionsStore.getState().toggleBroadcast();
     expect(broadcastPeers("a")).toEqual(["s-b"]);
     expect(broadcastPeers("t-1")).toEqual([]);
+    useSessionsStore.getState().updateTab("t-1", { status: "reconnecting" });
+    expect(broadcastPeers("a")).toEqual([]);
     useSessionsStore.getState().updateTab("t-1", { status: "closed" });
     expect(broadcastPeers("a")).toEqual([]);
     await useSessionsStore.getState().closeSession("t-1");
@@ -260,5 +262,15 @@ describe("session event patches for reconnects", () => {
     });
     expect(sessionEventPatch({ kind: "lost", reason })).toEqual({ status: "lost", error: reason, reconnect: undefined });
     vi.restoreAllMocks();
+  });
+
+  it("writes the separator into the pane's stream before the new shell output (Review Focus 4)", () => {
+    const injected: string[] = [];
+    registerStream("p", { ...stream, inject: (bytes: Uint8Array) => injected.push(new TextDecoder().decode(bytes)) } as never);
+    useSessionsStore.getState().addTab({ id: "p", title: "web", kind: "ssh", sessionId: "s", status: "reconnecting" });
+    const info = { hostKeyAlgorithm: "a", hostKeySha256: "b", kex: "c", cipher: "d", mac: "e", authMethods: [] };
+    sessionEventHandler("p")({ kind: "reconnected", info });
+    expect(injected).toEqual(["\r\n\u001b[2m— Verbindung wiederhergestellt —\u001b[0m\r\n"]);
+    expect(useSessionsStore.getState().tabs[0]?.status).toBe("connected");
   });
 });

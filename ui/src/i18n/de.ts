@@ -408,6 +408,22 @@ export const t = {
     endedText: (title: string) => `Die Sitzung »${title}« wurde beendet. Der Verlauf bleibt sichtbar, bis du den Tab schließt.`,
     endedSuffix: "beendet",
     reconnect: "Neu verbinden",
+    reconnecting: {
+      interrupted: (attempt: number, max: number, seconds: number) =>
+        `Verbindung unterbrochen · Versuch ${attempt} von ${max} in ${seconds} s`,
+      connecting: (attempt: number, max: number) => `Verbindung unterbrochen · Versuch ${attempt} von ${max} · Verbinde …`,
+      now: "Jetzt versuchen",
+      stop: "Abbrechen",
+      restored: "— Verbindung wiederhergestellt —",
+      lost: "Verbindung verloren",
+      lostText: (title: string) => `Die Verbindung zu »${title}« konnte nicht wiederhergestellt werden. Der Verlauf bleibt sichtbar.`,
+      retry: "Erneut versuchen",
+      inputRequired: "Für die Verbindung ist eine Eingabe nötig (Passwort, Host-Key …).",
+      cancelled: "Neuverbindung abgebrochen.",
+      suffixReconnecting: "Verbindung unterbrochen",
+      suffixLost: "Verbindung verloren",
+      sidebar: (attempt: number, max: number) => `Neuverbindung · Versuch ${attempt} von ${max}`,
+    },
     design: {
       auto: "Wie App-Design",
       scheme: "Farbschema",

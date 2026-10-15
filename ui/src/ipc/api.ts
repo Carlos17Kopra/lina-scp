@@ -296,6 +296,8 @@ export interface OutputStream {
   bind(sessionId: SessionId): void;
   /** Report consumed bytes (xterm write callback). */
   ack(bytes: number): void;
+  /** Local bytes for the terminal (e.g. the reconnect separator), in order with the output, never acked. */
+  inject(bytes: Uint8Array): void;
 }
 
 export function createOutputStream(): OutputStream {
@@ -303,6 +305,7 @@ export function createOutputStream(): OutputStream {
   let pending: Uint8Array[] = [];
   let sessionId: SessionId | null = null;
   let unsentAck = 0;
+  let localBytes = 0;
 
   const flushAck = () => {
     if (sessionId === null || unsentAck === 0) return;
@@ -314,10 +317,11 @@ export function createOutputStream(): OutputStream {
     });
   };
 
-  const channel = createOutputChannel((bytes) => {
+  const deliver = (bytes: Uint8Array) => {
     if (consumer) consumer(bytes);
     else pending.push(bytes);
-  });
+  };
+  const channel = createOutputChannel(deliver);
 
   return {
     channel,
@@ -335,8 +339,15 @@ export function createOutputStream(): OutputStream {
       flushAck();
     },
     ack(bytes) {
-      unsentAck += bytes;
+      // xterm acks everything it wrote; injected bytes never came from the backend.
+      const local = Math.min(localBytes, bytes);
+      localBytes -= local;
+      unsentAck += bytes - local;
       flushAck();
+    },
+    inject(bytes) {
+      localBytes += bytes.length;
+      deliver(bytes);
     },
   };
 }

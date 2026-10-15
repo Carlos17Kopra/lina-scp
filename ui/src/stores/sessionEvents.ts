@@ -1,5 +1,7 @@
+import { t } from "../i18n/de";
 import type { SessionEventDto } from "../ipc/api";
 import { type Tab, useSessionsStore } from "./sessions";
+import { getStream } from "./streams";
 
 /**
  * Terminal session events that arrived before their tab existed or while it still showed the pane
@@ -34,6 +36,10 @@ export function sessionEventHandler(tabId: string): (event: SessionEventDto) => 
     const sessions = useSessionsStore.getState();
     // A picking pane has no session yet: keep the event for `attachSession`.
     if (sessions.tabs.some((tab) => tab.id === tabId && tab.status !== "picking")) {
+      if (event.kind === "reconnected") {
+        // Synchronously, in stream order: before the new shell's first output.
+        getStream(tabId)?.inject(new TextEncoder().encode(`\r\n\u001b[2m${t.terminal.reconnecting.restored}\u001b[0m\r\n`));
+      }
       sessions.updateTab(tabId, sessionEventPatch(event));
     } else early.set(tabId, event);
   };
