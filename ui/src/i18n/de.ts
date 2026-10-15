@@ -409,9 +409,9 @@ export const t = {
     endedSuffix: "beendet",
     reconnect: "Neu verbinden",
     reconnecting: {
-      interrupted: (attempt: number, max: number, seconds: number) =>
-        `Verbindung unterbrochen · Versuch ${attempt} von ${max} in ${seconds} s`,
-      connecting: (attempt: number, max: number) => `Verbindung unterbrochen · Versuch ${attempt} von ${max} · Verbinde …`,
+      attempt: (attempt: number, max: number) => `Verbindung unterbrochen · Versuch ${attempt} von ${max}`,
+      countdown: (seconds: number) => ` in ${seconds} s`,
+      connecting: " · Verbinde …",
       now: "Jetzt versuchen",
       stop: "Abbrechen",
       restored: "— Verbindung wiederhergestellt —",

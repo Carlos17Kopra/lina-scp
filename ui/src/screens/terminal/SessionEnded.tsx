@@ -10,7 +10,7 @@ import { type Tab, useSessionsStore } from "../../stores/sessions";
 import styles from "./SessionEnded.module.css";
 
 /** Reasons a silent retry cannot fix (mirrors core `is_fatal`). */
-const FATAL_LOST: ReadonlySet<CoreError["type"]> = new Set(["inputRequired", "config", "auth"]);
+const FATAL_LOST: ReadonlySet<CoreError["type"]> = new Set(["inputRequired", "config", "auth", "hostKeyRejected"]);
 
 function lostReason(error: CoreError | undefined): string | null {
   if (!error) return null;

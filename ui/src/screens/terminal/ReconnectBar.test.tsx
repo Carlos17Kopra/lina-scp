@@ -27,12 +27,14 @@ afterEach(() => vi.useRealTimers());
 
 describe("ReconnectBar", () => {
   it("counts down to the next attempt and then shows that it connects", () => {
-    render(<ReconnectBar tab={tab(104_000)} />);
-    expect(screen.getByRole("status")).toHaveTextContent("Verbindung unterbrochen · Versuch 3 von 8 in 4 s");
+    const { container } = render(<ReconnectBar tab={tab(104_000)} />);
+    expect(container).toHaveTextContent("Verbindung unterbrochen · Versuch 3 von 8 in 4 s");
     act(() => vi.advanceTimersByTime(1000));
-    expect(screen.getByRole("status")).toHaveTextContent("in 3 s");
+    expect(container).toHaveTextContent("in 3 s");
     act(() => vi.advanceTimersByTime(3000));
-    expect(screen.getByRole("status")).toHaveTextContent("Versuch 3 von 8 · Verbinde …");
+    expect(container).toHaveTextContent("Versuch 3 von 8 · Verbinde …");
+    // Screen readers hear the attempt, not every tick of the countdown.
+    expect(screen.getByRole("status")).toHaveTextContent(/^Verbindung unterbrochen · Versuch 3 von 8$/);
   });
 
   it("retries now and stops", async () => {

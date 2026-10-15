@@ -25,15 +25,23 @@ pub type Connector = Arc<dyn Fn(u16, u16, OutputSink, CancellationToken) -> Conn
 /// Whether auto-reconnect is on; read when a connection is lost.
 pub type Enabled = Arc<dyn Fn() -> bool + Send + Sync>;
 
-/// Reasons a retry cannot fix: input needed, host/profile/jump host gone, credentials rejected.
+/// Reasons a retry cannot fix: input needed, host/profile/jump host gone, credentials or host key rejected.
 pub fn is_fatal(error: &CoreError) -> bool {
-    matches!(error, CoreError::InputRequired | CoreError::Config { .. } | CoreError::Auth { .. })
+    matches!(
+        error,
+        CoreError::InputRequired
+            | CoreError::Config { .. }
+            | CoreError::Auth { .. }
+            | CoreError::HostKeyRejected { .. }
+    )
 }
 
 enum Phase {
     /// A connection is being set up (first connect or an attempt); its output waits in `pending`.
     Attempting {
         pending: Vec<u8>,
+        /// The cap was hit: later output is dropped too, so the held output has no holes.
+        full: bool,
         lost: Option<CoreError>,
     },
     Connected(Arc<dyn Session>),
@@ -84,7 +92,7 @@ impl ReconnectingSession {
     /// Starts like an attempt: hand `first_sink()` to the first connect, then `attach` its session.
     pub fn new(sink: OutputSink, cols: u16, rows: u16, connector: Connector, enabled: Enabled) -> Self {
         let state = State {
-            phase: Phase::Attempting { pending: Vec::new(), lost: None },
+            phase: Phase::Attempting { pending: Vec::new(), full: false, lost: None },
             generation: 1,
             round: CancellationToken::new(),
         };
@@ -155,8 +163,9 @@ impl Shared {
         }
         match event {
             SessionEvent::Output(bytes) => match &mut state.phase {
-                Phase::Attempting { pending, .. } => {
-                    if pending.len() + bytes.len() <= MAX_PENDING_OUTPUT {
+                Phase::Attempting { pending, full, .. } => {
+                    *full = *full || pending.len() + bytes.len() > MAX_PENDING_OUTPUT;
+                    if !*full {
                         pending.extend_from_slice(&bytes);
                     }
                 }
@@ -223,13 +232,13 @@ impl Shared {
             close_in_background(session);
             return Attached::Done;
         }
-        let Phase::Attempting { pending, lost } =
+        let Phase::Attempting { pending, lost, .. } =
             std::mem::replace(&mut state.phase, Phase::Connected(session.clone()))
         else {
             unreachable!("checked above");
         };
         if let Some(reason) = lost {
-            state.phase = Phase::Attempting { pending: Vec::new(), lost: None };
+            state.phase = Phase::Attempting { pending: Vec::new(), full: false, lost: None };
             drop(state);
             close_in_background(session);
             return Attached::LostMeanwhile(reason);
@@ -303,7 +312,7 @@ async fn run_round(shared: Arc<Shared>, round: CancellationToken, mut reason: Co
                 return;
             }
             state.generation += 1;
-            state.phase = Phase::Attempting { pending: Vec::new(), lost: None };
+            state.phase = Phase::Attempting { pending: Vec::new(), full: false, lost: None };
             let (cols, rows) = *shared.size();
             (state.generation, cols, rows)
         };
@@ -775,5 +784,28 @@ mod tests {
         advance(0).await;
         // The bar must not keep counting down while the attempt already runs.
         assert_eq!(h.events()[1], reconnecting(1, 0));
+    }
+
+    #[test]
+    fn a_rejected_host_key_is_fatal() {
+        assert!(is_fatal(&CoreError::HostKeyRejected { message: "revoked".into() }));
+        assert!(!is_fatal(&net()));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn held_output_stops_at_the_cap_without_holes() {
+        let events: Arc<Mutex<Vec<SessionEvent>>> = Arc::default();
+        let sink: OutputSink = {
+            let events = events.clone();
+            Arc::new(move |event| events.lock().unwrap().push(event))
+        };
+        let connector: Connector = Arc::new(|_, _, _, _| Box::pin(async { Err(CoreError::Cancelled) }));
+        let session = ReconnectingSession::new(sink, 80, 24, connector, Arc::new(|| true));
+        let first = session.first_sink();
+        first(SessionEvent::Output(vec![b'a'; MAX_PENDING_OUTPUT - 1]));
+        first(SessionEvent::Output(b"bc".to_vec()));
+        first(SessionEvent::Output(b"d".to_vec()));
+        session.attach(Arc::new(FakeSession::default()));
+        assert_eq!(*events.lock().unwrap(), vec![SessionEvent::Output(vec![b'a'; MAX_PENDING_OUTPUT - 1])]);
     }
 }
