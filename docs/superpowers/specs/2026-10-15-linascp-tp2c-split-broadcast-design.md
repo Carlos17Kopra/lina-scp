@@ -85,14 +85,15 @@ interface TabGroup {
 - Neue Buttons rechts:
   - „Nebeneinander teilen“ (`Ctrl+Shift+E`)
   - „Untereinander teilen“ (`Ctrl+Shift+O`)
-  - „Broadcast“ mit `aria-pressed` (`Ctrl+Shift+I`)
+  - „Broadcast“ mit `aria-pressed` (`Ctrl+Shift+A`)
 - Bei 4 Bereichen sind die Teilen-Buttons deaktiviert. Broadcast ist erst ab 2 Bereichen aktivierbar.
 - Ist Broadcast an, steht neben dem Button „Broadcast an · N Bereiche“.
 
 ### Bereiche
 
-- Das Layout wird rekursiv gerendert. Ein Split ist ein Flex-Container mit einer Trennlinie (`role="separator"`,
-  `aria-orientation`), die sich mit der Maus ziehen lässt. Das Ändern der Größe läuft über den bestehenden
+- Die Bereiche werden flach gerendert (nach ID, absolut positioniert aus `arrange(layout)`), damit ein Split ein
+  laufendes Terminal nie neu aufbaut. Jede Trennlinie (`role="separator"`, `aria-orientation`) lässt sich mit der
+  Maus ziehen und per Tastatur (Pfeiltasten, 5-%-Schritte) verschieben. Das Ändern der Größe läuft über den bestehenden
   ResizeObserver mit Fit-Addon.
 - Ein Klick in einen Bereich fokussiert ihn:
   - Der fokussierte Bereich bekommt einen Akzent-Rahmen, wenn die Gruppe mehr als einen Bereich hat.
@@ -125,7 +126,7 @@ Sitzungs-Reiter leer („Kein Terminal“) und Einfügen und ▶ sind gesperrt.
 |---|---|
 | `Ctrl+Shift+E` | fokussierten Bereich nebeneinander teilen |
 | `Ctrl+Shift+O` | fokussierten Bereich untereinander teilen |
-| `Ctrl+Shift+I` | Broadcast umschalten |
+| `Ctrl+Shift+A` | Broadcast umschalten (nicht `I`: öffnet in WebKitGTK-Debug-Builds die DevTools) |
 | `Ctrl+Shift+←` / `Ctrl+Shift+→` | vorigen / nächsten Bereich fokussieren |
 | `Ctrl+Shift+W` | aktive Gruppe (Tab) schließen |
 
