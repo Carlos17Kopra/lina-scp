@@ -388,6 +388,9 @@ export const t = {
     endedText: (title: string) => `Die Sitzung »${title}« wurde beendet. Der Verlauf bleibt sichtbar, bis du den Tab schließt.`,
     endedSuffix: "beendet",
     reconnect: "Neu verbinden",
+    design: {
+      auto: "Wie App-Design",
+    },
   },
   settings: {
     title: "Einstellungen",
