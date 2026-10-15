@@ -98,7 +98,7 @@ describe("TerminalScreen", () => {
     await userEvent.click(screen.getByRole("button", { name: "Neues lokales Terminal" }));
     expect(openLocal).toHaveBeenCalledOnce();
     await userEvent.click(screen.getByRole("button", { name: "web-prod-01 schließen" }));
-    expect(closeSession).toHaveBeenCalledWith("a");
+    expect(closeGroup).toHaveBeenCalledWith("a");
   });
 
   it("offers close and reconnect in the same pane when an SSH session ended", async () => {
@@ -137,5 +137,23 @@ describe("TerminalScreen", () => {
     render(<TerminalScreen />);
     const sidebar = screen.getByRole("complementary", { name: "Sitzungsdetails" });
     expect(within(sidebar).getByText("Kein Terminal")).toBeInTheDocument();
+  });
+
+  it("splits, counts panes, limits to 4 and toggles broadcast from the tab bar", async () => {
+    seed([web], "a");
+    let next = 0;
+    vi.mocked(api.newId).mockImplementation(() => `p-${++next}`);
+    render(<TerminalScreen />);
+    const broadcast = screen.getByRole("button", { name: "Broadcast" });
+    expect(broadcast).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Nebeneinander teilen" }));
+    expect(screen.getByRole("tab", { name: "web-prod-01 · 2" })).toBeInTheDocument();
+    await userEvent.click(broadcast);
+    expect(broadcast).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Broadcast an · 2 Bereiche")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Untereinander teilen" }));
+    await userEvent.click(screen.getByRole("button", { name: "Untereinander teilen" }));
+    expect(screen.getByRole("button", { name: "Nebeneinander teilen" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Untereinander teilen" })).toBeDisabled();
   });
 });
