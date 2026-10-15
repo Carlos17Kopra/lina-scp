@@ -1,14 +1,14 @@
 //! Mirror mode: LinaSCP hosts are written to `~/.ssh/config.d/linascp.conf`,
 //! which is included from the top of `~/.ssh/config`.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 use crate::fsutil;
-use crate::model::{AuthConfig, AuthMethod, Host, HostAuth, HostSource, LoginProfile};
+use crate::model::{AuthConfig, AuthMethod, Host, HostAuth, HostSource, Id, LoginProfile};
 use crate::validate::{is_safe_text, validate_host, validate_profile};
 
 pub const INCLUDE_LINE: &str = "Include ~/.ssh/config.d/linascp.conf";
@@ -26,25 +26,53 @@ impl Mirror {
     /// Renders all `source == Linascp` hosts. Pass the full (merged) host list so that
     /// `ProxyJump` can reference jump hosts that come from `~/.ssh/config`.
     ///
-    /// Defence in depth: a host whose fields (or whose profile's / jump host's) fail
-    /// validation, or whose alias would be an ssh_config pattern, is skipped and logged.
+    /// Defence in depth: a host whose fields (or whose profile's) fail validation, or whose
+    /// alias would be an ssh_config pattern, is skipped and logged. So is a host whose
+    /// `ProxyJump` would not resolve to its jump host (jump host skipped, or its alias shadowed
+    /// by another mirrored host): falling back to a direct connection or to the wrong jump host
+    /// is never an option.
     pub fn render(hosts: &[Host], profiles: &[LoginProfile]) -> String {
-        let mut out = format!("{HEADER}\n");
-        let mut aliases = HashSet::new();
+        let profile_of = |host: &Host| match &host.auth {
+            HostAuth::Profile { profile_id } => profiles.iter().find(|p| p.id == *profile_id),
+            HostAuth::Custom { .. } => None,
+        };
+        // Pass 1: hosts that can be written on their own, first one wins an alias.
+        let mut rendered: HashMap<String, Id> = HashMap::new();
+        let mut order: Vec<&Host> = Vec::new();
         for host in hosts.iter().filter(|h| h.source == HostSource::Linascp) {
-            let profile = match &host.auth {
-                HostAuth::Profile { profile_id } => profiles.iter().find(|p| p.id == *profile_id),
-                HostAuth::Custom { .. } => None,
-            };
-            let jump = host.jump_host_id.and_then(|id| hosts.iter().find(|h| h.id == id));
-            if let Some(reason) = skip_reason(host, profile, jump) {
+            if let Some(reason) = skip_reason(host, profile_of(host)) {
                 tracing::warn!(host_id = %host.id, reason, "host not written to the ssh mirror file");
                 continue;
             }
-            if !aliases.insert(host_alias(&host.name)) {
+            if rendered.contains_key(&host_alias(&host.name)) {
                 tracing::warn!(host_id = %host.id, "host alias already used by an earlier host, not written to the ssh mirror file");
                 continue;
             }
+            rendered.insert(host_alias(&host.name), host.id);
+            order.push(host);
+        }
+        // Pass 2: drop hosts whose ProxyJump would not reach their jump host, until stable
+        // (dropping a jump host also drops the hosts behind it).
+        let jump_of = |host: &Host| host.jump_host_id.map(|id| hosts.iter().find(|h| h.id == id));
+        loop {
+            let broken: Vec<Id> = order
+                .iter()
+                .filter(|host| jump_of(host).is_some_and(|jump| jump.and_then(|j| jump_alias(j, &rendered)).is_none()))
+                .map(|host| host.id)
+                .collect();
+            if broken.is_empty() {
+                break;
+            }
+            for host in order.iter().filter(|h| broken.contains(&h.id)) {
+                tracing::warn!(host_id = %host.id, "jump host not reachable via the ssh mirror file, host not written");
+                rendered.remove(&host_alias(&host.name));
+            }
+            order.retain(|host| !broken.contains(&host.id));
+        }
+
+        let mut out = format!("{HEADER}\n");
+        for host in order {
+            let profile = profile_of(host);
             let auth: Option<&AuthConfig> = match &host.auth {
                 HostAuth::Profile { .. } => profile.map(|p| &p.auth),
                 HostAuth::Custom { auth } => Some(auth),
@@ -65,8 +93,8 @@ impl Mirror {
             if let Some(AuthConfig { method: AuthMethod::Key, key_path: Some(path), .. }) = auth {
                 out.push_str(&format!("    IdentityFile {}\n", quote(path)));
             }
-            if let Some(jump) = jump {
-                out.push_str(&format!("    ProxyJump {}\n", host_alias(&jump.name)));
+            if let Some(jump) = jump_of(host).flatten().and_then(|jump| jump_alias(jump, &rendered)) {
+                out.push_str(&format!("    ProxyJump {jump}\n"));
             }
         }
         out
@@ -143,7 +171,7 @@ fn has_include(content: &str) -> bool {
 }
 
 /// Why `host` must not be rendered, if at all. Never includes field values (no secrets in logs).
-fn skip_reason(host: &Host, profile: Option<&LoginProfile>, jump: Option<&Host>) -> Option<&'static str> {
+fn skip_reason(host: &Host, profile: Option<&LoginProfile>) -> Option<&'static str> {
     if validate_host(host).is_err() {
         return Some("invalid host field");
     }
@@ -153,10 +181,22 @@ fn skip_reason(host: &Host, profile: Option<&LoginProfile>, jump: Option<&Host>)
     if host_alias(&host.name).is_empty() {
         return Some("name yields an empty ssh_config alias");
     }
-    if jump.is_some_and(|j| !is_safe_text(&j.name) || host_alias(&j.name).is_empty()) {
-        return Some("invalid jump host name");
-    }
     None
+}
+
+/// The alias a `ProxyJump` must name to reach `jump`, if OpenSSH would resolve it to exactly
+/// that host. A mirrored jump host must have been rendered under its alias; an imported one is
+/// named by its raw alias from `~/.ssh/config`, which must be a plain word and must not be
+/// shadowed by a mirrored host (the mirror file is included first, so it would win).
+fn jump_alias(jump: &Host, rendered: &HashMap<String, Id>) -> Option<String> {
+    if jump.source == HostSource::Linascp {
+        let alias = host_alias(&jump.name);
+        return (rendered.get(&alias) == Some(&jump.id)).then_some(alias);
+    }
+    let plain = !jump.name.is_empty()
+        && is_safe_text(&jump.name)
+        && !jump.name.contains(|c: char| c.is_whitespace() || matches!(c, '\'' | '\\' | '#' | ',' | '*' | '?' | '!'));
+    (plain && !rendered.contains_key(&jump.name)).then(|| jump.name.clone())
 }
 
 /// The `Host` alias derived from a display name: every character outside `[A-Za-z0-9._-]`
@@ -409,6 +449,57 @@ mod injection_tests {
         let out = Mirror::render(&[jump, target], &[]);
         assert!(out.contains("    ProxyJump O-Reilly-jump\n"), "{out}");
     }
+
+    fn with_id(mut host: Host) -> Host {
+        host.id = crate::model::Id::new_v4();
+        host
+    }
+
+    fn via(name: &str, jump: &Host) -> Host {
+        let mut host = with_id(Host::new(name, &format!("{name}.example")));
+        host.jump_host_id = Some(jump.id);
+        host
+    }
+
+    #[test]
+    fn target_is_skipped_when_its_jump_host_lost_an_alias_collision() {
+        let first = with_id(Host::new("a-b", "first.example"));
+        let jump = with_id(Host::new("a b", "jump.example"));
+        let target = via("target", &jump);
+        let out = Mirror::render(&[first, jump, target], &[]);
+        assert!(out.contains("first.example"), "{out}");
+        assert!(!out.contains("target") && !out.contains("ProxyJump"), "{out}");
+    }
+
+    #[test]
+    fn skipped_jump_host_takes_its_whole_chain_with_it() {
+        let bad = with_id(Host::new("bad", "x.example\n    ProxyCommand touch /tmp/pwned"));
+        let middle = via("middle", &bad);
+        let last = via("last", &middle);
+        // The chain is listed before its jump hosts on purpose.
+        let out = Mirror::render(&[last, middle, bad], &[]);
+        assert_eq!(out, format!("{HEADER}\n"), "{out}");
+    }
+
+    #[test]
+    fn imported_jump_host_is_referenced_by_its_raw_alias() {
+        let mut jump = with_id(Host::new("sprung-ü", "jump.example"));
+        jump.source = HostSource::SshConfig;
+        let target = via("target", &jump);
+        let out = Mirror::render(&[jump, target], &[]);
+        assert!(out.contains("    ProxyJump sprung-ü\n"), "{out}");
+    }
+
+    #[test]
+    fn target_is_skipped_when_imported_jump_alias_is_shadowed_by_a_mirrored_host() {
+        let shadow = with_id(Host::new("bastion", "attacker.example"));
+        let mut jump = with_id(Host::new("bastion", "bastion.example"));
+        jump.source = HostSource::SshConfig;
+        let target = via("target", &jump);
+        let out = Mirror::render(&[shadow, jump, target], &[]);
+        assert!(out.contains("attacker.example"), "{out}");
+        assert!(!out.contains("target"), "{out}");
+    }
 }
 
 /// Runs the real `ssh -G` against rendered configs. Uses `-F <temp file>` only, so the user's
@@ -477,6 +568,26 @@ mod openssh_tests {
         assert!(ok, "{stderr}\n{rendered}");
         assert_eq!(field(&stdout, "hostname"), Some("via.example"));
         assert_eq!(field(&stdout, "proxyjump"), Some("O-Reilly-jump"));
+    }
+
+    #[test]
+    fn openssh_accepts_proxyjump_to_non_ascii_imported_alias() {
+        if !ssh_available() {
+            eprintln!("NOTE: `ssh` not on PATH, skipping openssh_accepts_proxyjump_to_non_ascii_imported_alias");
+            return;
+        }
+        let mut jump = Host::new("sprung-ü", "jump.example");
+        jump.id = crate::model::Id::new_v4();
+        jump.source = HostSource::SshConfig;
+        let mut target = Host::new("target", "t.example");
+        target.jump_host_id = Some(jump.id);
+        let rendered = Mirror::render(&[jump, target], &[]);
+        let tmp = tempfile::tempdir().unwrap();
+        let conf = tmp.path().join("linascp.conf");
+        fs::write(&conf, format!("{rendered}\nHost sprung-ü\n    HostName jump.example\n")).unwrap();
+        let (ok, stdout, stderr) = ssh_g(&conf, "target");
+        assert!(ok, "{stderr}\n{rendered}");
+        assert_eq!(field(&stdout, "proxyjump"), Some("sprung-ü"));
     }
 
     /// RED evidence kept as a regression test: the pre-R22 rendering (`Host O'Reilly-server`,
