@@ -34,7 +34,7 @@ Nicht enthalten:
 
 ### Host
 
-`Host` bekommt `terminal_scheme: Option<String>` und `terminal_font_size: Option<u8>`.
+`Host` bekommt `terminal_scheme: Option<String>` und `terminal_font_size: Option<u16>` (wie `Settings.terminal_font_size`).
 
 - Migration V2: `ALTER TABLE hosts ADD COLUMN terminal_scheme TEXT` und `ADD COLUMN terminal_font_size INTEGER`,
   beide nullbar.
@@ -57,8 +57,11 @@ Nicht enthalten:
 
 ## 2. Sitzungsinfo (Backend)
 
-`ConnectEvent::Connected { session_id, info: SessionInfo }`. Die Info entsteht einmal pro Verbindung und ändert
-sich danach nicht. Rekeys werden ignoriert.
+Der Command `connect_ssh` liefert statt der `SessionId` ein `ConnectedSession { sessionId, info: SessionInfo }`.
+Die UI verwendet schon heute den Rückgabewert des Commands und nicht das `Connected`-Event, und Channel-Nachrichten
+haben keine garantierte Reihenfolge zur Invoke-Antwort. `ConnectEvent::Connected` bleibt deshalb unverändert. Die
+Info entsteht einmal pro Verbindung und ändert sich danach nicht. Rekeys werden ignoriert. Im Core hängt sie an
+`SshSession` (`SshSession::info()`).
 
 ```rust
 pub struct SessionInfo {
@@ -67,7 +70,7 @@ pub struct SessionInfo {
     pub kex: String,                 // z. B. "curve25519-sha256"
     pub cipher: String,              // z. B. "chacha20-poly1305@openssh.com"
     pub mac: String,                 // client→server MAC, unverändert so, wie russh ihn liefert (bei AEAD-Ciphern ein Platzhalter von russh)
-    pub auth_method: AuthMethod,     // die Methode, mit der die Anmeldung gelang
+    pub auth_methods: Vec<AuthMethod>, // die Methoden der erfolgreichen Anmeldung, in Reihenfolge (2FA: mehrere)
 }
 ```
 
@@ -75,7 +78,7 @@ pub struct SessionInfo {
   Handler legt sie in einem geteilten Slot ab, den die Pipeline nach dem Auth-Schritt ausliest.
 - `host_key_*` kommen aus `check_server_key`. Es ist dieselbe `HostKeyInfo`, die auch der Host-Key-Prompt
   verwendet.
-- `auth_method` meldet der Auth-Schritt zurück.
+- `auth_methods` meldet der Auth-Schritt zurück (`auth::authenticate` liefert die verwendeten Methoden).
 - Fehlt ein Wert, etwa weil `kex_done` nicht aufgerufen wurde, bleibt das Feld ein leerer String und die UI zeigt
   „—“. Die Verbindung scheitert daran nicht.
 - Die Struktur enthält keine Secrets. Sie darf nicht um Benutzernamen aus Prompts, Passwörter, Passphrasen oder
@@ -108,7 +111,7 @@ SSH-Tab, als Definitionsliste:
 |---|---|
 | Host | `user@address:port` |
 | Jump-Host | Name des Jump-Hosts oder „—“ |
-| Anmeldung | Methode (deutsches Label) plus Profilname, falls ein Profil genutzt wird |
+| Anmeldung | Methoden (deutsche Labels, mit „ + “ verbunden) plus Profilname, falls ein Profil genutzt wird |
 | Host-Key | Algorithmus + SHA256-Fingerprint, mit Kopieren-Button (Terminal-Clipboard-Modul) |
 | Schlüsselaustausch | `kex` |
 | Verschlüsselung | `cipher`, `mac` |
@@ -131,7 +134,7 @@ SSH-Tab, als Definitionsliste:
     Änderungen gehen an den Host.
   - Wer „Alle Sitzungen“ wählt, setzt beide Host-Felder auf `None`. Weitere Änderungen gehen an die Settings.
   - „Nur diesen Host“ ist deaktiviert bei lokalen Tabs, bei Hosts mit `source = sshConfig` und bei gelöschten
-    Hosts. Ein Tooltip nennt den Grund.
+    Hosts. Ein Hinweis unter dem Schalter nennt den Grund.
 - Jede Änderung speichert sofort und wirkt sofort auf alle Tabs, deren effektiver Wert sich ändert.
 - Scheitert das Speichern, erscheint ein Fehler-Toast, und die Anzeige springt auf den gespeicherten Wert zurück.
 
@@ -170,7 +173,7 @@ Rust (`crates/core`):
 - Settings: neue Keys mit Standardwerten, Roundtrip.
 - Mirror-Ausgabe unverändert mit gesetzten Overrides.
 - Docker-sshd-Integrationstest: `Connected.info` hat nicht-leere Werte für `kex`, `cipher` und `host_key_sha256`.
-  Der Fingerprint entspricht dem Host-Key des Containers, und `auth_method` entspricht der verwendeten Methode.
+  Der Fingerprint entspricht dem Host-Key des Containers, und `auth_methods` entspricht den verwendeten Methoden.
 
 UI (vitest):
 - `terminalTheme`: alle 9 Schemata ergeben deckende Hintergründe. `"auto"` folgt dem App-Design, eine unbekannte
