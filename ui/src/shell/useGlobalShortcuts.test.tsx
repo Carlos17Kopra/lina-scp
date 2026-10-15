@@ -4,7 +4,7 @@ import * as api from "../ipc/api";
 import { useSessionsStore } from "../stores/sessions";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../stores/settings";
 import { useUiStore } from "../stores/ui";
-import { useGlobalShortcuts } from "./useGlobalShortcuts";
+import { shortcutFor, useGlobalShortcuts } from "./useGlobalShortcuts";
 
 vi.mock("../ipc/api");
 
@@ -96,5 +96,42 @@ describe("useGlobalShortcuts", () => {
     useUiStore.getState().openModal({ type: "import" });
     fireEvent.keyDown(document.body, { key: ",", ctrlKey: true });
     expect(useUiStore.getState().modal).toEqual({ type: "import" });
+  });
+
+  it("maps the pane shortcuts", () => {
+    const key = (k: string) => shortcutFor({ key: k, ctrlKey: true, shiftKey: true, altKey: false, metaKey: false });
+    expect(key("E")).toBe("splitRow");
+    expect(key("O")).toBe("splitColumn");
+    expect(key("A")).toBe("toggleBroadcast");
+    expect(key("W")).toBe("closeTab");
+    expect(key("ArrowLeft")).toBe("focusPrev");
+    expect(key("ArrowRight")).toBe("focusNext");
+  });
+
+  it("runs pane shortcuts in the terminal view only, also from inside a terminal", () => {
+    const split = vi.fn();
+    const toggleBroadcast = vi.fn();
+    const focusNeighbour = vi.fn();
+    const closeGroup = vi.fn(async () => undefined);
+    useSessionsStore.setState({ activeId: "g", split, toggleBroadcast, focusNeighbour, closeGroup });
+    render(<Harness />);
+    const terminal = screen.getByRole("textbox", { name: "Terminal-Eingabe" });
+    const press = (key: string) => fireEvent.keyDown(terminal, { key, ctrlKey: true, shiftKey: true });
+
+    useUiStore.setState({ view: "hosts" });
+    press("E");
+    expect(split).not.toHaveBeenCalled();
+
+    useUiStore.setState({ view: "terminal" });
+    press("E");
+    press("O");
+    press("A");
+    press("ArrowLeft");
+    press("ArrowRight");
+    press("W");
+    expect(split.mock.calls).toEqual([["row"], ["column"]]);
+    expect(toggleBroadcast).toHaveBeenCalledOnce();
+    expect(focusNeighbour.mock.calls).toEqual([[-1], [1]]);
+    expect(closeGroup).toHaveBeenCalledWith("g");
   });
 });

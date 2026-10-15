@@ -3,19 +3,39 @@ import { toggleTerminalSidebar } from "../screens/terminal/sidebar/toggle";
 import { useSessionsStore } from "../stores/sessions";
 import { useUiStore } from "../stores/ui";
 
-export type Shortcut = "search" | "newHost" | "newLocalTerminal" | "toggleSidebar" | "settings";
+export type Shortcut =
+  | "search"
+  | "newHost"
+  | "newLocalTerminal"
+  | "toggleSidebar"
+  | "settings"
+  | "splitRow"
+  | "splitColumn"
+  | "toggleBroadcast"
+  | "focusPrev"
+  | "focusNext"
+  | "closeTab";
+
+const SHIFT_SHORTCUTS: Readonly<Record<string, Shortcut>> = {
+  t: "newLocalTerminal",
+  b: "toggleSidebar",
+  e: "splitRow",
+  o: "splitColumn",
+  a: "toggleBroadcast",
+  w: "closeTab",
+  arrowleft: "focusPrev",
+  arrowright: "focusNext",
+};
 
 type KeyInfo = Pick<KeyboardEvent, "key" | "ctrlKey" | "shiftKey" | "altKey" | "metaKey">;
 
-/** Maps a key event to an app shortcut (Ctrl+K, Ctrl+N, Ctrl+Shift+T, Ctrl+Shift+B, Ctrl+,). */
+/**
+ * Maps a key event to an app shortcut: Ctrl+K, Ctrl+N, Ctrl+, and Ctrl+Shift+T/B/E/O/A/W/←/→.
+ */
 export function shortcutFor(event: KeyInfo): Shortcut | null {
   if (!event.ctrlKey || event.altKey || event.metaKey) return null;
   const key = event.key.toLowerCase();
-  if (event.shiftKey) {
-    if (key === "t") return "newLocalTerminal";
-    if (key === "b") return "toggleSidebar";
-    return null;
-  }
+  if (event.shiftKey) return SHIFT_SHORTCUTS[key] ?? null;
   switch (key) {
     case "k":
       return "search";
@@ -28,8 +48,18 @@ export function shortcutFor(event: KeyInfo): Shortcut | null {
   }
 }
 
+/** Shortcuts that belong to the terminal view: they work only there, also with focus inside a terminal. */
+const TERMINAL_VIEW_ONLY: ReadonlySet<Shortcut> = new Set<Shortcut>([
+  "toggleSidebar",
+  "splitRow",
+  "splitColumn",
+  "toggleBroadcast",
+  "focusPrev",
+  "focusNext",
+  "closeTab",
+]);
 /** Shortcuts that also apply while focus is inside a terminal (`[data-terminal]`). */
-const TERMINAL_SAFE: ReadonlySet<Shortcut> = new Set<Shortcut>(["newLocalTerminal", "toggleSidebar", "settings"]);
+const TERMINAL_SAFE: ReadonlySet<Shortcut> = new Set<Shortcut>(["newLocalTerminal", "settings", ...TERMINAL_VIEW_ONLY]);
 
 function insideTerminal(target: EventTarget | null): boolean {
   return target instanceof Element && target.closest("[data-terminal]") !== null;
@@ -47,8 +77,8 @@ export function useGlobalShortcuts(): void {
       const ui = useUiStore.getState();
       if (ui.modal) return;
       if (!TERMINAL_SAFE.has(shortcut) && insideTerminal(event.target)) return;
-      // The sidebar belongs to the terminal view; elsewhere the key stays unused.
-      if (shortcut === "toggleSidebar" && ui.view !== "terminal") return;
+      // Sidebar, panes and tabs belong to the terminal view; elsewhere the keys stay unused.
+      if (TERMINAL_VIEW_ONLY.has(shortcut) && ui.view !== "terminal") return;
       event.preventDefault();
       event.stopPropagation();
       switch (shortcut) {
@@ -68,6 +98,26 @@ export function useGlobalShortcuts(): void {
         case "settings":
           ui.openModal({ type: "settings" });
           break;
+        case "splitRow":
+          useSessionsStore.getState().split("row");
+          break;
+        case "splitColumn":
+          useSessionsStore.getState().split("column");
+          break;
+        case "toggleBroadcast":
+          useSessionsStore.getState().toggleBroadcast();
+          break;
+        case "focusPrev":
+          useSessionsStore.getState().focusNeighbour(-1);
+          break;
+        case "focusNext":
+          useSessionsStore.getState().focusNeighbour(1);
+          break;
+        case "closeTab": {
+          const { activeId, closeGroup } = useSessionsStore.getState();
+          if (activeId) void closeGroup(activeId);
+          break;
+        }
       }
     };
     window.addEventListener("keydown", onKeyDown, true);
