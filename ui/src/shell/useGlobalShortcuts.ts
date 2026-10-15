@@ -1,16 +1,21 @@
 import { useEffect } from "react";
+import { toggleTerminalSidebar } from "../screens/terminal/sidebar/toggle";
 import { useSessionsStore } from "../stores/sessions";
 import { useUiStore } from "../stores/ui";
 
-export type Shortcut = "search" | "newHost" | "newLocalTerminal" | "settings";
+export type Shortcut = "search" | "newHost" | "newLocalTerminal" | "toggleSidebar" | "settings";
 
 type KeyInfo = Pick<KeyboardEvent, "key" | "ctrlKey" | "shiftKey" | "altKey" | "metaKey">;
 
-/** Maps a key event to an app shortcut (Ctrl+K, Ctrl+N, Ctrl+Shift+T, Ctrl+,). */
+/** Maps a key event to an app shortcut (Ctrl+K, Ctrl+N, Ctrl+Shift+T, Ctrl+Shift+B, Ctrl+,). */
 export function shortcutFor(event: KeyInfo): Shortcut | null {
   if (!event.ctrlKey || event.altKey || event.metaKey) return null;
   const key = event.key.toLowerCase();
-  if (event.shiftKey) return key === "t" ? "newLocalTerminal" : null;
+  if (event.shiftKey) {
+    if (key === "t") return "newLocalTerminal";
+    if (key === "b") return "toggleSidebar";
+    return null;
+  }
   switch (key) {
     case "k":
       return "search";
@@ -24,7 +29,7 @@ export function shortcutFor(event: KeyInfo): Shortcut | null {
 }
 
 /** Shortcuts that also apply while focus is inside a terminal (`[data-terminal]`). */
-const TERMINAL_SAFE: ReadonlySet<Shortcut> = new Set<Shortcut>(["newLocalTerminal", "settings"]);
+const TERMINAL_SAFE: ReadonlySet<Shortcut> = new Set<Shortcut>(["newLocalTerminal", "toggleSidebar", "settings"]);
 
 function insideTerminal(target: EventTarget | null): boolean {
   return target instanceof Element && target.closest("[data-terminal]") !== null;
@@ -54,6 +59,9 @@ export function useGlobalShortcuts(): void {
           break;
         case "newLocalTerminal":
           void useSessionsStore.getState().openLocal();
+          break;
+        case "toggleSidebar":
+          toggleTerminalSidebar();
           break;
         case "settings":
           ui.openModal({ type: "settings" });

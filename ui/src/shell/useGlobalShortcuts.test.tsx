@@ -1,6 +1,8 @@
 import { createEvent, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as api from "../ipc/api";
 import { useSessionsStore } from "../stores/sessions";
+import { DEFAULT_SETTINGS, useSettingsStore } from "../stores/settings";
 import { useUiStore } from "../stores/ui";
 import { useGlobalShortcuts } from "./useGlobalShortcuts";
 
@@ -46,6 +48,15 @@ describe("useGlobalShortcuts", () => {
     render(<Harness />);
     fireEvent.keyDown(document.body, { key: "T", ctrlKey: true, shiftKey: true });
     expect(openLocal).toHaveBeenCalledOnce();
+  });
+
+  it("Ctrl+Shift+B toggles the terminal sidebar, also inside the terminal", async () => {
+    vi.mocked(api.settingsSet).mockImplementation(async (settings) => settings);
+    useSettingsStore.setState({ settings: DEFAULT_SETTINGS, loaded: true });
+    render(<Harness />);
+    fireEvent.keyDown(screen.getByLabelText("Terminal-Eingabe"), { key: "B", ctrlKey: true, shiftKey: true });
+    await vi.waitFor(() => expect(useSettingsStore.getState().settings.terminalSidebarOpen).toBe(true));
+    expect(api.settingsSet).toHaveBeenLastCalledWith(expect.objectContaining({ terminalSidebarOpen: true }));
   });
 
   it("Ctrl+, opens the settings", () => {

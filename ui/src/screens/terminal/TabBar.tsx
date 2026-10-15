@@ -1,8 +1,10 @@
-import { Plus, X } from "lucide-react";
+import { PanelRight, Plus, X } from "lucide-react";
 import { type KeyboardEvent, useRef } from "react";
 import { cx, IconButton, nextIndex } from "../../components";
 import { t } from "../../i18n/de";
 import { useSessionsStore } from "../../stores/sessions";
+import { useSettingsStore } from "../../stores/settings";
+import { toggleTerminalSidebar } from "./sidebar/toggle";
 import styles from "./TabBar.module.css";
 
 export const tabButtonId = (id: string) => `session-tab-${id}`;
@@ -15,6 +17,7 @@ export function TabBar() {
   const setActive = useSessionsStore((state) => state.setActive);
   const closeSession = useSessionsStore((state) => state.closeSession);
   const openLocal = useSessionsStore((state) => state.openLocal);
+  const sidebarOpen = useSettingsStore((state) => state.settings.terminalSidebarOpen);
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
@@ -64,6 +67,7 @@ export function TabBar() {
         })}
       </div>
       <IconButton label={t.terminal.newLocal} title={t.terminal.newLocalTitle} icon={Plus} onClick={() => void openLocal()} />
+      <IconButton label={t.terminal.sidebar.toggle} icon={PanelRight} aria-pressed={sidebarOpen} onClick={toggleTerminalSidebar} />
     </div>
   );
 }
