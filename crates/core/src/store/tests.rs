@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::{EnvVar, SftpSettings, TransferMode};
+use crate::model::{EnvVar, SftpSettings, Snippet, TransferMode};
 
 fn full_host() -> Host {
     let mut h = Host::new("web-1", "10.0.0.5");
@@ -184,4 +184,51 @@ fn settings_get_and_set() {
     store.set_setting(THEME, "dark").unwrap();
     store.set_setting(THEME, "light").unwrap();
     assert_eq!(store.get_setting(THEME).unwrap(), Some("light".to_string()));
+}
+
+#[test]
+fn snippet_roundtrip_keeps_created_at_and_sorts_by_name() {
+    let store = Store::open_in_memory().unwrap();
+    let mut beta = Snippet::new("beta", "echo b\necho c", None);
+    beta.created_at = 1_000;
+    beta.updated_at = 1_000;
+    let alpha = Snippet::new("Alpha", "ls", None);
+    store.save_snippet(&beta).unwrap();
+    store.save_snippet(&alpha).unwrap();
+    beta.command = "echo changed".into();
+    beta.created_at = 5_000;
+    store.save_snippet(&beta).unwrap();
+
+    let names: Vec<String> = store.list_snippets().unwrap().into_iter().map(|s| s.name).collect();
+    assert_eq!(names, ["Alpha", "beta"]);
+    let loaded = store.get_snippet(beta.id).unwrap().unwrap();
+    assert_eq!(loaded.command, "echo changed");
+    assert_eq!(loaded.created_at, 1_000);
+    assert!(loaded.updated_at >= now_unix() - 5);
+}
+
+#[test]
+fn snippet_for_unknown_host_is_rejected() {
+    let store = Store::open_in_memory().unwrap();
+    let snippet = Snippet::new("x", "ls", Some(Id::new_v4()));
+    assert!(matches!(store.save_snippet(&snippet), Err(CoreError::Config { .. })));
+    assert!(store.list_snippets().unwrap().is_empty());
+}
+
+#[test]
+fn deleting_a_host_deletes_only_its_snippets() {
+    let store = Store::open_in_memory().unwrap();
+    let host = Host::new("web", "10.0.0.5");
+    store.save_host(&host).unwrap();
+    let bound = Snippet::new("bound", "ls", Some(host.id));
+    let global = Snippet::new("global", "ls", None);
+    store.save_snippet(&bound).unwrap();
+    store.save_snippet(&global).unwrap();
+
+    store.delete_host(host.id).unwrap();
+    assert_eq!(store.list_snippets().unwrap(), vec![store.get_snippet(global.id).unwrap().unwrap()]);
+
+    store.delete_snippet(global.id).unwrap();
+    store.delete_snippet(global.id).unwrap();
+    assert!(store.list_snippets().unwrap().is_empty());
 }

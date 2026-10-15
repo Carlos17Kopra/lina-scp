@@ -1,4 +1,4 @@
-//! SQLite persistence for hosts, login profiles, groups and settings.
+//! SQLite persistence for hosts, login profiles, groups, snippets and settings.
 
 mod migrations;
 #[cfg(test)]
@@ -13,7 +13,8 @@ use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
 use crate::error::{CoreError, Result};
 use crate::model::{
-    AuthConfig, AuthMethod, ForwardKind, Group, Host, HostAuth, HostSource, Id, LoginProfile, PortForward, now_unix,
+    AuthConfig, AuthMethod, ForwardKind, Group, Host, HostAuth, HostSource, Id, LoginProfile, PortForward, Snippet,
+    now_unix,
 };
 
 /// Setting key: `"dark"` | `"light"`.
@@ -36,6 +37,8 @@ const HOST_COLUMNS: &str = "id, name, address, port, user, group_id, color, note
     env, sftp_settings, source, created_at, updated_at, terminal_scheme, terminal_font_size";
 
 const PROFILE_COLUMNS: &str = "id, name, user, method, key_path, has_secret, created_at, updated_at";
+
+const SNIPPET_COLUMNS: &str = "id, name, command, host_id, created_at, updated_at";
 
 pub struct Store {
     conn: Mutex<Connection>,
@@ -175,6 +178,43 @@ impl Store {
         Ok(())
     }
 
+    // ---- snippets ----
+
+    pub fn list_snippets(&self) -> Result<Vec<Snippet>> {
+        let conn = self.conn();
+        let sql = format!("SELECT {SNIPPET_COLUMNS} FROM snippets ORDER BY name COLLATE NOCASE, id");
+        let mut stmt = conn.prepare(&sql)?;
+        let snippets = stmt.query_map([], snippet_from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(snippets)
+    }
+
+    pub fn get_snippet(&self, id: Id) -> Result<Option<Snippet>> {
+        let conn = self.conn();
+        let sql = format!("SELECT {SNIPPET_COLUMNS} FROM snippets WHERE id = ?1");
+        Ok(conn.query_row(&sql, [id.to_string()], snippet_from_row).optional()?)
+    }
+
+    /// Upserts the snippet (`created_at` of an existing row is kept, `updated_at` set to now).
+    /// Fails with `Config` when `host_id` names no stored host.
+    pub fn save_snippet(&self, s: &Snippet) -> Result<()> {
+        let conn = self.conn();
+        if let Some(host_id) = s.host_id {
+            let known = conn
+                .query_row("SELECT 1 FROM hosts WHERE id = ?1", [host_id.to_string()], |_| Ok(()))
+                .optional()?
+                .is_some();
+            if !known {
+                return Err(CoreError::config("Der Host des Snippets existiert nicht"));
+            }
+        }
+        upsert_snippet(&conn, s)
+    }
+
+    pub fn delete_snippet(&self, id: Id) -> Result<()> {
+        self.conn().execute("DELETE FROM snippets WHERE id = ?1", [id.to_string()])?;
+        Ok(())
+    }
+
     // ---- settings ----
 
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
@@ -250,6 +290,28 @@ fn upsert_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
         params![key, value],
     )?;
     Ok(())
+}
+
+fn upsert_snippet(conn: &Connection, s: &Snippet) -> Result<()> {
+    conn.execute(
+        "INSERT INTO snippets (id, name, command, host_id, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+         ON CONFLICT(id) DO UPDATE SET name = excluded.name, command = excluded.command, \
+         host_id = excluded.host_id, updated_at = excluded.updated_at",
+        params![s.id.to_string(), s.name, s.command, s.host_id.map(|id| id.to_string()), s.created_at, now_unix()],
+    )?;
+    Ok(())
+}
+
+fn snippet_from_row(row: &Row<'_>) -> rusqlite::Result<Snippet> {
+    Ok(Snippet {
+        id: id_col(row, 0)?,
+        name: row.get(1)?,
+        command: row.get(2)?,
+        host_id: opt_id_col(row, 3)?,
+        created_at: row.get(4)?,
+        updated_at: row.get(5)?,
+    })
 }
 
 fn upsert_host(tx: &Transaction<'_>, host: &Host) -> Result<()> {

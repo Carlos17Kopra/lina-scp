@@ -7,7 +7,7 @@
 use std::ops::RangeInclusive;
 
 use crate::error::{CoreError, Result};
-use crate::model::{AuthConfig, Host, HostAuth, LoginProfile};
+use crate::model::{AuthConfig, Host, HostAuth, LoginProfile, Snippet};
 
 /// True when `value` can be written into one ssh_config line: no control characters
 /// (including `\n`, `\r`, `\t`) and no `"`.
@@ -96,6 +96,32 @@ pub fn validate_host(host: &Host) -> Result<()> {
 pub fn validate_profile(profile: &LoginProfile) -> Result<()> {
     check_value("Benutzer", &profile.user)?;
     check_auth(&profile.auth)
+}
+
+const SNIPPET_NAME_MAX_CHARS: usize = 64;
+const SNIPPET_COMMAND_MAX_BYTES: usize = 8192;
+
+/// Snippets never reach ssh_config; the limits keep the UI and the terminal sane.
+pub fn validate_snippet(snippet: &Snippet) -> Result<()> {
+    if snippet.name.trim().is_empty() {
+        return Err(CoreError::config("Name darf nicht leer sein"));
+    }
+    if snippet.name.chars().count() > SNIPPET_NAME_MAX_CHARS {
+        return Err(CoreError::config("Name darf höchstens 64 Zeichen lang sein"));
+    }
+    if snippet.name.chars().any(char::is_control) {
+        return Err(CoreError::config("Name darf keine Steuerzeichen enthalten"));
+    }
+    if snippet.command.trim().is_empty() {
+        return Err(CoreError::config("Befehl darf nicht leer sein"));
+    }
+    if snippet.command.len() > SNIPPET_COMMAND_MAX_BYTES {
+        return Err(CoreError::config("Befehl darf höchstens 8192 Bytes lang sein"));
+    }
+    if snippet.command.contains('\0') {
+        return Err(CoreError::config("Befehl darf keine NUL-Zeichen enthalten"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -197,6 +223,40 @@ mod tests {
             assert!(validate_terminal_overrides(&host).is_err(), "scheme {scheme:?}");
             // Cosmetic: never a reason to drop the host from the mirror or an import.
             assert!(validate_host(&host).is_ok(), "scheme {scheme:?}");
+        }
+    }
+
+    fn snippet(name: &str, command: &str) -> Snippet {
+        Snippet::new(name, command, None)
+    }
+
+    #[test]
+    fn snippet_allows_multiline_commands_up_to_the_limits() {
+        assert!(validate_snippet(&snippet("Deploy", "cd /srv\n\tgit pull\r\n")).is_ok());
+        assert!(validate_snippet(&snippet(&"n".repeat(64), &"c".repeat(8192))).is_ok());
+        assert!(validate_snippet(&snippet(&"ä".repeat(64), "x")).is_ok(), "64 characters, not bytes");
+    }
+
+    #[test]
+    fn snippet_rejects_bad_names_and_commands() {
+        let long_name = "n".repeat(65);
+        let long_command = "c".repeat(8193);
+        let cases = [
+            ("", "ls"),
+            ("   ", "ls"),
+            (long_name.as_str(), "ls"),
+            ("a\nb", "ls"),
+            ("a\tb", "ls"),
+            ("ok", ""),
+            ("ok", " \n\t "),
+            ("ok", long_command.as_str()),
+            ("ok", "ls\0"),
+        ];
+        for (name, command) in cases {
+            assert!(
+                matches!(validate_snippet(&snippet(name, command)), Err(CoreError::Config { .. })),
+                "{name:?} / {command:?}"
+            );
         }
     }
 }
