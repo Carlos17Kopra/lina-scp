@@ -80,6 +80,7 @@ describe("AppShell", () => {
       [{ type: "firstRun" }, "Willkommen bei LinaSCP"],
       [{ type: "export" }, "Exportieren"],
       [{ type: "import" }, "Importieren"],
+      [{ type: "snippet" }, "Snippet anlegen"],
     ];
     for (const [modal, title] of cases) {
       act(() => useUiStore.getState().openModal(modal));

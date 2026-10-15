@@ -12,7 +12,9 @@ export type ModalState =
   | { type: "firstRun" }
   | { type: "export" }
   | { type: "import" }
-  | { type: "connect" };
+  | { type: "connect" }
+  /** `id` undefined = new snippet; `hostId` preselects its scope. */
+  | { type: "snippet"; id?: Id; hostId?: Id | null };
 
 export interface UiState {
   view: View;
