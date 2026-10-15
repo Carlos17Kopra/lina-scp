@@ -506,3 +506,65 @@ fn failed_import_writes_nothing() {
     assert!(dst.list_groups().unwrap().is_empty() && dst.list_hosts().unwrap().is_empty());
     assert!(fs::read_dir(&key_dir).map(|mut d| d.next().is_none()).unwrap_or(true), "no key file left behind");
 }
+
+/// Fails every `set` after the first `ok` ones; otherwise a `MemorySecretStore`.
+struct FlakyKeyring {
+    inner: MemorySecretStore,
+    ok: std::sync::atomic::AtomicUsize,
+}
+
+impl SecretStore for FlakyKeyring {
+    fn get(&self, owner: SecretOwner, kind: SecretKind) -> Result<Option<SecretString>> {
+        self.inner.get(owner, kind)
+    }
+    fn set(&self, owner: SecretOwner, kind: SecretKind, value: &SecretString) -> Result<()> {
+        let left = self.ok.load(std::sync::atomic::Ordering::SeqCst);
+        if left == 0 {
+            return Err(CoreError::Keyring { message: "locked".into() });
+        }
+        self.ok.store(left - 1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.set(owner, kind, value)
+    }
+    fn delete(&self, owner: SecretOwner, kind: SecretKind) -> Result<()> {
+        self.inner.delete(owner, kind)
+    }
+}
+
+#[test]
+fn keyring_failure_rolls_the_whole_import_back() {
+    let tmp = tempfile::tempdir().unwrap();
+    let key_src = tmp.path().join("id_test");
+    fs::write(&key_src, b"PRIVATE KEY DATA").unwrap();
+    let src = source(Some(&key_src));
+    let bytes = export_data(&src.store, &src.secrets, &with_secrets("pw", true)).unwrap().bytes;
+
+    // The destination already holds the profile (replaced by the import) with an older secret.
+    let dst = Store::open_in_memory().unwrap();
+    dst.save_profile(&src.profile).unwrap();
+    let keyring = FlakyKeyring { inner: MemorySecretStore::new(), ok: 1.into() };
+    keyring.inner.set(SecretOwner::Profile(src.profile.id), SecretKind::Password, &pass("old")).unwrap();
+    let resolutions = HashMap::from([(src.profile.id, Resolution::Replace)]);
+    let key_dir = tmp.path().join("keys");
+
+    let result = import_apply(&bytes, Some(&pass("pw")), &resolutions, &dst, &keyring, &key_dir);
+
+    assert!(matches!(result, Err(CoreError::Keyring { .. })), "{result:?}");
+    assert!(dst.list_hosts().unwrap().is_empty() && dst.list_groups().unwrap().is_empty());
+    let profile_secret = keyring.inner.get(SecretOwner::Profile(src.profile.id), SecretKind::Password).unwrap();
+    assert_eq!(profile_secret.unwrap().expose_secret(), "old", "overwritten secret is restored");
+    for host in src.store.list_hosts().unwrap() {
+        assert!(keyring.inner.get(SecretOwner::Host(host.id), SecretKind::Passphrase).unwrap().is_none());
+    }
+    assert!(fs::read_dir(&key_dir).map(|mut d| d.next().is_none()).unwrap_or(true), "no key file left behind");
+}
+
+#[test]
+fn plaintext_json_is_built_without_reallocating() {
+    let payload = SecretPayload {
+        secrets: (0..200).map(|i| (format!("host:{i}:password"), "x".repeat(i))).collect(),
+        key_files: BTreeMap::new(),
+    };
+    let json = plaintext_json(&payload).unwrap();
+    assert_eq!(json.len(), json.capacity());
+    assert_eq!(*json, serde_json::to_vec(&payload).unwrap());
+}

@@ -166,8 +166,11 @@ impl LocalPtySession {
                     }
                 }));
                 if forwarded.is_err() {
-                    // The consumer drops the session on this event, which kills the shell.
-                    sink(SessionEvent::Error(panicked()));
+                    // The consumer drops the session on this event, which kills the shell. If the
+                    // sink panics again there is no way left to report; still reap the child.
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        sink(SessionEvent::Error(panicked()));
+                    }));
                     let _ = child.wait();
                     return;
                 }

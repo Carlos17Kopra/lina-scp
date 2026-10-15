@@ -1,7 +1,8 @@
 //! Mirror mode: LinaSCP hosts are written to `~/.ssh/config.d/linascp.conf`,
 //! which is included from the top of `~/.ssh/config`.
 
-use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -36,47 +37,48 @@ impl Mirror {
             HostAuth::Profile { profile_id } => profiles.iter().find(|p| p.id == *profile_id),
             HostAuth::Custom { .. } => None,
         };
-        // Pass 1: hosts that can be written on their own, first one wins an alias.
-        let mut rendered: HashMap<String, Id> = HashMap::new();
-        let mut order: Vec<&Host> = Vec::new();
+        let by_id: HashMap<Id, &Host> = hosts.iter().map(|h| (h.id, h)).collect();
+        let mut candidates: Vec<&Host> = Vec::new();
         for host in hosts.iter().filter(|h| h.source == HostSource::Linascp) {
-            if let Some(reason) = skip_reason(host, profile_of(host)) {
-                tracing::warn!(host_id = %host.id, reason, "host not written to the ssh mirror file");
-                continue;
+            match skip_reason(host, profile_of(host)) {
+                Some(reason) => tracing::warn!(host_id = %host.id, reason, "host not written to the ssh mirror file"),
+                None => candidates.push(host),
             }
-            if rendered.contains_key(&host_alias(&host.name)) {
-                tracing::warn!(host_id = %host.id, "host alias already used by an earlier host, not written to the ssh mirror file");
-                continue;
-            }
-            rendered.insert(host_alias(&host.name), host.id);
-            order.push(host);
         }
-        // Pass 2: drop hosts whose ProxyJump would not reach their jump host, until stable
-        // (dropping a jump host also drops the hosts behind it).
-        let jump_of = |host: &Host| host.jump_host_id.map(|id| hosts.iter().find(|h| h.id == id));
-        loop {
-            let broken: Vec<Id> = order
+        // First host wins an alias; then drop hosts whose ProxyJump chain does not hold. Repeat
+        // until stable: a dropped host frees its alias (for a host that lost it) and takes the
+        // hosts behind it along.
+        let (order, rendered) = loop {
+            let mut rendered: HashMap<String, Id> = HashMap::new();
+            let order: Vec<&Host> = candidates
                 .iter()
-                .filter(|host| jump_of(host).is_some_and(|jump| jump.and_then(|j| jump_alias(j, &rendered)).is_none()))
-                .map(|host| host.id)
+                .copied()
+                .filter(|h| match rendered.entry(host_alias(&h.name)) {
+                    Entry::Occupied(_) => false,
+                    Entry::Vacant(slot) => {
+                        slot.insert(h.id);
+                        true
+                    }
+                })
                 .collect();
+            let broken: HashSet<Id> =
+                order.iter().filter(|h| !jump_chain_holds(h, &by_id, &rendered)).map(|h| h.id).collect();
             if broken.is_empty() {
-                break;
+                break (order, rendered);
             }
-            for host in order.iter().filter(|h| broken.contains(&h.id)) {
-                tracing::warn!(host_id = %host.id, "jump host not reachable via the ssh mirror file, host not written");
-                rendered.remove(&host_alias(&host.name));
+            for id in &broken {
+                tracing::warn!(host_id = %id, "jump host not reachable via the ssh mirror file, host not written");
             }
-            order.retain(|host| !broken.contains(&host.id));
+            candidates.retain(|h| !broken.contains(&h.id));
+        };
+        for host in candidates.iter().filter(|h| rendered.get(&host_alias(&h.name)) != Some(&h.id)) {
+            tracing::warn!(host_id = %host.id, "host alias already used by an earlier host, not written to the ssh mirror file");
         }
 
         let mut out = format!("{HEADER}\n");
         for host in order {
             let profile = profile_of(host);
-            let auth: Option<&AuthConfig> = match &host.auth {
-                HostAuth::Profile { .. } => profile.map(|p| &p.auth),
-                HostAuth::Custom { auth } => Some(auth),
-            };
+            let auth = host.custom_auth().or(profile.map(|p| &p.auth));
             let user = host
                 .user
                 .clone()
@@ -93,7 +95,7 @@ impl Mirror {
             if let Some(AuthConfig { method: AuthMethod::Key, key_path: Some(path), .. }) = auth {
                 out.push_str(&format!("    IdentityFile {}\n", quote(path)));
             }
-            if let Some(jump) = jump_of(host).flatten().and_then(|jump| jump_alias(jump, &rendered)) {
+            if let Some(jump) = host.jump_host_id.and_then(|id| by_id.get(&id)).and_then(|j| jump_alias(j, &rendered)) {
                 out.push_str(&format!("    ProxyJump {jump}\n"));
             }
         }
@@ -190,6 +192,25 @@ fn skip_reason(host: &Host, profile: Option<&LoginProfile>) -> Option<&'static s
     None
 }
 
+/// True if every `ProxyJump` along `host`'s chain names exactly the intended host, and the chain
+/// has no cycle (OpenSSH would spawn itself forever). The chain ends at the first host that
+/// comes from `~/.ssh/config`: what lies beyond is the user's own configuration.
+fn jump_chain_holds(host: &Host, by_id: &HashMap<Id, &Host>, rendered: &HashMap<String, Id>) -> bool {
+    let mut seen = HashSet::from([host.id]);
+    let mut current = host;
+    while let Some(id) = current.jump_host_id {
+        let Some(jump) = by_id.get(&id) else { return false };
+        if jump_alias(jump, rendered).is_none() || !seen.insert(jump.id) {
+            return false;
+        }
+        if jump.source != HostSource::Linascp {
+            return true;
+        }
+        current = jump;
+    }
+    true
+}
+
 /// The alias a `ProxyJump` must name to reach `jump`, if OpenSSH would resolve it to exactly
 /// that host. A mirrored jump host must have been rendered under its alias; an imported one is
 /// named by its raw alias from `~/.ssh/config`, which must be a plain word and must not be
@@ -201,7 +222,10 @@ fn jump_alias(jump: &Host, rendered: &HashMap<String, Id>) -> Option<String> {
     }
     let plain = !jump.name.is_empty()
         && is_safe_text(&jump.name)
-        && !jump.name.contains(|c: char| c.is_whitespace() || matches!(c, '\'' | '\\' | '#' | ',' | '*' | '?' | '!'));
+        // `@`, `:` and `[]` would be read as `[user@]host[:port]`, `%` as a token.
+        && !jump.name.contains(|c: char| {
+            c.is_whitespace() || matches!(c, '\'' | '\\' | '#' | ',' | '*' | '?' | '!' | '@' | ':' | '[' | ']' | '%')
+        });
     (plain && !rendered.contains_key(&jump.name)).then(|| jump.name.clone())
 }
 
@@ -505,6 +529,41 @@ mod injection_tests {
         let target = via("target", &jump);
         let out = Mirror::render(&[jump, target], &[]);
         assert!(out.contains("    ProxyJump sprung-ü\n"), "{out}");
+    }
+
+    #[test]
+    fn imported_jump_alias_that_openssh_would_split_is_not_used() {
+        for name in ["admin@bastion", "db:prod", "[::1]", "%h"] {
+            let mut jump = with_id(Host::new(name, "jump.example"));
+            jump.source = HostSource::SshConfig;
+            let target = via("target", &jump);
+            let out = Mirror::render(&[jump, target], &[]);
+            assert!(!out.contains("target"), "{name}: {out}");
+        }
+    }
+
+    #[test]
+    fn jump_cycles_are_never_written() {
+        let mut a = with_id(Host::new("a", "a.example"));
+        let mut b = with_id(Host::new("b", "b.example"));
+        a.jump_host_id = Some(b.id);
+        b.jump_host_id = Some(a.id);
+        let mut own = with_id(Host::new("own", "o.example"));
+        own.jump_host_id = Some(own.id);
+        let behind = via("behind", &a);
+        let ok = with_id(Host::new("ok", "ok.example"));
+        let out = Mirror::render(&[a, b, own, behind, ok], &[]);
+        assert_eq!(out, format!("{HEADER}\n\nHost ok\n    HostName ok.example\n    Port 22\n"), "{out}");
+    }
+
+    #[test]
+    fn alias_collision_loser_is_written_when_the_winner_is_dropped() {
+        let missing = with_id(Host::new("gone", "gone.example"));
+        let mut winner = with_id(Host::new("a b", "winner.example"));
+        winner.jump_host_id = Some(missing.id);
+        let loser = with_id(Host::new("a-b", "loser.example"));
+        let out = Mirror::render(&[winner, loser], &[]);
+        assert!(out.contains("Host a-b\n    HostName loser.example\n"), "{out}");
     }
 
     #[test]

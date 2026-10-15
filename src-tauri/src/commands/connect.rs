@@ -1,6 +1,7 @@
 use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use linascp_core::connect::{
     ConnectDeps, ConnectEvent, ConnectRequest, ConnectTarget, EmitFn, PromptAnswer, connect_ssh as run_pipeline,
@@ -91,39 +92,36 @@ impl Drop for ConnectGuard<'_> {
     }
 }
 
+const EARLY_CANCEL_TTL: Duration = Duration::from_secs(60);
+
 /// Registers a cancellable connection attempt under the UI-generated `connect_id`. The
 /// returned guard un-registers it again when dropped (success, error, or panic). If a cancel
 /// for this id arrived first (see `cancel_connect`), the attempt starts out cancelled.
 pub(crate) fn register_connect(state: &AppState, connect_id: Uuid) -> ConnectGuard<'_> {
     let mut connects = lock(&state.connects);
-    let token = match connects.get(&connect_id) {
-        Some(early) if early.is_cancelled() => early.clone(),
-        _ => {
-            let token = CancellationToken::new();
-            connects.insert(connect_id, token.clone());
-            token
-        }
-    };
+    let token = CancellationToken::new();
+    if lock(&state.early_cancels).remove(&connect_id).is_some() {
+        token.cancel();
+    }
+    connects.insert(connect_id, token.clone());
     drop(connects);
     ConnectGuard { state, connect_id, token }
 }
 
 /// Cancels the attempt. Tauri runs invokes concurrently, so the cancel can arrive before the
-/// connect invoke registered its id: then a cancelled token is left for `register_connect`.
-/// Every attempt has a fresh id, so such a token never hits a later attempt.
+/// connect invoke registered its id: then it is noted for `register_connect`. Every attempt has
+/// a fresh id, so such a note never hits a later attempt.
 pub(crate) fn cancel_connect(state: &AppState, connect_id: Uuid) {
-    let mut connects = lock(&state.connects);
+    let connects = lock(&state.connects);
     if let Some(token) = connects.get(&connect_id) {
         token.cancel();
         return;
     }
-    // ponytail: cancels that came after their attempt ended stay as tombstones; prune them in bulk.
-    if connects.len() >= 64 {
-        connects.retain(|_, token| !token.is_cancelled());
-    }
-    let token = CancellationToken::new();
-    token.cancel();
-    connects.insert(connect_id, token);
+    let mut early = lock(&state.early_cancels);
+    // Notes of cancels that came after their attempt ended are never claimed; an attempt that
+    // is still to register does so within milliseconds, so a minute is plenty.
+    early.retain(|_, noted| noted.elapsed() < EARLY_CANCEL_TTL);
+    early.insert(connect_id, Instant::now());
 }
 
 fn connect_deps(state: &AppState) -> ConnectDeps {
@@ -345,7 +343,21 @@ mod tests {
         assert!(guard.is_cancelled());
 
         drop(guard);
-        assert!(!state.connects.lock().unwrap().contains_key(&connect_id));
+        assert!(state.connects.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn many_late_cancels_never_evict_a_pending_early_cancel() {
+        let (_dir, state) = setup();
+        for _ in 0..100 {
+            cancel_connect(&state, Uuid::new_v4());
+        }
+        let connect_id = Uuid::new_v4();
+        cancel_connect(&state, connect_id);
+        for _ in 0..100 {
+            cancel_connect(&state, Uuid::new_v4());
+        }
+        assert!(register_connect(&state, connect_id).is_cancelled());
     }
 
     #[test]

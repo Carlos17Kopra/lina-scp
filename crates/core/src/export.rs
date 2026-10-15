@@ -171,7 +171,7 @@ pub fn export_data(store: &Store, secrets: &dyn SecretStore, opts: &ExportOption
             .ok_or_else(|| CoreError::config("passphrase required to export secrets"))?;
         let payload =
             collect_secrets(&hosts, &profiles, secrets, opts.include_key_files.then_some(&opts.home), &mut report)?;
-        let json = Zeroizing::new(serde_json::to_vec(&payload).map_err(|e| CoreError::internal(e.to_string()))?);
+        let json = plaintext_json(&payload)?;
         Some(encrypt(&json, passphrase)?)
     } else {
         None
@@ -309,44 +309,51 @@ pub fn import_apply(
         .map(|(key, value)| (key.as_str(), value.as_str()))
         .collect();
 
-    // Key files are written first so the stored paths point at them; if anything fails, the
-    // files created here are removed again and the store is left untouched.
+    // Key files and secrets are written before the DB transaction; if anything fails, the key
+    // files created here are removed, overwritten secrets restored (new ones deleted), and the
+    // store is left untouched. Keyring rollback is best effort: it can fail like the write did.
     let mut created_keys = Vec::new();
+    let mut previous_secrets: Vec<(SecretOwner, SecretKind, Option<SecretString>)> = Vec::new();
     let written = (|| -> Result<()> {
         if let Some(payload) = &payload {
             let used: HashSet<&str> = profiles
                 .iter()
                 .map(|p| &p.auth)
-                .chain(hosts.iter().filter_map(custom_auth))
+                .chain(hosts.iter().filter_map(Host::custom_auth))
                 .filter_map(key_path)
                 .collect();
             let files: BTreeMap<&String, &String> =
                 payload.key_files.iter().filter(|(path, _)| used.contains(path.as_str())).collect();
             let paths = write_key_files(&files, key_dir, &mut created_keys)?;
             rewrite_key_paths(&mut profiles, &mut hosts, &paths);
+
+            for (account, value) in &payload.secrets {
+                let Some((owner, kind)) = parse_account_name(account) else { continue };
+                let Action::Write { id, .. } = plan.action(owner.id()) else { continue };
+                let owner = match owner {
+                    SecretOwner::Host(_) => SecretOwner::Host(id),
+                    SecretOwner::Profile(_) => SecretOwner::Profile(id),
+                };
+                previous_secrets.push((owner, kind, secrets.get(owner, kind)?));
+                secrets.set(owner, kind, &SecretString::from(value.clone()))?;
+                report.secrets_restored += 1;
+            }
         }
         store.save_import(&groups, &profiles, &hosts, &settings)
     })();
     if let Err(err) = written {
+        for (owner, kind, previous) in previous_secrets.iter().rev() {
+            let _ = match previous {
+                Some(value) => secrets.set(*owner, *kind, value),
+                None => secrets.delete(*owner, *kind),
+            };
+        }
         for path in &created_keys {
             let _ = fs::remove_file(path);
         }
         return Err(err);
     }
     report.imported = (groups.len() + profiles.len() + hosts.len()) as u32;
-
-    if let Some(payload) = &payload {
-        for (account, value) in &payload.secrets {
-            let Some((owner, kind)) = parse_account_name(account) else { continue };
-            let Action::Write { id, .. } = plan.action(owner.id()) else { continue };
-            let owner = match owner {
-                SecretOwner::Host(_) => SecretOwner::Host(id),
-                SecretOwner::Profile(_) => SecretOwner::Profile(id),
-            };
-            secrets.set(owner, kind, &SecretString::from(value.clone()))?;
-            report.secrets_restored += 1;
-        }
-    }
     Ok(report)
 }
 
@@ -473,13 +480,7 @@ fn collect_secrets(
         }
     }
     if let Some(home) = key_files_home {
-        let auths = hosts
-            .iter()
-            .filter_map(|h| match &h.auth {
-                HostAuth::Custom { auth } => Some(auth),
-                HostAuth::Profile { .. } => None,
-            })
-            .chain(profiles.iter().map(|p| &p.auth));
+        let auths = hosts.iter().filter_map(Host::custom_auth).chain(profiles.iter().map(|p| &p.auth));
         for auth in auths {
             let Some(path) = key_path(auth) else { continue };
             if payload.key_files.contains_key(path) || report.skipped_keys.iter().any(|p| p == path) {
@@ -505,13 +506,6 @@ fn key_path(auth: &AuthConfig) -> Option<&str> {
     match auth {
         AuthConfig { method: AuthMethod::Key, key_path: Some(path), .. } if !path.is_empty() => Some(path),
         _ => None,
-    }
-}
-
-fn custom_auth(host: &Host) -> Option<&AuthConfig> {
-    match &host.auth {
-        HostAuth::Custom { auth } => Some(auth),
-        HostAuth::Profile { .. } => None,
     }
 }
 
@@ -589,6 +583,26 @@ fn clear_has_secret(doc: &mut ExportDoc) {
     }
 }
 
+/// Serializes the secrets payload into a buffer sized exactly up front (a growing `Vec` would
+/// leave unzeroized copies of the plaintext behind on reallocation) that is zeroized on drop.
+fn plaintext_json(payload: &SecretPayload) -> Result<Zeroizing<Vec<u8>>> {
+    struct Count(usize);
+    impl Write for Count {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0 += buf.len();
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    serde_json::to_writer(&mut count, payload).map_err(|e| CoreError::internal(e.to_string()))?;
+    let mut json = Zeroizing::new(Vec::with_capacity(count.0));
+    serde_json::to_writer(&mut *json, payload).map_err(|e| CoreError::internal(e.to_string()))?;
+    Ok(json)
+}
+
 fn encrypt(plaintext: &[u8], passphrase: &SecretString) -> Result<String> {
     let mut recipient = age::scrypt::Recipient::new(passphrase.clone());
     recipient.set_work_factor(SCRYPT_WORK_FACTOR);
@@ -627,7 +641,9 @@ fn decrypt_payload(block: &str, passphrase: &SecretString) -> Result<SecretPaylo
     let mut identity = age::scrypt::Identity::new(passphrase.clone());
     identity.set_max_work_factor(SCRYPT_MAX_WORK_FACTOR);
     let mut reader = decryptor.decrypt(iter::once(&identity as &dyn age::Identity)).map_err(map_decrypt_error)?;
-    let mut plaintext = Zeroizing::new(Vec::new());
+    // The ciphertext is longer than the plaintext: reserving that much up front means the buffer
+    // never reallocates, so no unzeroized copy of the plaintext is left behind.
+    let mut plaintext = Zeroizing::new(Vec::with_capacity(block.len()));
     reader.read_to_end(&mut plaintext)?;
     serde_json::from_slice(&plaintext).map_err(|e| CoreError::config(format!("invalid secrets block: {e}")))
 }

@@ -6,6 +6,7 @@ fixed before the merge are not listed.
 
 ## Security / robustness (prioritise in TP2)
 
+- **Mirror mode:** a crafted import can still define an undotted alias that is a real host name (`localhost`, a search-domain short name like `gitlab`) with an attacker `HostName`; only dotted aliases must equal their address. Full fix: confirm imported hosts before they reach the mirror, or namespace aliases.
 - **Secrets hygiene:** keyboard-interactive responses are not zeroized: russh takes the `Vec<String>` by value, and the answer has already passed through IPC/serde copies. Needs an upstream API taking secret buffers.
 
 ## Behaviour / UX
