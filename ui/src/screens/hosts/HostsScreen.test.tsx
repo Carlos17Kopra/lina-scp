@@ -114,9 +114,18 @@ describe("HostsScreen", () => {
     expect(within(details).getByText("bastion")).toBeInTheDocument();
     expect(within(details).getByText("/var/www")).toBeInTheDocument();
     expect(within(details).getByText("8080 → localhost:80")).toBeInTheDocument();
-    const files = within(details).getByRole("button", { name: "Dateien" });
-    expect(files).toHaveAttribute("aria-disabled", "true");
-    expect(files).toHaveAttribute("title", "Folgt in Teilprojekt 3");
+  });
+
+  it("opens SFTP from the card and from the details, only for SFTP hosts", async () => {
+    renderScreen();
+    await userEvent.click(within(cardOf("web-prod-01")).getByRole("button", { name: "Dateien öffnen" }));
+    expect(start).toHaveBeenCalledWith("h-web", "sftp");
+    await userEvent.click(screen.getByRole("button", { name: "web-prod-01 auswählen" }));
+    const details = () => screen.getByRole("complementary", { name: "Host-Details" });
+    await userEvent.click(within(details()).getByRole("button", { name: "Dateien" }));
+    expect(start).toHaveBeenLastCalledWith("h-web", "sftp");
+    await userEvent.click(screen.getByRole("button", { name: "bastion auswählen" }));
+    expect(within(details()).getByRole("button", { name: "Dateien" })).toBeDisabled();
   });
 
   it("starts an SSH connection from the card and from the details", async () => {

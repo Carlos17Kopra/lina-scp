@@ -46,10 +46,6 @@ export const t = {
     loadFailed: "Daten konnten nicht geladen werden",
     saveFailed: "Speichern fehlgeschlagen",
   },
-  stubs: {
-    sftp: "SFTP",
-    sftpText: "Der SFTP-Dateimanager folgt in einer späteren Version.",
-  },
   auth: {
     password: "Passwort",
     key: "Schlüssel",
@@ -84,7 +80,6 @@ export const t = {
     select: (name: string) => `${name} auswählen`,
     openTerminal: "Terminal öffnen",
     openFiles: "Dateien öffnen",
-    filesLater: "Folgt in Teilprojekt 3",
     edit: "Host bearbeiten",
     emptyTitle: "Noch keine Hosts",
     emptyText: "Lege einen Host an oder lies deine ~/.ssh/config neu ein.",
@@ -218,7 +213,7 @@ export const t = {
     autostart: "Auto-Start",
     removeForward: "Regel entfernen",
     addForward: "+ Regel hinzufügen",
-    sftpHint: "Die SFTP-Einstellungen werden gespeichert und wirken ab Teilprojekt 3.",
+    sftpHint: "Startverzeichnisse wirken ab sofort. Modus, Parallelität, Rechte und Bandbreite wirken ab Teilprojekt 3b bzw. 4.",
     remoteStart: "Remote-Startverzeichnis",
     localStart: "Lokales Startverzeichnis",
     transferMode: "Übertragungsmodus",

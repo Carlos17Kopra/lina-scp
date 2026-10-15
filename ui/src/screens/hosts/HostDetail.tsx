@@ -72,7 +72,7 @@ function HostDetailPanel({ host }: { host: Host }) {
         >
           {t.hosts.terminal}
         </Button>
-        <Button size="lg" icon={FolderOpen} aria-disabled="true" title={t.hosts.filesLater} className={styles.later}>
+        <Button size="lg" icon={FolderOpen} disabled={!host.protocolSftp} onClick={() => actions.openFiles(host)}>
           {t.hosts.files}
         </Button>
       </div>

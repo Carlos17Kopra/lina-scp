@@ -23,7 +23,6 @@ import { type Sort, type SortKey, visibleEntries } from "../screens/sftp/entries
 import { fireAndForget } from "./connectProgress";
 import { useConnectStore } from "./connect";
 import { useHostsStore } from "./hosts";
-import { useUiStore } from "./ui";
 
 export type Side = "local" | "remote";
 
@@ -260,8 +259,3 @@ export const useSftpStore = create<SftpState>()((set, get) => {
     },
   };
 });
-
-/** View helper used by the screen and the connect store. */
-export function showSftp(): void {
-  useUiStore.getState().setView("sftp");
-}
