@@ -76,6 +76,15 @@ describe("SftpScreen", () => {
     expect(start).toHaveBeenCalledWith("h1", "ssh");
   });
 
+  it("the new-session picker can be left back to the open tabs", async () => {
+    openTab();
+    render(<SftpScreen />);
+    await userEvent.click(screen.getByRole("button", { name: "Neue SFTP-Sitzung" }));
+    expect(screen.getByRole("heading", { name: "Host für SFTP wählen" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Abbrechen" }));
+    expect(screen.getByRole("grid", { name: "Remote" })).toBeInTheDocument();
+  });
+
   it("closes a tab", async () => {
     openTab();
     render(<SftpScreen />);

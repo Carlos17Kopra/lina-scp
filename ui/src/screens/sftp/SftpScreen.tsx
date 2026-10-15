@@ -18,7 +18,8 @@ type DialogState =
   | { type: "rename"; side: Side; name: string }
   | { type: "delete"; side: Side; names: string[]; mode: "trash" | "permanent"; folder: boolean };
 
-function HostPicker({ onPicked }: { onPicked: () => void }) {
+/** `onCancel` is offered only when there are open tabs to go back to. */
+function HostPicker({ onPicked, onCancel }: { onPicked: () => void; onCancel?: () => void }) {
   const hosts = useHostsStore((s) => s.hosts).filter((h) => h.protocolSftp);
   const start = useConnectStore((s) => s.start);
   return (
@@ -39,6 +40,11 @@ function HostPicker({ onPicked }: { onPicked: () => void }) {
           </li>
         ))}
       </ul>
+      {onCancel ? (
+        <Button variant="ghost" onClick={onCancel}>
+          {t.common.cancel}
+        </Button>
+      ) : null}
     </div>
   );
 }
@@ -54,7 +60,10 @@ export function SftpScreen() {
   const tab = tabs.find((x) => x.id === activeTabId) ?? null;
   const store = useSftpStore.getState;
 
-  if (!tab || picking) return <HostPicker onPicked={() => setPicking(false)} />;
+  if (!tab || picking) {
+    const back = () => setPicking(false);
+    return <HostPicker onPicked={back} onCancel={tab ? back : undefined} />;
+  }
   const host = hosts.find((h) => h.id === tab.hostId);
   const user = host?.user?.trim() || (host ? hostProfile(host, profiles)?.user : "") || "";
   const lost = tab.status === "lost";
