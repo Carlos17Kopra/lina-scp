@@ -10,13 +10,14 @@ use linascp_core::connect::{
 use linascp_core::error::{CoreError, Result};
 use linascp_core::known_hosts::KnownHosts;
 use linascp_core::model::{Host, HostAuth, Id};
-use linascp_core::session::{Session, SessionId};
+use linascp_core::session::Session;
 use tauri::State;
 use tauri::ipc::Channel;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::sessions::{SessionEventDto, channel_event_sender, cleanup_fn, heal_if_already_exited, make_sink, register};
+use crate::dto::ConnectedSession;
 use crate::output::{OutputPump, RawChunk};
 use crate::state::AppState;
 use crate::util::lock;
@@ -159,7 +160,7 @@ pub(crate) async fn connect_ssh_inner(
     emit: EmitFn,
     output: Channel<RawChunk>,
     session_events: Channel<SessionEventDto>,
-) -> Result<SessionId> {
+) -> Result<ConnectedSession> {
     // Register first: a cancel issued while the host is looked up must not be lost.
     let guard = register_connect(state, connect_id);
     connect_ssh_registered(state, guard, host_id, cols, rows, emit, output, session_events).await
@@ -175,7 +176,7 @@ async fn connect_ssh_registered(
     emit: EmitFn,
     output: Channel<RawChunk>,
     session_events: Channel<SessionEventDto>,
-) -> Result<SessionId> {
+) -> Result<ConnectedSession> {
     let host = match find_host(state, host_id) {
         Ok(host) => host,
         Err(error) => return fail(&emit, error),
@@ -207,11 +208,12 @@ async fn connect_ssh_registered(
             fail(&emit, CoreError::Cancelled)
         }
         Ok(session) => {
+            let info = session.info().clone();
             register(state, session_id, Arc::new(session), pump.clone());
             heal_if_already_exited(state, session_id, &pump);
             // core emits `Failed` on errors; the success event is ours (exactly one terminal event).
             emit(ConnectEvent::Connected { session_id });
-            Ok(session_id)
+            Ok(ConnectedSession { session_id, info })
         }
         Err(error) => {
             pump.close();
@@ -232,7 +234,7 @@ pub async fn connect_ssh(
     events: Channel<ConnectEvent>,
     output: Channel<RawChunk>,
     session_events: Channel<SessionEventDto>,
-) -> Result<SessionId> {
+) -> Result<ConnectedSession> {
     connect_ssh_inner(&state, connect_id, host_id, cols, rows, channel_emit(events), output, session_events).await
 }
 

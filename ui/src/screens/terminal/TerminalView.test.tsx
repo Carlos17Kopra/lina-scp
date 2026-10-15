@@ -1,7 +1,7 @@
 import { act, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../ipc/api";
-import type { Tab } from "../../stores/sessions";
+import { type Tab, useSessionsStore } from "../../stores/sessions";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../../stores/settings";
 import { dropStream, registerStream } from "../../stores/streams";
 import { useUiStore } from "../../stores/ui";
@@ -143,6 +143,7 @@ beforeEach(() => {
   Object.defineProperty(navigator, "clipboard", { value: webviewClipboard, configurable: true });
   useSettingsStore.setState(useSettingsStore.getInitialState(), true);
   useUiStore.setState(useUiStore.getInitialState(), true);
+  useSessionsStore.setState(useSessionsStore.getInitialState(), true);
   registerStream(tab.id, stream as unknown as api.OutputStream);
 });
 
@@ -166,6 +167,14 @@ describe("TerminalView", () => {
     expect(term().written).toEqual([new Uint8Array([104, 105])]);
     expect(stream.ack).toHaveBeenCalledWith(2);
     expect(fakes.FakeWebgl.instances).toHaveLength(1);
+  });
+
+  it("reports the terminal size to the tab", () => {
+    useSessionsStore.setState({ tabs: [tab], activeId: tab.id });
+    render(<TerminalView tab={tab} visible />);
+    expect(useSessionsStore.getState().tabs[0]).toMatchObject({ cols: 80, rows: 24 });
+    act(() => term().resize.fire({ cols: 120, rows: 40 }));
+    expect(useSessionsStore.getState().tabs[0]).toMatchObject({ cols: 120, rows: 40 });
   });
 
   it("sends input and resizes to the session", () => {

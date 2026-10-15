@@ -36,8 +36,8 @@ describe("sessions store — local terminals", () => {
     expect(useUiStore.getState().view).toBe("terminal");
     await useSessionsStore.getState().openLocal();
     expect(useSessionsStore.getState().tabs).toEqual([
-      { id: "t-1", title: "Lokales Terminal", kind: "local", sessionId: "s-1", status: "connected" },
-      { id: "t-2", title: "Lokales Terminal 2", kind: "local", sessionId: "s-2", status: "connected" },
+      { id: "t-1", title: "Lokales Terminal", kind: "local", sessionId: "s-1", status: "connected", connectedAt: expect.any(Number) },
+      { id: "t-2", title: "Lokales Terminal 2", kind: "local", sessionId: "s-2", status: "connected", connectedAt: expect.any(Number) },
     ]);
     expect(useSessionsStore.getState().activeId).toBe("t-2");
     sessionHandlers[0]?.({ kind: "exit", code: 0 });

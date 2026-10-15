@@ -8,6 +8,7 @@ import {
   newId,
   type SessionEventDto,
   type SessionId,
+  type SessionInfo,
   sessionClose,
   sessionOpenLocal,
 } from "../ipc/api";
@@ -31,6 +32,13 @@ export interface Tab {
   status: TabStatus;
   /** Why the session ended, for `status: "error"`. */
   error?: CoreError;
+  /** Negotiated algorithms etc. of an SSH session (sidebar "Sitzung"). */
+  info?: SessionInfo;
+  /** Client time (ms) when the session connected / the local terminal opened. */
+  connectedAt?: number;
+  /** Current terminal size, reported by `TerminalView`. */
+  cols?: number;
+  rows?: number;
 }
 
 export interface SessionsState {
@@ -79,7 +87,7 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
       registerStream(tabId, stream);
       const count = get().tabs.filter((tab) => tab.kind === "local").length;
       const title = count === 0 ? t.terminal.localTitle : `${t.terminal.localTitle} ${count + 1}`;
-      get().addTab({ id: tabId, title, kind: "local", sessionId, status: "connected" });
+      get().addTab({ id: tabId, title, kind: "local", sessionId, status: "connected", connectedAt: Date.now() });
       useUiStore.getState().setView("terminal");
     } catch (error) {
       discardEarlySessionEvent(tabId);

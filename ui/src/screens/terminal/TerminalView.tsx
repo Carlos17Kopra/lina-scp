@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { t } from "../../i18n/de";
 import { sessionResize, sessionWrite } from "../../ipc/api";
 import { fireAndForget } from "../../stores/connectProgress";
-import type { Tab } from "../../stores/sessions";
+import { type Tab, useSessionsStore } from "../../stores/sessions";
 import { useSettingsStore } from "../../stores/settings";
 import { getStream } from "../../stores/streams";
 import { useUiStore } from "../../stores/ui";
@@ -56,12 +56,16 @@ export function TerminalView({ tab, visible }: { tab: Tab; visible: boolean }) {
     termRef.current = term;
     fitRef.current = fit;
 
+    const reportSize = (cols: number, rows: number) => useSessionsStore.getState().updateTab(tab.id, { cols, rows });
     const subscriptions = [
       term.onData((data) => fireAndForget(() => sessionWrite(sessionId, data))),
       term.onBinary((data) =>
         fireAndForget(() => sessionWrite(sessionId, Uint8Array.from(data, (char) => char.charCodeAt(0) & 0xff))),
       ),
-      term.onResize(({ cols, rows }) => fireAndForget(() => sessionResize(sessionId, cols, rows))),
+      term.onResize(({ cols, rows }) => {
+        reportSize(cols, rows);
+        fireAndForget(() => sessionResize(sessionId, cols, rows));
+      }),
       term.onSelectionChange(() => {
         if (term.hasSelection()) void copyText(term.getSelection());
       }),
@@ -148,6 +152,7 @@ export function TerminalView({ tab, visible }: { tab: Tab; visible: boolean }) {
     refit();
     // The PTY was opened with an estimated size; `onResize` only fires when xterm's size changes.
     fireAndForget(() => sessionResize(sessionId, term.cols, term.rows));
+    useSessionsStore.getState().updateTab(tab.id, { cols: term.cols, rows: term.rows });
     term.focus();
     const observer = new ResizeObserver(refit);
     observer.observe(container);

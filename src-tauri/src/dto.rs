@@ -114,6 +114,14 @@ pub struct ProfileWithUsage {
     pub used_by: u32,
 }
 
+/// Result of `connect_ssh`: the registered session and what was negotiated for it.
+#[derive(Debug, Clone, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectedSession {
+    pub session_id: linascp_core::session::SessionId,
+    pub info: linascp_core::connect::SessionInfo,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
