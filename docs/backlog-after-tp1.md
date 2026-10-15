@@ -77,6 +77,16 @@ fixed before the merge are not listed.
     broadcast frames.
   - A pane connect whose pane disappeared ends silently (session closed, no notice).
   - The terminal-reply filter for broadcast is a pattern match; a modified F3 (`ESC[1;2R`) is not broadcast either.
+- TP2d auto-reconnect (from the branch review):
+  - The 1 MiB cap on output held during an attempt drops only the chunk that does not fit; later small chunks are
+    still appended, leaving a hole. Stop buffering for good once the cap is hit.
+  - `HostKeyRejected` (`@revoked` key) is retried 8 times before "Verbindung verloren"; add it to `is_fatal` and
+    `FATAL_LOST`.
+  - "Jetzt versuchen" right after a backoff wait ended stores a `Notify` permit that can skip the first wait of a
+    later round; use one `Notify` per round.
+  - `ReconnectBar` `role="status"` re-announces the countdown every second; keep the seconds out of the live region.
+  - `stop_reconnect`/`reconnect_now` and inner events still share the state lock with the app sink, so they wait while
+    output flow control is paused (input and resize no longer do).
 
 ## Packaging / CI
 

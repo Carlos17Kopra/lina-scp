@@ -44,9 +44,16 @@ export function SessionPanel({ tab }: { tab: Tab }) {
   const hosts = useHostsStore((state) => state.hosts);
   const profiles = useHostsStore((state) => state.profiles);
   const now = useMinuteClock();
-  const ended = tab.status === "closed" || tab.status === "error";
+  const ended = tab.status === "closed" || tab.status === "error" || tab.status === "lost";
   const size = tab.cols && tab.rows ? `xterm-256color · ${tab.cols}×${tab.rows}` : "xterm-256color";
-  const since = ended ? t.terminal.info.disconnected : tab.connectedAt ? formatSince(tab.connectedAt, now) : t.terminal.info.none;
+  const since =
+    tab.status === "reconnecting" && tab.reconnect
+      ? t.terminal.reconnecting.sidebar(tab.reconnect.attempt, tab.reconnect.maxAttempts)
+      : ended
+        ? t.terminal.info.disconnected
+        : tab.connectedAt
+          ? formatSince(tab.connectedAt, now)
+          : t.terminal.info.none;
 
   if (tab.kind === "local") {
     return (

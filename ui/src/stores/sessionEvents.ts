@@ -1,5 +1,7 @@
+import { t } from "../i18n/de";
 import type { SessionEventDto } from "../ipc/api";
 import { type Tab, useSessionsStore } from "./sessions";
+import { getStream } from "./streams";
 
 /**
  * Terminal session events that arrived before their tab existed or while it still showed the pane
@@ -9,9 +11,23 @@ import { type Tab, useSessionsStore } from "./sessions";
  */
 const early = new Map<string, SessionEventDto>();
 
-/** The tab fields a session event sets: "Sitzung beendet" (exit) or "… mit Fehler beendet" (error). */
+/** The tab fields a session event sets (ended, failed, reconnecting, restored, lost). */
 export function sessionEventPatch(event: SessionEventDto): Partial<Omit<Tab, "id">> {
-  return event.kind === "exit" ? { status: "closed" } : { status: "error", error: event.error };
+  switch (event.kind) {
+    case "exit":
+      return { status: "closed" };
+    case "error":
+      return { status: "error", error: event.error };
+    case "reconnecting":
+      return {
+        status: "reconnecting",
+        reconnect: { attempt: event.attempt, maxAttempts: event.maxAttempts, retryAt: Date.now() + event.retryInMs, reason: event.reason },
+      };
+    case "reconnected":
+      return { status: "connected", info: event.info, connectedAt: Date.now(), reconnect: undefined, error: undefined };
+    case "lost":
+      return { status: "lost", error: event.reason, reconnect: undefined };
+  }
 }
 
 /** Handler for a session's `session_events` channel: the tab shows "Sitzung beendet" afterwards. */
@@ -20,6 +36,10 @@ export function sessionEventHandler(tabId: string): (event: SessionEventDto) => 
     const sessions = useSessionsStore.getState();
     // A picking pane has no session yet: keep the event for `attachSession`.
     if (sessions.tabs.some((tab) => tab.id === tabId && tab.status !== "picking")) {
+      if (event.kind === "reconnected") {
+        // Synchronously, in stream order: before the new shell's first output.
+        getStream(tabId)?.inject(new TextEncoder().encode(`\r\n\u001b[2m${t.terminal.reconnecting.restored}\u001b[0m\r\n`));
+      }
       sessions.updateTab(tabId, sessionEventPatch(event));
     } else early.set(tabId, event);
   };

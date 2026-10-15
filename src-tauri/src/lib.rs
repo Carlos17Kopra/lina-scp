@@ -39,6 +39,8 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             sessions::session_resize,
             sessions::session_ack,
             sessions::session_close,
+            sessions::session_reconnect_now,
+            sessions::session_reconnect_stop,
             transfer::export_file,
             transfer::import_preview,
             transfer::import_apply,

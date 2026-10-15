@@ -60,6 +60,8 @@ export function errorTitle(error: CoreError): string {
       return t.pipeline.errors.hostKeyRejected;
     case "cancelled":
       return t.pipeline.errors.cancelled;
+    case "inputRequired":
+      return t.pipeline.errors.inputRequired;
     default:
       return error.message;
   }

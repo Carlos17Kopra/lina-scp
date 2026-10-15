@@ -1,0 +1,23 @@
+.bar {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 48px);
+  padding: 6px 8px 6px 12px;
+  border: 1px solid var(--amber-bd);
+  border-radius: 8px;
+  background: var(--amber-soft);
+  color: var(--text);
+  font-size: 13px;
+  transform: translateX(-50%);
+}
+
+.text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

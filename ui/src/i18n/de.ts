@@ -138,6 +138,7 @@ export const t = {
       auth: "Anmeldung fehlgeschlagen",
       hostKeyRejected: "Host-Key abgelehnt",
       cancelled: "Abgebrochen",
+      inputRequired: "Für die Verbindung ist eine Eingabe nötig (Passwort, Host-Key …)",
     },
     prompt: {
       password: (target: string) => `Passwort für ${target}`,
@@ -407,6 +408,22 @@ export const t = {
     endedText: (title: string) => `Die Sitzung »${title}« wurde beendet. Der Verlauf bleibt sichtbar, bis du den Tab schließt.`,
     endedSuffix: "beendet",
     reconnect: "Neu verbinden",
+    reconnecting: {
+      interrupted: (attempt: number, max: number, seconds: number) =>
+        `Verbindung unterbrochen · Versuch ${attempt} von ${max} in ${seconds} s`,
+      connecting: (attempt: number, max: number) => `Verbindung unterbrochen · Versuch ${attempt} von ${max} · Verbinde …`,
+      now: "Jetzt versuchen",
+      stop: "Abbrechen",
+      restored: "— Verbindung wiederhergestellt —",
+      lost: "Verbindung verloren",
+      lostText: (title: string) => `Die Verbindung zu »${title}« konnte nicht wiederhergestellt werden. Der Verlauf bleibt sichtbar.`,
+      retry: "Erneut versuchen",
+      inputRequired: "Für die Verbindung ist eine Eingabe nötig (Passwort, Host-Key …).",
+      cancelled: "Neuverbindung abgebrochen.",
+      suffixReconnecting: "Verbindung unterbrochen",
+      suffixLost: "Verbindung verloren",
+      sidebar: (attempt: number, max: number) => `Neuverbindung · Versuch ${attempt} von ${max}`,
+    },
     design: {
       auto: "Wie App-Design",
       scheme: "Farbschema",
@@ -506,6 +523,7 @@ export const t = {
     fontSize: "Schriftgröße",
     fontSizeOption: (size: number) => `${size} px`,
     compat: "Kompatibilitäts-Rendering (wirkt nach Neustart)",
+    autoReconnect: "Abgebrochene SSH-Verbindungen automatisch wiederherstellen",
     compatHint: "Setzt WEBKIT_DISABLE_DMABUF_RENDERER=1. Nur bei Darstellungsfehlern aktivieren.",
     data: "Daten",
     dataHint: "Hosts, Gruppen, Login-Profile und Einstellungen sichern oder auf ein anderes Gerät übertragen.",

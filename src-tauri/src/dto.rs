@@ -88,6 +88,7 @@ pub struct Settings {
     pub terminal_font_size: u16,
     pub terminal_scheme: String,
     pub terminal_sidebar_open: bool,
+    pub terminal_auto_reconnect: bool,
     pub first_run_done: bool,
     pub compat_rendering: bool,
 }
@@ -101,6 +102,7 @@ impl Default for Settings {
             terminal_font_size: 14,
             terminal_scheme: "auto".to_string(),
             terminal_sidebar_open: false,
+            terminal_auto_reconnect: true,
             first_run_done: false,
             compat_rendering: false,
         }
@@ -148,7 +150,7 @@ mod tests {
             serde_json::json!({
                 "theme": "dark", "sshMode": "integrate", "terminalRenderer": "auto",
                 "terminalFontSize": 14, "terminalScheme": "auto", "terminalSidebarOpen": false,
-                "firstRunDone": false, "compatRendering": false
+                "terminalAutoReconnect": true, "firstRunDone": false, "compatRendering": false
             })
         );
     }

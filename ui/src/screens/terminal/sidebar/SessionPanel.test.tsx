@@ -68,6 +68,17 @@ describe("SessionPanel", () => {
     expect(value("Verbunden seit")).toBe("14:02 (1 Std. 15 Min.)");
   });
 
+  it("shows the reconnect progress instead of the connection time", () => {
+    const reconnect = {
+      attempt: 2,
+      maxAttempts: 8,
+      retryAt: Date.now() + 2000,
+      reason: { type: "network", kind: "other", message: "x" },
+    } as const;
+    render(<SessionPanel tab={{ ...sshTab, status: "reconnecting", reconnect }} />);
+    expect(screen.getByText("Neuverbindung · Versuch 2 von 8")).toBeInTheDocument();
+  });
+
   it("shows the user the core logs in with: host user before profile user", () => {
     useHostsStore.setState({
       hosts: [makeHost({ id: "h-web", user: "root", address: "10.0.1.12", port: 22, auth: { kind: "profile", profileId: "p1" } })],

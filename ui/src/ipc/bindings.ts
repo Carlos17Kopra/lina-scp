@@ -31,6 +31,8 @@ export const commands = {
 	sessionResize: (sessionId: string, cols: number, rows: number) => typedError<null, CoreError>(__TAURI_INVOKE("session_resize", { sessionId, cols, rows })),
 	sessionAck: (sessionId: string, bytes: number) => typedError<null, CoreError>(__TAURI_INVOKE("session_ack", { sessionId, bytes })),
 	sessionClose: (sessionId: string) => typedError<null, CoreError>(__TAURI_INVOKE("session_close", { sessionId })),
+	sessionReconnectNow: (sessionId: string) => typedError<null, CoreError>(__TAURI_INVOKE("session_reconnect_now", { sessionId })),
+	sessionReconnectStop: (sessionId: string) => typedError<null, CoreError>(__TAURI_INVOKE("session_reconnect_stop", { sessionId })),
 	exportFile: (path: string, includeSecrets: boolean, includeKeyFiles: boolean, passphrase: string | null) => typedError<ExportReport, CoreError>(__TAURI_INVOKE("export_file", { path, includeSecrets, includeKeyFiles, passphrase })),
 	importPreview: (path: string) => typedError<ImportPreview, CoreError>(__TAURI_INVOKE("import_preview", { path })),
 	importApply: (path: string, passphrase: string | null, resolutions: { [key in string]: Resolution }) => typedError<ImportReport, CoreError>(__TAURI_INVOKE("import_apply", { path, passphrase, resolutions })),
@@ -66,7 +68,9 @@ export type ConnectedSession = {
  *  (not `kind`, because the `Network` variant already has a field named `kind`):
  *  `{"type":"network","kind":"timeout","message":"..."}`.
  */
-export type CoreError = { type: "network"; kind: NetworkKind; message: string } | { type: "hostKeyRejected"; message: string } | { type: "auth"; rejectedMethods: string[]; message: string } | { type: "keyring"; message: string } | { type: "store"; message: string } | { type: "config"; message: string } | { type: "io"; message: string } | { type: "cancelled" } | { type: "internal"; message: string };
+export type CoreError = { type: "network"; kind: NetworkKind; message: string } | { type: "hostKeyRejected"; message: string } | { type: "auth"; rejectedMethods: string[]; message: string } | { type: "keyring"; message: string } | { type: "store"; message: string } | { type: "config"; message: string } | { type: "io"; message: string } | { type: "cancelled" } | 
+/**  A reconnect attempt would have needed user input (password, passphrase, 2FA, host key). */
+{ type: "inputRequired" } | { type: "internal"; message: string };
 
 export type EnvVar = {
 	key: string,
@@ -210,7 +214,7 @@ export type SecretKind = "password" | "passphrase";
 export type SecretOwner = { kind: "host"; id: string } | { kind: "profile"; id: string };
 
 /**  Non-output session events, sent on the `session_events` channel. */
-export type SessionEventDto = { kind: "exit"; code: number | null } | { kind: "error"; error: CoreError };
+export type SessionEventDto = { kind: "exit"; code: number | null } | { kind: "error"; error: CoreError } | { kind: "reconnecting"; attempt: number; maxAttempts: number; retryInMs: number; reason: CoreError } | { kind: "reconnected"; info: SessionInfo } | { kind: "lost"; reason: CoreError };
 
 /**
  *  What was negotiated for an established connection; shown in the terminal sidebar.
@@ -235,6 +239,7 @@ export type Settings = {
 	terminalFontSize: number,
 	terminalScheme: string,
 	terminalSidebarOpen: boolean,
+	terminalAutoReconnect: boolean,
 	firstRunDone: boolean,
 	compatRendering: boolean,
 };

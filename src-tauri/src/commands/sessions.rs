@@ -13,10 +13,13 @@ use crate::util::lock;
 
 /// Non-output session events, sent on the `session_events` channel.
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum SessionEventDto {
     Exit { code: Option<u32> },
     Error { error: CoreError },
+    Reconnecting { attempt: u32, max_attempts: u32, retry_in_ms: u32, reason: CoreError },
+    Reconnected { info: linascp_core::connect::SessionInfo },
+    Lost { reason: CoreError },
 }
 
 pub(crate) type EventSender = Arc<dyn Fn(SessionEventDto) + Send + Sync>;
@@ -40,7 +43,8 @@ pub(crate) fn channel_event_sender(channel: Channel<SessionEventDto>) -> EventSe
 /// Core `OutputSink` that feeds the pump, reports exit/error after flushing pending output,
 /// and removes the session from `AppState` (self-cleanup) so a session that ends on its own —
 /// the shell exits, the SSH connection drops — is not kept alive until an explicit
-/// `session_close` call.
+/// `session_close` call. `Lost` and reconnect events keep the session registered (it can
+/// reconnect again).
 pub(crate) fn make_sink(pump: Arc<OutputPump>, send_event: EventSender, cleanup: Cleanup) -> OutputSink {
     Arc::new(move |event: SessionEvent| match event {
         SessionEvent::Output(bytes) => pump.push(&bytes),
@@ -54,6 +58,12 @@ pub(crate) fn make_sink(pump: Arc<OutputPump>, send_event: EventSender, cleanup:
             cleanup();
             send_event(SessionEventDto::Error { error });
         }
+        SessionEvent::Lost(reason) => send_event(SessionEventDto::Lost { reason }),
+        SessionEvent::Reconnecting { attempt, max_attempts, retry_in, reason } => {
+            let retry_in_ms = u32::try_from(retry_in.as_millis()).unwrap_or(u32::MAX);
+            send_event(SessionEventDto::Reconnecting { attempt, max_attempts, retry_in_ms, reason })
+        }
+        SessionEvent::Reconnected { info } => send_event(SessionEventDto::Reconnected { info }),
     })
 }
 
@@ -139,6 +149,19 @@ pub(crate) async fn close(state: &AppState, id: SessionId) -> Result<()> {
     }
 }
 
+/// Unknown or local sessions: nothing to do.
+pub(crate) fn reconnect_now(state: &AppState, id: SessionId) {
+    if let Some(session) = state.sessions.get(id) {
+        session.reconnect_now();
+    }
+}
+
+pub(crate) fn reconnect_stop(state: &AppState, id: SessionId) {
+    if let Some(session) = state.sessions.get(id) {
+        session.stop_reconnect();
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn session_open_local(
@@ -176,6 +199,20 @@ pub async fn session_close(state: State<'_, AppState>, session_id: SessionId) ->
     close(&state, session_id).await
 }
 
+#[tauri::command]
+#[specta::specta]
+pub async fn session_reconnect_now(state: State<'_, AppState>, session_id: SessionId) -> Result<()> {
+    reconnect_now(&state, session_id);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn session_reconnect_stop(state: State<'_, AppState>, session_id: SessionId) -> Result<()> {
+    reconnect_stop(&state, session_id);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,6 +248,52 @@ mod tests {
             }),
             calls,
         )
+    }
+
+    #[tokio::test]
+    async fn reconnect_commands_ignore_unknown_and_local_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::for_tests(dir.path());
+        reconnect_now(&state, Uuid::new_v4());
+        reconnect_stop(&state, Uuid::new_v4());
+        let (pump, _bytes) = collecting_pump();
+        let (send, _events) = collecting_events();
+        let id = open_local(&state, 80, 24, pump, send).unwrap();
+        reconnect_now(&state, id);
+        reconnect_stop(&state, id);
+        close(&state, id).await.unwrap();
+    }
+
+    #[test]
+    fn sink_reports_reconnect_events_without_cleanup() {
+        let (pump, _bytes) = collecting_pump();
+        let (send, events) = collecting_events();
+        let (cleanup, calls) = counting_cleanup();
+        let sink = make_sink(pump.clone(), send, cleanup);
+        let reason = CoreError::Network { kind: linascp_core::error::NetworkKind::Other, message: "gone".into() };
+        sink(SessionEvent::Reconnecting {
+            attempt: 2,
+            max_attempts: 8,
+            retry_in: std::time::Duration::from_millis(2000),
+            reason: reason.clone(),
+        });
+        sink(SessionEvent::Reconnected { info: linascp_core::connect::SessionInfo::default() });
+        sink(SessionEvent::Lost(reason.clone()));
+        assert!(!pump.is_closed(), "the session stays usable for \"Erneut versuchen\"");
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "lost must not unregister the session");
+        let events = events.lock().unwrap();
+        assert!(matches!(
+            events.as_slice(),
+            [
+                SessionEventDto::Reconnecting { attempt: 2, max_attempts: 8, retry_in_ms: 2000, .. },
+                SessionEventDto::Reconnected { .. },
+                SessionEventDto::Lost { .. },
+            ]
+        ));
+        let json = serde_json::to_value(&events[0]).unwrap();
+        assert_eq!(json["kind"], "reconnecting");
+        assert_eq!(json["retryInMs"], 2000);
+        assert_eq!(json["maxAttempts"], 8);
     }
 
     #[test]

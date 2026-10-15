@@ -1,8 +1,8 @@
 use linascp_core::error::{CoreError, Result};
 use linascp_core::sshconfig::Mirror;
 use linascp_core::store::{
-    FIRST_RUN_DONE, SSH_MODE, Store, TERMINAL_FONT_SIZE, TERMINAL_RENDERER, TERMINAL_SCHEME, TERMINAL_SIDEBAR_OPEN,
-    THEME,
+    FIRST_RUN_DONE, SSH_MODE, Store, TERMINAL_AUTO_RECONNECT, TERMINAL_FONT_SIZE, TERMINAL_RENDERER, TERMINAL_SCHEME,
+    TERMINAL_SIDEBAR_OPEN, THEME,
 };
 use linascp_core::validate::{TERMINAL_FONT_SIZES, is_valid_terminal_scheme};
 use tauri::State;
@@ -42,9 +42,16 @@ pub(crate) fn load_settings(store: &Store) -> Result<Settings> {
             .filter(|id| is_valid_terminal_scheme(id))
             .unwrap_or(d.terminal_scheme),
         terminal_sidebar_open: parse_flag(store.get_setting(TERMINAL_SIDEBAR_OPEN)?).unwrap_or(d.terminal_sidebar_open),
+        terminal_auto_reconnect: parse_flag(store.get_setting(TERMINAL_AUTO_RECONNECT)?)
+            .unwrap_or(d.terminal_auto_reconnect),
         first_run_done: parse_flag(store.get_setting(FIRST_RUN_DONE)?).unwrap_or(d.first_run_done),
         compat_rendering: parse_flag(store.get_setting(COMPAT_RENDERING)?).unwrap_or(d.compat_rendering),
     })
+}
+
+/// Read when a connection is lost; a store error keeps the default (on).
+pub(crate) fn auto_reconnect_enabled(store: &Store) -> bool {
+    load_settings(store).map(|settings| settings.terminal_auto_reconnect).unwrap_or(true)
 }
 
 fn mirror(state: &AppState) -> Mirror {
@@ -81,6 +88,7 @@ pub(crate) fn save_settings(state: &AppState, next: Settings) -> Result<Settings
     store.set_setting(TERMINAL_FONT_SIZE, &next.terminal_font_size.to_string())?;
     store.set_setting(TERMINAL_SCHEME, &next.terminal_scheme)?;
     store.set_setting(TERMINAL_SIDEBAR_OPEN, flag_str(next.terminal_sidebar_open))?;
+    store.set_setting(TERMINAL_AUTO_RECONNECT, flag_str(next.terminal_auto_reconnect))?;
     store.set_setting(FIRST_RUN_DONE, flag_str(next.first_run_done))?;
     store.set_setting(COMPAT_RENDERING, flag_str(next.compat_rendering))?;
     load_settings(store)
@@ -137,6 +145,7 @@ mod tests {
             terminal_font_size: 16,
             terminal_scheme: "nord".into(),
             terminal_sidebar_open: true,
+            terminal_auto_reconnect: false,
             first_run_done: true,
             compat_rendering: true,
         };
@@ -144,6 +153,15 @@ mod tests {
         assert_eq!(load_settings(&state.store).unwrap(), next);
         assert_eq!(state.store.get_setting(FIRST_RUN_DONE).unwrap().as_deref(), Some("1"));
         assert_eq!(state.store.get_setting(COMPAT_RENDERING).unwrap().as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn auto_reconnect_defaults_on_and_roundtrips() {
+        let (_dir, state) = setup();
+        assert!(load_settings(&state.store).unwrap().terminal_auto_reconnect);
+        let next = Settings { terminal_auto_reconnect: false, ..load_settings(&state.store).unwrap() };
+        assert!(!save_settings(&state, next).unwrap().terminal_auto_reconnect);
+        assert!(!auto_reconnect_enabled(&state.store));
     }
 
     #[test]

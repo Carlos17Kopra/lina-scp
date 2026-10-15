@@ -53,6 +53,14 @@ export function TabBar() {
           const label = count > 1 ? texts.count(title, count) : title;
           const selected = group.id === activeId;
           const ended = pane?.status === "closed" || pane?.status === "error";
+          const suffix =
+            pane?.status === "reconnecting"
+              ? t.terminal.reconnecting.suffixReconnecting
+              : pane?.status === "lost"
+                ? t.terminal.reconnecting.suffixLost
+                : ended
+                  ? t.terminal.endedSuffix
+                  : null;
           return (
             <div key={group.id} className={cx(styles.tab, selected && styles.active)} data-status={pane?.status} data-kind={pane?.kind}>
               <button
@@ -71,7 +79,7 @@ export function TabBar() {
               >
                 <span className={styles.dot} aria-hidden="true" />
                 <span className={styles.title}>{label}</span>
-                {ended ? <span className="visually-hidden">{` – ${t.terminal.endedSuffix}`}</span> : null}
+                {suffix ? <span className="visually-hidden">{` – ${suffix}`}</span> : null}
               </button>
               <IconButton
                 size="sm"

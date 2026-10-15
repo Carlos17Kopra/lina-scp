@@ -6,6 +6,7 @@ import { type TabGroup, useSessionsStore } from "../../stores/sessions";
 import { arrange, paneIds, type Rect, type SplitDir, type SplitPath } from "./layout";
 import styles from "./PaneLayout.module.css";
 import { PanePicker } from "./PanePicker";
+import { ReconnectBar } from "./ReconnectBar";
 import { SessionEnded } from "./SessionEnded";
 import { TerminalView } from "./TerminalView";
 
@@ -39,7 +40,7 @@ function Pane({ paneId, group, rect, multi, visible }: { paneId: string; group: 
   const closeSession = useSessionsStore((state) => state.closeSession);
   if (!pane) return null;
   const focused = group.focusedPaneId === paneId;
-  const ended = pane.status === "closed" || pane.status === "error";
+  const ended = pane.status === "closed" || pane.status === "error" || pane.status === "lost";
   return (
     <div
       className={cx(styles.pane, multi && focused && styles.focused, group.broadcast && styles.broadcast)}
@@ -50,6 +51,7 @@ function Pane({ paneId, group, rect, multi, visible }: { paneId: string; group: 
     >
       {pane.status === "picking" ? <PanePicker pane={pane} focused={visible && focused} /> : null}
       {pane.sessionId ? <TerminalView tab={pane} visible={visible} focused={visible && focused} /> : null}
+      {pane.status === "reconnecting" ? <ReconnectBar tab={pane} /> : null}
       {ended ? <SessionEnded tab={pane} /> : null}
       {multi ? (
         <IconButton

@@ -12,7 +12,16 @@ vi.mock("@tauri-apps/api/core", () => {
   return { invoke, Channel };
 });
 
-import { createOutputStream, hostDelete, hostsList, importApply, sessionWrite, type Host } from "./api";
+import {
+  createOutputStream,
+  hostDelete,
+  hostsList,
+  importApply,
+  sessionReconnectNow,
+  sessionReconnectStop,
+  sessionWrite,
+  type Host,
+} from "./api";
 
 const host = { id: "h1", name: "web-01" } as unknown as Host;
 
@@ -96,12 +105,34 @@ describe("command wrappers", () => {
       resolutions: { h1: "replace" },
     });
   });
+
+  it("wrap the reconnect commands", async () => {
+    invoke.mockResolvedValue(null);
+    await sessionReconnectNow("s1");
+    expect(invoke).toHaveBeenLastCalledWith("session_reconnect_now", { sessionId: "s1" });
+    await sessionReconnectStop("s1");
+    expect(invoke).toHaveBeenLastCalledWith("session_reconnect_stop", { sessionId: "s1" });
+  });
 });
 
 describe("createOutputStream", () => {
   beforeEach(() => {
     invoke.mockReset();
     invoke.mockResolvedValue(null);
+  });
+
+  it("delivers injected bytes in order and never acks them (Review Focus 5)", () => {
+    const stream = createOutputStream();
+    stream.bind("s1");
+    const received: number[][] = [];
+    stream.attach((bytes) => received.push(Array.from(bytes)));
+    stream.inject(new Uint8Array([7, 7]));
+    stream.channel.onmessage(new Uint8Array([1]).buffer);
+    expect(received).toEqual([[7, 7], [1]]);
+    stream.ack(2); // xterm consumed the injected bytes
+    expect(invoke).not.toHaveBeenCalled();
+    stream.ack(1);
+    expect(invoke).toHaveBeenLastCalledWith("session_ack", { sessionId: "s1", bytes: 1 });
   });
 
   it("buffers output until a consumer attaches", () => {
