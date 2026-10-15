@@ -7,6 +7,8 @@ export const DEFAULT_SETTINGS: Settings = {
   sshMode: "integrate",
   terminalRenderer: "auto",
   terminalFontSize: 14,
+  terminalScheme: "auto",
+  terminalSidebarOpen: false,
   firstRunDone: false,
   compatRendering: false,
 };

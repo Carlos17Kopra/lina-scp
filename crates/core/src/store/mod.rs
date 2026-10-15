@@ -24,6 +24,10 @@ pub const SSH_MODE: &str = "ssh_mode";
 pub const TERMINAL_RENDERER: &str = "terminal_renderer";
 /// Setting key: font size in px as decimal string.
 pub const TERMINAL_FONT_SIZE: &str = "terminal_font_size";
+/// Setting key: terminal color scheme id (`"auto"` or a `schemes.json` id).
+pub const TERMINAL_SCHEME: &str = "terminal_scheme";
+/// Setting key: `"1"` while the terminal sidebar is open.
+pub const TERMINAL_SIDEBAR_OPEN: &str = "terminal_sidebar_open";
 /// Setting key: `"true"` once the first-run dialog was completed.
 pub const FIRST_RUN_DONE: &str = "first_run_done";
 

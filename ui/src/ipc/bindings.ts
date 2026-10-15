@@ -209,6 +209,8 @@ export type Settings = {
 	sshMode: SshMode,
 	terminalRenderer: TerminalRenderer,
 	terminalFontSize: number,
+	terminalScheme: string,
+	terminalSidebarOpen: boolean,
 	firstRunDone: boolean,
 	compatRendering: boolean,
 };
