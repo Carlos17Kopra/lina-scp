@@ -390,6 +390,16 @@ export const t = {
     reconnect: "Neu verbinden",
     design: {
       auto: "Wie App-Design",
+      scheme: "Farbschema",
+      fontSize: "Schriftgröße",
+      smaller: "Schrift kleiner",
+      bigger: "Schrift größer",
+      scope: "Gilt für",
+      scopeAll: "Alle Sitzungen",
+      scopeHost: "Nur diesen Host",
+      scopeLocal: "Lokale Terminals verwenden immer die globalen Einstellungen.",
+      scopeSshConfig: "Hosts aus ~/.ssh/config lassen sich hier nicht einzeln anpassen.",
+      scopeDeleted: "Der Host existiert nicht mehr.",
     },
     sidebar: {
       label: "Sitzungsdetails",
