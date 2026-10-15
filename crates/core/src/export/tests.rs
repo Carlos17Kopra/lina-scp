@@ -294,7 +294,8 @@ fn encrypt_uses_fixed_work_factor_decryptable_regardless_of_machine_speed() {
 #[test]
 fn decrypt_payload_accepts_the_fixed_work_factor() {
     let passphrase = pass("whatever");
-    let payload = SecretPayload { secrets: BTreeMap::from([("a".to_string(), "b".to_string())]), ..Default::default() };
+    let payload =
+        SecretPayload { secrets: BTreeMap::from([("a".to_string(), "b".to_string())]), key_files: BTreeMap::new() };
     let json = serde_json::to_vec(&payload).unwrap();
     let block = encrypt(&json, &passphrase).unwrap();
     let decoded = decrypt_payload(&block, &passphrase).unwrap();

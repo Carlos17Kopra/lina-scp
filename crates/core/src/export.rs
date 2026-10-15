@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use age::armor::{ArmoredReader, ArmoredWriter, Format};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
+use secrecy::zeroize::{Zeroize, Zeroizing};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
@@ -138,6 +139,14 @@ struct SecretPayload {
     key_files: BTreeMap<String, String>,
 }
 
+impl Drop for SecretPayload {
+    fn drop(&mut self) {
+        for value in self.secrets.values_mut().chain(self.key_files.values_mut()) {
+            value.zeroize();
+        }
+    }
+}
+
 /// Serializes the whole store. Files containing secrets must be written with mode 0600.
 pub fn export_data(store: &Store, secrets: &dyn SecretStore, opts: &ExportOptions) -> Result<ExportOutput> {
     if opts.include_key_files && !opts.include_secrets {
@@ -162,7 +171,7 @@ pub fn export_data(store: &Store, secrets: &dyn SecretStore, opts: &ExportOption
             .ok_or_else(|| CoreError::config("passphrase required to export secrets"))?;
         let payload =
             collect_secrets(&hosts, &profiles, secrets, opts.include_key_files.then_some(&opts.home), &mut report)?;
-        let json = serde_json::to_vec(&payload).map_err(|e| CoreError::internal(e.to_string()))?;
+        let json = Zeroizing::new(serde_json::to_vec(&payload).map_err(|e| CoreError::internal(e.to_string()))?);
         Some(encrypt(&json, passphrase)?)
     } else {
         None
@@ -479,7 +488,7 @@ fn collect_secrets(
             // Keyed by the configured path: import rewrites exactly that value.
             match fs::read(expand_tilde(path, home)) {
                 Ok(content) => {
-                    payload.key_files.insert(path.to_string(), B64.encode(content));
+                    payload.key_files.insert(path.to_string(), B64.encode(Zeroizing::new(content)));
                 }
                 // Missing or unreadable keys are reported, not fatal: the rest of the export stays useful.
                 Err(err) => {
@@ -519,7 +528,9 @@ fn write_key_files(
     }
     fsutil::create_private_dir(key_dir)?;
     for (original, encoded) in files {
-        let content = B64.decode(encoded).map_err(|e| CoreError::config(format!("invalid key file in export: {e}")))?;
+        let content = Zeroizing::new(
+            B64.decode(encoded).map_err(|e| CoreError::config(format!("invalid key file in export: {e}")))?,
+        );
         let base = Path::new(original)
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -540,8 +551,8 @@ fn unique_key_path(dir: &Path, base: &str, content: &[u8]) -> Result<(PathBuf, b
     for n in 0u32.. {
         let name = if n == 0 { base.to_string() } else { format!("{base}-{n}") };
         let candidate = dir.join(name);
-        match fs::read(&candidate) {
-            Ok(existing) if existing == content => return Ok((candidate, true)),
+        match fs::read(&candidate).map(Zeroizing::new) {
+            Ok(existing) if existing.as_slice() == content => return Ok((candidate, true)),
             Ok(_) => continue,
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok((candidate, false)),
             Err(err) => return Err(err.into()),
@@ -616,7 +627,7 @@ fn decrypt_payload(block: &str, passphrase: &SecretString) -> Result<SecretPaylo
     let mut identity = age::scrypt::Identity::new(passphrase.clone());
     identity.set_max_work_factor(SCRYPT_MAX_WORK_FACTOR);
     let mut reader = decryptor.decrypt(iter::once(&identity as &dyn age::Identity)).map_err(map_decrypt_error)?;
-    let mut plaintext = Vec::new();
+    let mut plaintext = Zeroizing::new(Vec::new());
     reader.read_to_end(&mut plaintext)?;
     serde_json::from_slice(&plaintext).map_err(|e| CoreError::config(format!("invalid secrets block: {e}")))
 }

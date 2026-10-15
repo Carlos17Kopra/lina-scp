@@ -9,7 +9,7 @@ fixed before the merge are not listed.
 - **Sessions:**
   - Spec §9: panics in session tasks are not caught (no `catch_unwind`; `SessionEvent::Error` is never produced for them).
   - The local PTY writer thread stays parked after close if a write is stuck on a full PTY. Use a non-blocking fd plus poll.
-- **Secrets hygiene:** the plaintext export JSON, keyboard-interactive responses and key text are not zeroized. The passphrase is saved after local decrypt, before the server has accepted it.
+- **Secrets hygiene:** keyboard-interactive responses are not zeroized: russh takes the `Vec<String>` by value, and the answer has already passed through IPC/serde copies. Needs an upstream API taking secret buffers.
 - **Connect:**
   - A cancel invoke processed before `connect_ssh` registers its token is still lost; the window is tiny now.
   - Terminal input order across separate `session_write` invokes is not guaranteed.
