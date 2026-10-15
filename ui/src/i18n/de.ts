@@ -138,6 +138,7 @@ export const t = {
       auth: "Anmeldung fehlgeschlagen",
       hostKeyRejected: "Host-Key abgelehnt",
       cancelled: "Abgebrochen",
+      inputRequired: "Für die Verbindung ist eine Eingabe nötig (Passwort, Host-Key …)",
     },
     prompt: {
       password: (target: string) => `Passwort für ${target}`,

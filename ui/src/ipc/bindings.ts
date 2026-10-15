@@ -66,7 +66,9 @@ export type ConnectedSession = {
  *  (not `kind`, because the `Network` variant already has a field named `kind`):
  *  `{"type":"network","kind":"timeout","message":"..."}`.
  */
-export type CoreError = { type: "network"; kind: NetworkKind; message: string } | { type: "hostKeyRejected"; message: string } | { type: "auth"; rejectedMethods: string[]; message: string } | { type: "keyring"; message: string } | { type: "store"; message: string } | { type: "config"; message: string } | { type: "io"; message: string } | { type: "cancelled" } | { type: "internal"; message: string };
+export type CoreError = { type: "network"; kind: NetworkKind; message: string } | { type: "hostKeyRejected"; message: string } | { type: "auth"; rejectedMethods: string[]; message: string } | { type: "keyring"; message: string } | { type: "store"; message: string } | { type: "config"; message: string } | { type: "io"; message: string } | { type: "cancelled" } | 
+/**  A reconnect attempt would have needed user input (password, passphrase, 2FA, host key). */
+{ type: "inputRequired" } | { type: "internal"; message: string };
 
 export type EnvVar = {
 	key: string,
@@ -210,7 +212,7 @@ export type SecretKind = "password" | "passphrase";
 export type SecretOwner = { kind: "host"; id: string } | { kind: "profile"; id: string };
 
 /**  Non-output session events, sent on the `session_events` channel. */
-export type SessionEventDto = { kind: "exit"; code: number | null } | { kind: "error"; error: CoreError };
+export type SessionEventDto = { kind: "exit"; code: number | null } | { kind: "error"; error: CoreError } | { kind: "reconnecting"; attempt: number; maxAttempts: number; retryInMs: number; reason: CoreError } | { kind: "reconnected"; info: SessionInfo } | { kind: "lost"; reason: CoreError };
 
 /**
  *  What was negotiated for an established connection; shown in the terminal sidebar.

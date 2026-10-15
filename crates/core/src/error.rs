@@ -34,6 +34,9 @@ pub enum CoreError {
     Io { message: String },
     #[error("cancelled")]
     Cancelled,
+    /// A reconnect attempt would have needed user input (password, passphrase, 2FA, host key).
+    #[error("input required")]
+    InputRequired,
     #[error("internal error: {message}")]
     Internal { message: String },
 }
@@ -95,6 +98,14 @@ mod tests {
         let err = CoreError::HostKeyRejected { message: "no".into() };
         let back: CoreError = serde_json::from_str(&serde_json::to_string(&err).unwrap()).unwrap();
         assert_eq!(back, err);
+    }
+
+    #[test]
+    fn input_required_serializes_as_a_unit_type() {
+        assert_eq!(
+            serde_json::to_value(CoreError::InputRequired).unwrap(),
+            serde_json::json!({ "type": "inputRequired" })
+        );
     }
 
     #[test]

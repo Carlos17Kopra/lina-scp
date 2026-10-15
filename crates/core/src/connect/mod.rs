@@ -75,7 +75,7 @@ pub enum ConnectEvent {
 
 /// What was negotiated for an established connection; shown in the terminal sidebar.
 /// Never add secrets (passwords, passphrases, key material, prompt answers) to this struct.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, specta::Type)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
     pub host_key_algorithm: String,

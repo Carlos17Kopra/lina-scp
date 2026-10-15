@@ -34,8 +34,20 @@ import { estimateTerminalSize } from "./terminalSize";
 import { useUiStore } from "./ui";
 
 export type TabKind = "ssh" | "local";
-/** `picking`: a new split pane that shows the host/local picker and has no session yet. */
-export type TabStatus = "picking" | "connecting" | "connected" | "closed" | "error";
+/**
+ * `picking`: a new split pane that shows the host/local picker and has no session yet.
+ * `reconnecting`: the connection broke and is being restored; `lost`: reconnecting gave up.
+ */
+export type TabStatus = "picking" | "connecting" | "connected" | "reconnecting" | "lost" | "closed" | "error";
+
+/** Progress of an automatic reconnect (status `reconnecting`). */
+export interface ReconnectState {
+  attempt: number;
+  maxAttempts: number;
+  /** Client time (ms) of the next attempt. */
+  retryAt: number;
+  reason: CoreError;
+}
 
 /** One terminal pane = one session. Grouped into UI tabs by `TabGroup`. */
 export interface Tab {
@@ -45,8 +57,10 @@ export interface Tab {
   hostId?: Id;
   sessionId?: SessionId;
   status: TabStatus;
-  /** Why the session ended, for `status: "error"`. */
+  /** Why the session ended, for `status: "error"` / `"lost"`. */
   error?: CoreError;
+  /** While status is "reconnecting". */
+  reconnect?: ReconnectState;
   /** Negotiated algorithms etc. of an SSH session (sidebar "Sitzung"). */
   info?: SessionInfo;
   /** Client time (ms) when the session connected / the local terminal opened. */

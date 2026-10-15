@@ -9,9 +9,23 @@ import { type Tab, useSessionsStore } from "./sessions";
  */
 const early = new Map<string, SessionEventDto>();
 
-/** The tab fields a session event sets: "Sitzung beendet" (exit) or "… mit Fehler beendet" (error). */
+/** The tab fields a session event sets (ended, failed, reconnecting, restored, lost). */
 export function sessionEventPatch(event: SessionEventDto): Partial<Omit<Tab, "id">> {
-  return event.kind === "exit" ? { status: "closed" } : { status: "error", error: event.error };
+  switch (event.kind) {
+    case "exit":
+      return { status: "closed" };
+    case "error":
+      return { status: "error", error: event.error };
+    case "reconnecting":
+      return {
+        status: "reconnecting",
+        reconnect: { attempt: event.attempt, maxAttempts: event.maxAttempts, retryAt: Date.now() + event.retryInMs, reason: event.reason },
+      };
+    case "reconnected":
+      return { status: "connected", info: event.info, connectedAt: Date.now(), reconnect: undefined, error: undefined };
+    case "lost":
+      return { status: "lost", error: event.reason, reconnect: undefined };
+  }
 }
 
 /** Handler for a session's `session_events` channel: the tab shows "Sitzung beendet" afterwards. */

@@ -9,6 +9,7 @@ const CORE_ERROR_TYPES: ReadonlySet<string> = new Set<CoreError["type"]>([
   "config",
   "io",
   "cancelled",
+  "inputRequired",
   "internal",
 ]);
 

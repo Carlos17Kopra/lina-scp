@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../ipc/api";
 import { useNoticeStore } from "./notices";
 import { paneIds } from "../screens/terminal/layout";
-import { discardEarlySessionEvent, pendingSessionEventCount, sessionEventHandler } from "./sessionEvents";
+import { discardEarlySessionEvent, pendingSessionEventCount, sessionEventHandler, sessionEventPatch } from "./sessionEvents";
 import { broadcastPeers, focusedPane, type Tab, type TabStatus, useSessionsStore } from "./sessions";
 import { getStream, registerStream } from "./streams";
 import { useUiStore } from "./ui";
@@ -238,5 +238,27 @@ describe("sessions store — groups and panes", () => {
     const live = focusedPane(useSessionsStore.getState());
     expect(live).toMatchObject({ sessionId: "s-1", status: "connected" });
     expect(getStream(live!.id)).toBe(stream);
+  });
+});
+
+describe("session event patches for reconnects", () => {
+  const reason = { type: "network", kind: "other", message: "connection lost" } as const;
+
+  it("maps reconnecting, reconnected and lost onto the pane", () => {
+    vi.spyOn(Date, "now").mockReturnValue(10_000);
+    expect(sessionEventPatch({ kind: "reconnecting", attempt: 2, maxAttempts: 8, retryInMs: 2000, reason })).toEqual({
+      status: "reconnecting",
+      reconnect: { attempt: 2, maxAttempts: 8, retryAt: 12_000, reason },
+    });
+    const info = { hostKeyAlgorithm: "ssh-ed25519", hostKeySha256: "x", kex: "k", cipher: "c", mac: "m", authMethods: [] };
+    expect(sessionEventPatch({ kind: "reconnected", info })).toEqual({
+      status: "connected",
+      info,
+      connectedAt: 10_000,
+      reconnect: undefined,
+      error: undefined,
+    });
+    expect(sessionEventPatch({ kind: "lost", reason })).toEqual({ status: "lost", error: reason, reconnect: undefined });
+    vi.restoreAllMocks();
   });
 });

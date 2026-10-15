@@ -1,7 +1,7 @@
 //! Interactive prompts during connection setup (host key, secrets, 2FA).
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -98,6 +98,8 @@ pub struct PromptBroker {
     emit: EmitFn,
     pending: Mutex<HashMap<u64, oneshot::Sender<PromptAnswer>>>,
     timeout: Duration,
+    interactive: bool,
+    refused: AtomicBool,
 }
 
 impl PromptBroker {
@@ -108,7 +110,18 @@ impl PromptBroker {
 
     /// Like `new` with a custom answer timeout (tests).
     pub fn with_timeout(emit: EmitFn, timeout: Duration) -> Self {
-        Self { emit, pending: Mutex::new(HashMap::new()), timeout }
+        Self { emit, pending: Mutex::new(HashMap::new()), timeout, interactive: true, refused: AtomicBool::new(false) }
+    }
+
+    /// Broker for automatic reconnects: every prompt is refused at once and never published.
+    /// `refused_input` then tells the caller to report `CoreError::InputRequired`.
+    pub fn non_interactive() -> Self {
+        Self { interactive: false, ..Self::with_timeout(Arc::new(|_| {}), PROMPT_TIMEOUT) }
+    }
+
+    /// Whether a prompt was refused because the broker is non-interactive.
+    pub fn refused_input(&self) -> bool {
+        self.refused.load(Ordering::SeqCst)
     }
 
     /// Ask via the broker's own emitter; never cancelled externally.
@@ -120,6 +133,10 @@ impl PromptBroker {
     /// Publish `prompt` through `emit` (the per-connect event channel) and
     /// wait for `answer`. Timeout or cancellation yields `PromptAnswer::Cancel`.
     pub async fn ask_cancellable(&self, emit: &EmitFn, prompt: Prompt, cancel: &CancellationToken) -> PromptAnswer {
+        if !self.interactive {
+            self.refused.store(true, Ordering::SeqCst);
+            return PromptAnswer::Cancel;
+        }
         let prompt_id = NEXT_PROMPT_ID.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         // Register before emitting so a synchronous answer is not lost.
@@ -170,6 +187,19 @@ mod tests {
 
     fn passphrase_prompt() -> Prompt {
         Prompt::Passphrase { key_path: "~/.ssh/id_ed25519".into() }
+    }
+
+    #[tokio::test]
+    async fn non_interactive_broker_refuses_every_prompt_without_emitting() {
+        let broker = PromptBroker::non_interactive();
+        let emitted = Arc::new(Mutex::new(0));
+        let counter = emitted.clone();
+        let emit: EmitFn = Arc::new(move |_| *counter.lock().unwrap() += 1);
+        assert!(!broker.refused_input());
+        let answer = broker.ask_cancellable(&emit, passphrase_prompt(), &CancellationToken::new()).await;
+        assert!(matches!(answer, PromptAnswer::Cancel));
+        assert_eq!(*emitted.lock().unwrap(), 0, "no prompt may reach the UI");
+        assert!(broker.refused_input());
     }
 
     #[tokio::test]

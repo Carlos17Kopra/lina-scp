@@ -227,7 +227,7 @@ impl Output {
         let sink: OutputSink = Arc::new(move |event| match event {
             SessionEvent::Output(data) => o.bytes.lock().unwrap().extend_from_slice(&data),
             SessionEvent::Exit { .. } => o.exited.store(true, Ordering::SeqCst),
-            SessionEvent::Error(_) => {}
+            _ => {}
         });
         (out, sink)
     }

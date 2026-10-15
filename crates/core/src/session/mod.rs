@@ -4,7 +4,9 @@ pub mod local;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use crate::connect::SessionInfo;
 use crate::error::{CoreError, Result};
 
 pub use local::LocalPtySession;
@@ -13,7 +15,7 @@ pub use local::LocalPtySession;
 pub type SessionId = uuid::Uuid;
 
 /// Events a session pushes to its consumer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SessionEvent {
     /// Raw terminal output bytes.
     Output(Vec<u8>),
@@ -21,6 +23,13 @@ pub enum SessionEvent {
     Exit { code: Option<u32> },
     /// A fatal error inside the session task.
     Error(CoreError),
+    /// The connection broke (no regular end). From `SshSession` it is internal: `ReconnectingSession`
+    /// turns it into a reconnect round; it reaches the app sink only when the session gives up.
+    Lost(CoreError),
+    /// A reconnect attempt follows after `retry_in`.
+    Reconnecting { attempt: u32, max_attempts: u32, retry_in: Duration, reason: CoreError },
+    /// A new connection replaced the lost one; output continues on the same session.
+    Reconnected { info: SessionInfo },
 }
 
 /// Callback receiving session events. Must be cheap and non-blocking.
@@ -59,6 +68,10 @@ pub trait Session: Send + Sync {
     async fn resize(&self, cols: u16, rows: u16) -> Result<()>;
     /// Terminate the session. An `Exit` event follows asynchronously.
     async fn close(&self) -> Result<()>;
+    /// Reconnecting sessions: skip the current wait, or start a new round after giving up.
+    fn reconnect_now(&self) {}
+    /// Reconnecting sessions: stop the running round (reports `Lost(Cancelled)`).
+    fn stop_reconnect(&self) {}
 }
 
 /// Registry of running sessions, keyed by `SessionId`.
