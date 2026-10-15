@@ -35,7 +35,7 @@ non-commercial open-source release later. Target platform is Linux only: Debian 
 - `docs/superpowers/specs/2026-10-15-linascp-tp3a-sftp-browse-design.md`: TP3a spec (SFTP connect, commander browsing,
   file operations).
 - `docs/acceptance-tp1.md`: manual acceptance checklist (`docs/acceptance-tp2a.md` … `docs/acceptance-tp2d.md` for
-  TP2a–TP2d).
+  TP2a–TP2d, `docs/acceptance-tp3a.md` for TP3a).
 - `docs/backlog-after-tp1.md`: deferred review findings. Start TP2 planning there.
 
 ## Commands (run from the repo root)
@@ -92,7 +92,7 @@ bun run tauri build               # .deb + .AppImage in target/release/bundle/
 - TP1, foundation (done, v0.1.0): hosts, editor, connect flow, host keys, error screens, terminal tabs, local
   terminals, settings, export/import, packaging.
 - TP2: complete the terminal, and work off the backlog in `docs/backlog-after-tp1.md`.
-- TP3: SFTP.
+- TP3: SFTP (3a browse done; 3b transfers; 3c bookmarks + edit).
 - TP4: advanced SFTP.
 - TP5: tunnels, keychain, keygen/ssh-copy-id, full settings.
 - No sync between devices. Moving data to another device goes through export/import (`.linascp` files).
