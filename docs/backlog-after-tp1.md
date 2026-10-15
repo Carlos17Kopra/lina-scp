@@ -6,8 +6,6 @@ fixed before the merge are not listed.
 
 ## Security / robustness (prioritise in TP2)
 
-- **Mirror mode:**
-  - A crafted import can define a `Host` alias equal to a real hostname (e.g. `github.com`) with an attacker `HostName`. This is inherent to import plus mirror. Consider namespacing aliases or confirming imported hosts.
 - **Sessions:**
   - Spec §9: panics in session tasks are not caught (no `catch_unwind`; `SessionEvent::Error` is never produced for them).
   - The local PTY writer thread stays parked after close if a write is stuck on a full PTY. Use a non-blocking fd plus poll.

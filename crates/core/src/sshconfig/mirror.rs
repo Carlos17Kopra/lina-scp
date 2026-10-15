@@ -178,8 +178,14 @@ fn skip_reason(host: &Host, profile: Option<&LoginProfile>) -> Option<&'static s
     if profile.is_some_and(|p| validate_profile(p).is_err()) {
         return Some("invalid login profile field");
     }
-    if host_alias(&host.name).is_empty() {
+    let alias = host_alias(&host.name);
+    if alias.is_empty() {
         return Some("name yields an empty ssh_config alias");
+    }
+    // A dotted alias looks like a real host name or IP: `ssh github.com` must never be redirected
+    // to another address (e.g. by a crafted import), so it is only written as its own HostName.
+    if alias.contains('.') && !alias.eq_ignore_ascii_case(&host.address) {
+        return Some("dotted alias differs from its address");
     }
     None
 }
@@ -459,6 +465,17 @@ mod injection_tests {
         let mut host = with_id(Host::new(name, &format!("{name}.example")));
         host.jump_host_id = Some(jump.id);
         host
+    }
+
+    #[test]
+    fn dotted_alias_is_only_written_when_it_is_its_own_hostname() {
+        let spoof = Host::new("github.com", "attacker.example");
+        let dotted = Host::new("web.prod", "10.0.0.5");
+        let ip = Host::new("10.0.0.9", "attacker.example");
+        let own = Host::new("Git.Example.org", "git.example.org");
+        let out = Mirror::render(&[spoof, dotted, ip, own], &[]);
+        assert!(!out.contains("attacker") && !out.contains("web.prod"), "{out}");
+        assert!(out.contains("Host Git.Example.org\n    HostName git.example.org\n"), "{out}");
     }
 
     #[test]
