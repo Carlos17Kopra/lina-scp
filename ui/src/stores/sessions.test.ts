@@ -66,6 +66,18 @@ describe("sessions store — local terminals", () => {
     expect(pendingSessionEventCount()).toBe(0);
   });
 
+  it("reuses the lowest free number for a new local terminal", async () => {
+    vi.mocked(api.sessionOpenLocal).mockResolvedValue("s");
+    for (let i = 0; i < 3; i++) await useSessionsStore.getState().openLocal();
+    await useSessionsStore.getState().closeSession("t-2");
+    await useSessionsStore.getState().openLocal();
+    expect(useSessionsStore.getState().tabs.map((tab) => tab.title)).toEqual([
+      "Lokales Terminal",
+      "Lokales Terminal 3",
+      "Lokales Terminal 2",
+    ]);
+  });
+
   it("drops a buffered session event when the local terminal fails to open", async () => {
     let reject: (error: unknown) => void = () => {};
     vi.mocked(api.sessionOpenLocal).mockReturnValue(new Promise((_, r) => (reject = r)));
