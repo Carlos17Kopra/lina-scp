@@ -117,7 +117,7 @@ Nicht enthalten:
   - Laufende Jobs gehen in jedem Fall auf `paused`. Solange die Sitzung nicht verbunden ist, startet die Engine
     keine weiteren Jobs; `queued`-Jobs bleiben `queued`.
   - Ist Auto-Reconnect aus oder der Fehler fatal, geht sofort `lost` raus.
-  - Sonst geht `reconnecting { attempt, maxAttempts, retryAt, reason }` geht raus,
+  - Sonst geht `reconnecting { attempt, maxAttempts, retryAt, reason }` raus,
     die Versuche laufen wie in TP2d.
   - Nach einem erfolgreichen Versuch geht `reconnected { info }` raus. Die `paused`-Jobs gehen zurück auf `queued`
     (an ihre alte Position) und machen ab der `.filepart` weiter.
