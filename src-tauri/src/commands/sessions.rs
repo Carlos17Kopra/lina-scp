@@ -149,6 +149,19 @@ pub(crate) async fn close(state: &AppState, id: SessionId) -> Result<()> {
     }
 }
 
+/// Unknown or local sessions: nothing to do.
+pub(crate) fn reconnect_now(state: &AppState, id: SessionId) {
+    if let Some(session) = state.sessions.get(id) {
+        session.reconnect_now();
+    }
+}
+
+pub(crate) fn reconnect_stop(state: &AppState, id: SessionId) {
+    if let Some(session) = state.sessions.get(id) {
+        session.stop_reconnect();
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn session_open_local(
@@ -186,6 +199,20 @@ pub async fn session_close(state: State<'_, AppState>, session_id: SessionId) ->
     close(&state, session_id).await
 }
 
+#[tauri::command]
+#[specta::specta]
+pub async fn session_reconnect_now(state: State<'_, AppState>, session_id: SessionId) -> Result<()> {
+    reconnect_now(&state, session_id);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn session_reconnect_stop(state: State<'_, AppState>, session_id: SessionId) -> Result<()> {
+    reconnect_stop(&state, session_id);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,6 +248,20 @@ mod tests {
             }),
             calls,
         )
+    }
+
+    #[tokio::test]
+    async fn reconnect_commands_ignore_unknown_and_local_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::for_tests(dir.path());
+        reconnect_now(&state, Uuid::new_v4());
+        reconnect_stop(&state, Uuid::new_v4());
+        let (pump, _bytes) = collecting_pump();
+        let (send, _events) = collecting_events();
+        let id = open_local(&state, 80, 24, pump, send).unwrap();
+        reconnect_now(&state, id);
+        reconnect_stop(&state, id);
+        close(&state, id).await.unwrap();
     }
 
     #[test]

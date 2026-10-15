@@ -29,6 +29,8 @@ pub const TERMINAL_FONT_SIZE: &str = "terminal_font_size";
 pub const TERMINAL_SCHEME: &str = "terminal_scheme";
 /// Setting key: `"1"` while the terminal sidebar is open.
 pub const TERMINAL_SIDEBAR_OPEN: &str = "terminal_sidebar_open";
+/// Setting key: `"0"` turns automatic SSH reconnects off (default on).
+pub const TERMINAL_AUTO_RECONNECT: &str = "terminal_auto_reconnect";
 /// Setting key: `"true"` once the first-run dialog was completed.
 pub const FIRST_RUN_DONE: &str = "first_run_done";
 

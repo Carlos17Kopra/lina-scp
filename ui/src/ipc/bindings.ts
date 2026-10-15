@@ -31,6 +31,8 @@ export const commands = {
 	sessionResize: (sessionId: string, cols: number, rows: number) => typedError<null, CoreError>(__TAURI_INVOKE("session_resize", { sessionId, cols, rows })),
 	sessionAck: (sessionId: string, bytes: number) => typedError<null, CoreError>(__TAURI_INVOKE("session_ack", { sessionId, bytes })),
 	sessionClose: (sessionId: string) => typedError<null, CoreError>(__TAURI_INVOKE("session_close", { sessionId })),
+	sessionReconnectNow: (sessionId: string) => typedError<null, CoreError>(__TAURI_INVOKE("session_reconnect_now", { sessionId })),
+	sessionReconnectStop: (sessionId: string) => typedError<null, CoreError>(__TAURI_INVOKE("session_reconnect_stop", { sessionId })),
 	exportFile: (path: string, includeSecrets: boolean, includeKeyFiles: boolean, passphrase: string | null) => typedError<ExportReport, CoreError>(__TAURI_INVOKE("export_file", { path, includeSecrets, includeKeyFiles, passphrase })),
 	importPreview: (path: string) => typedError<ImportPreview, CoreError>(__TAURI_INVOKE("import_preview", { path })),
 	importApply: (path: string, passphrase: string | null, resolutions: { [key in string]: Resolution }) => typedError<ImportReport, CoreError>(__TAURI_INVOKE("import_apply", { path, passphrase, resolutions })),
@@ -237,6 +239,7 @@ export type Settings = {
 	terminalFontSize: number,
 	terminalScheme: string,
 	terminalSidebarOpen: boolean,
+	terminalAutoReconnect: boolean,
 	firstRunDone: boolean,
 	compatRendering: boolean,
 };

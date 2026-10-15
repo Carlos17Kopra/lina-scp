@@ -59,6 +59,33 @@ impl AppState {
         Ok(Self::new(paths, store, Arc::new(KeyringSecretStore::new())))
     }
 
+    pub fn connect_env(&self) -> ConnectEnv {
+        ConnectEnv { paths: self.paths.clone(), store: self.store.clone(), secrets: self.secrets.clone() }
+    }
+
+    pub fn merged_hosts(&self) -> Result<Vec<Host>> {
+        self.connect_env().merged_hosts()
+    }
+
+    #[cfg(test)]
+    pub fn for_tests(root: &std::path::Path) -> Self {
+        use linascp_core::secrets::MemorySecretStore;
+        let paths = AppPaths::for_root(root);
+        std::fs::create_dir_all(&paths.ssh_dir).expect("create test ssh dir");
+        Self::new(paths, Store::open_in_memory().expect("in-memory store"), Arc::new(MemorySecretStore::new()))
+    }
+}
+
+/// What a connect needs from the app state, owned and cheap to clone (reconnects run long after
+/// the command that started the session returned).
+#[derive(Clone)]
+pub struct ConnectEnv {
+    pub paths: AppPaths,
+    pub store: Arc<Store>,
+    pub secrets: Arc<dyn SecretStore>,
+}
+
+impl ConnectEnv {
     /// Stored hosts merged with the read-only `~/.ssh/config` import (stored wins on equal name).
     /// A broken ssh config never blocks the app: it is logged and ignored.
     pub fn merged_hosts(&self) -> Result<Vec<Host>> {
@@ -73,13 +100,5 @@ impl AppState {
             Vec::new()
         };
         Ok(merge_hosts(stored, imported))
-    }
-
-    #[cfg(test)]
-    pub fn for_tests(root: &std::path::Path) -> Self {
-        use linascp_core::secrets::MemorySecretStore;
-        let paths = AppPaths::for_root(root);
-        std::fs::create_dir_all(&paths.ssh_dir).expect("create test ssh dir");
-        Self::new(paths, Store::open_in_memory().expect("in-memory store"), Arc::new(MemorySecretStore::new()))
     }
 }

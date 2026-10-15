@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use linascp_core::connect::{
-    ConnectDeps, ConnectEvent, ConnectRequest, ConnectTarget, EmitFn, PromptAnswer, connect_ssh as run_pipeline,
-    test_connection,
+    ConnectDeps, ConnectEvent, ConnectRequest, ConnectTarget, Connector, EmitFn, Enabled, PromptAnswer, PromptBroker,
+    ReconnectingSession, connect_ssh as run_pipeline, test_connection,
 };
 use linascp_core::error::{CoreError, Result};
 use linascp_core::known_hosts::KnownHosts;
@@ -17,23 +17,27 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::sessions::{SessionEventDto, channel_event_sender, cleanup_fn, heal_if_already_exited, make_sink, register};
+use super::settings::auto_reconnect_enabled;
 use crate::dto::ConnectedSession;
 use crate::output::{OutputPump, RawChunk};
-use crate::state::AppState;
+use crate::state::{AppState, ConnectEnv};
 use crate::util::lock;
 
 /// Looks a host up in the merged list (stored + ssh-config).
 pub(crate) fn find_host(state: &AppState, id: Id) -> Result<Host> {
-    state
-        .merged_hosts()?
+    find_host_in(&state.connect_env(), id)
+}
+
+fn find_host_in(env: &ConnectEnv, id: Id) -> Result<Host> {
+    env.merged_hosts()?
         .into_iter()
         .find(|h| h.id == id)
         .ok_or_else(|| CoreError::Config { message: format!("host {id} not found") })
 }
 
-fn target_for(state: &AppState, host: Host) -> Result<ConnectTarget> {
+fn target_for_in(env: &ConnectEnv, host: Host) -> Result<ConnectTarget> {
     let profile = match &host.auth {
-        HostAuth::Profile { profile_id } => Some(state.store.get_profile(*profile_id)?.ok_or_else(|| {
+        HostAuth::Profile { profile_id } => Some(env.store.get_profile(*profile_id)?.ok_or_else(|| {
             CoreError::Config { message: format!("login profile {profile_id} of host {} not found", host.name) }
         })?),
         HostAuth::Custom { .. } => None,
@@ -43,16 +47,20 @@ fn target_for(state: &AppState, host: Host) -> Result<ConnectTarget> {
 
 /// Resolves the login profile and the (single-hop) jump host of `host`.
 pub(crate) fn build_request(state: &AppState, host: Host, cols: u16, rows: u16) -> Result<ConnectRequest> {
+    build_request_in(&state.connect_env(), host, cols, rows)
+}
+
+fn build_request_in(env: &ConnectEnv, host: Host, cols: u16, rows: u16) -> Result<ConnectRequest> {
     let jump = match host.jump_host_id {
         Some(jump_id) => {
-            let jump_host = find_host(state, jump_id).map_err(|_| CoreError::Config {
+            let jump_host = find_host_in(env, jump_id).map_err(|_| CoreError::Config {
                 message: format!("jump host {jump_id} of host {} not found", host.name),
             })?;
-            Some(target_for(state, jump_host)?)
+            Some(target_for_in(env, jump_host)?)
         }
         None => None,
     };
-    Ok(ConnectRequest { target: target_for(state, host)?, jump, cols, rows })
+    Ok(ConnectRequest { target: target_for_in(env, host)?, jump, cols, rows })
 }
 
 /// RAII guard for a registered connect attempt: removes the `connects` entry when dropped, but
@@ -126,11 +134,37 @@ pub(crate) fn cancel_connect(state: &AppState, connect_id: Uuid) {
 }
 
 fn connect_deps(state: &AppState) -> ConnectDeps {
+    connect_deps_in(&state.connect_env())
+}
+
+fn connect_deps_in(env: &ConnectEnv) -> ConnectDeps {
     ConnectDeps {
-        known_hosts: KnownHosts::new(state.paths.known_hosts()),
-        secrets: state.secrets.clone(),
+        known_hosts: KnownHosts::new(env.paths.known_hosts()),
+        secrets: env.secrets.clone(),
         agent_sock: std::env::var_os("SSH_AUTH_SOCK").map(PathBuf::from),
     }
+}
+
+/// Reconnect attempts: request rebuilt from the current store/keyring, pipeline without prompts.
+/// A refused prompt becomes `CoreError::InputRequired` (fail closed, nothing reaches the UI).
+fn reconnect_connector(env: ConnectEnv, host_id: Id) -> Connector {
+    Arc::new(move |cols, rows, sink, cancel| {
+        let env = env.clone();
+        Box::pin(async move {
+            let host = find_host_in(&env, host_id)?;
+            let request = build_request_in(&env, host, cols, rows)?;
+            let broker = Arc::new(PromptBroker::non_interactive());
+            let quiet: EmitFn = Arc::new(|_| {});
+            match run_pipeline(request, connect_deps_in(&env), broker.clone(), quiet, sink, cancel).await {
+                Ok(session) => {
+                    let info = session.info().clone();
+                    Ok((Arc::new(session) as Arc<dyn Session>, info))
+                }
+                Err(_) if broker.refused_input() => Err(CoreError::InputRequired),
+                Err(error) => Err(error),
+            }
+        })
+    })
 }
 
 fn channel_emit(channel: Channel<ConnectEvent>) -> EmitFn {
@@ -193,9 +227,25 @@ async fn connect_ssh_registered(
     let session_id = Uuid::new_v4();
     let pump = OutputPump::for_channel(output);
     let sink = make_sink(pump.clone(), channel_event_sender(session_events), cleanup_fn(state, session_id));
+    let store = state.store.clone();
+    let enabled: Enabled = Arc::new(move || auto_reconnect_enabled(&store));
+    let reconnecting = Arc::new(ReconnectingSession::new(
+        sink,
+        cols,
+        rows,
+        reconnect_connector(state.connect_env(), host_id),
+        enabled,
+    ));
     let cancel = guard.token();
-    let result =
-        run_pipeline(request, connect_deps(state), state.broker.clone(), emit.clone(), sink, cancel.clone()).await;
+    let result = run_pipeline(
+        request,
+        connect_deps(state),
+        state.broker.clone(),
+        emit.clone(),
+        reconnecting.first_sink(),
+        cancel.clone(),
+    )
+    .await;
     drop(guard);
 
     match result {
@@ -209,7 +259,8 @@ async fn connect_ssh_registered(
         }
         Ok(session) => {
             let info = session.info().clone();
-            register(state, session_id, Arc::new(session), pump.clone());
+            reconnecting.attach(Arc::new(session));
+            register(state, session_id, reconnecting, pump.clone());
             heal_if_already_exited(state, session_id, &pump);
             // core emits `Failed` on errors; the success event is ours (exactly one terminal event).
             emit(ConnectEvent::Connected { session_id });
@@ -298,6 +349,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = AppState::for_tests(dir.path());
         (dir, state)
+    }
+
+    #[tokio::test]
+    async fn reconnect_connector_reports_a_deleted_host_as_config_error() {
+        let (_dir, state) = setup();
+        let connector = reconnect_connector(state.connect_env(), Uuid::new_v4());
+        let sink: linascp_core::session::OutputSink = Arc::new(|_| {});
+        let result = connector(80, 24, sink, CancellationToken::new()).await;
+        assert!(matches!(result, Err(CoreError::Config { .. })));
     }
 
     #[test]

@@ -12,7 +12,16 @@ vi.mock("@tauri-apps/api/core", () => {
   return { invoke, Channel };
 });
 
-import { createOutputStream, hostDelete, hostsList, importApply, sessionWrite, type Host } from "./api";
+import {
+  createOutputStream,
+  hostDelete,
+  hostsList,
+  importApply,
+  sessionReconnectNow,
+  sessionReconnectStop,
+  sessionWrite,
+  type Host,
+} from "./api";
 
 const host = { id: "h1", name: "web-01" } as unknown as Host;
 
@@ -95,6 +104,14 @@ describe("command wrappers", () => {
       passphrase: null,
       resolutions: { h1: "replace" },
     });
+  });
+
+  it("wrap the reconnect commands", async () => {
+    invoke.mockResolvedValue(null);
+    await sessionReconnectNow("s1");
+    expect(invoke).toHaveBeenLastCalledWith("session_reconnect_now", { sessionId: "s1" });
+    await sessionReconnectStop("s1");
+    expect(invoke).toHaveBeenLastCalledWith("session_reconnect_stop", { sessionId: "s1" });
   });
 });
 

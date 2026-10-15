@@ -242,6 +242,14 @@ export function sessionAck(sessionId: SessionId, bytes: number): Promise<void> {
 export function sessionClose(sessionId: SessionId): Promise<void> {
   return unwrapVoid(commands.sessionClose(sessionId));
 }
+/** Skip the reconnect wait, or start a new round after giving up (status `lost`). */
+export function sessionReconnectNow(sessionId: SessionId): Promise<void> {
+  return unwrapVoid(commands.sessionReconnectNow(sessionId));
+}
+/** Stop reconnecting (the pane shows "Verbindung verloren"). */
+export function sessionReconnectStop(sessionId: SessionId): Promise<void> {
+  return unwrapVoid(commands.sessionReconnectStop(sessionId));
+}
 
 // Export / import / ssh-config
 export function exportFile(
