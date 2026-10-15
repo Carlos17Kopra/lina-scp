@@ -728,3 +728,13 @@ fn equally_named_snippets_are_not_name_conflicts() {
     assert_eq!(dst.get_snippet(web_logs.id).unwrap().unwrap().host_id, Some(web.id));
     assert_eq!(dst.get_snippet(db_logs.id).unwrap().unwrap().host_id, Some(db.id));
 }
+
+#[test]
+fn a_duplicated_snippet_name_stays_within_the_name_limit() {
+    let long = "ä".repeat(64);
+    let name = duplicate_name(ItemKind::Snippet, &long);
+    assert_eq!(name.chars().count(), 64);
+    assert!(name.ends_with(" (Import)"));
+    assert_eq!(duplicate_name(ItemKind::Snippet, "deploy"), "deploy (Import)");
+    assert_eq!(duplicate_name(ItemKind::Host, &long), format!("{long} (Import)"));
+}

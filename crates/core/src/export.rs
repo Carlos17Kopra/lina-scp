@@ -42,6 +42,17 @@ const EXPORTED_SETTINGS: &[&str] = &[store::THEME, store::TERMINAL_RENDERER, sto
 
 const DUPLICATE_SUFFIX: &str = " (Import)";
 
+/// Name of a duplicated item: `name (Import)`, shortened so a snippet name stays valid.
+fn duplicate_name(kind: ItemKind, name: &str) -> String {
+    let base: String = match kind {
+        ItemKind::Snippet => {
+            name.chars().take(crate::validate::SNIPPET_NAME_MAX_CHARS - DUPLICATE_SUFFIX.chars().count()).collect()
+        }
+        ItemKind::Host | ItemKind::Profile | ItemKind::Group => name.to_string(),
+    };
+    format!("{}{DUPLICATE_SUFFIX}", base.trim_end())
+}
+
 pub struct ExportOptions {
     pub include_secrets: bool,
     pub include_key_files: bool,
@@ -477,7 +488,7 @@ impl Plan {
             (Some(_), Resolution::Replace) => (Action::Write { id: target, name: name.to_string() }, target),
             (Some(_), Resolution::Duplicate) => {
                 let new_id = Id::new_v4();
-                (Action::Write { id: new_id, name: format!("{name}{DUPLICATE_SUFFIX}") }, new_id)
+                (Action::Write { id: new_id, name: duplicate_name(kind, name) }, new_id)
             }
         };
         self.actions.insert(id, action);

@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useHostsStore } from "../../../stores/hosts";
@@ -85,6 +85,14 @@ describe("SnippetsPanel", () => {
     // Review Focus 3: sent only after the dialog (and its focus trap) is gone.
     await waitFor(() => expect(target.run).toHaveBeenCalledWith("journalctl -u nginx -n 50 # nginx"));
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("does not confirm the placeholders with an Enter that ends an IME composition", async () => {
+    render(<SnippetsPanel tab={sshTab} />);
+    await userEvent.click(screen.getByRole("button", { name: "Logs einfügen" }));
+    const unit = screen.getByRole("textbox", { name: "unit" });
+    fireEvent.keyDown(unit, { key: "Enter", isComposing: true });
+    expect(screen.getByRole("dialog", { name: "Platzhalter ausfüllen" })).toBeInTheDocument();
   });
 
   it("disables insert and run while the tab is not connected", () => {

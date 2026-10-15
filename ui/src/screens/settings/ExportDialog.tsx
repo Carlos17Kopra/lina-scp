@@ -29,7 +29,7 @@ export function ExportDialog() {
     try {
       chosen = await saveDialog({ title: texts.saveTitle, defaultPath: exportFileName(), filters: [LINASCP_FILTER] });
     } catch (error) {
-      toast.show({ tone: "red", message: t.editor.pickKeyFailed, details: errorDetails(error) });
+      toast.show({ tone: "red", message: t.common.pickFileFailed, details: errorDetails(error) });
       return;
     }
     if (!chosen) return;

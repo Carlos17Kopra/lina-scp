@@ -206,8 +206,11 @@ export const useSessionsStore = create<SessionsState>()((set, get) => {
         const sessionId = await sessionOpenLocal(cols, rows, stream.channel, sessionEvents);
         stream.bind(sessionId);
         registerStream(tabId, stream);
-        const count = get().tabs.filter((tab) => tab.kind === "local" && tab.status !== "picking").length;
-        const title = count === 0 ? t.terminal.localTitle : `${t.terminal.localTitle} ${count + 1}`;
+        const taken = new Set(get().tabs.map((tab) => tab.title));
+        const titleFor = (n: number) => (n === 1 ? t.terminal.localTitle : `${t.terminal.localTitle} ${n}`);
+        let n = 1;
+        while (taken.has(titleFor(n))) n++;
+        const title = titleFor(n);
         const opened = { title, kind: "local", sessionId, status: "connected", connectedAt: Date.now() } as const;
         if (!target) get().addTab({ id: tabId, ...opened });
         else if (!get().attachSession(target.paneId, tabId, opened)) {

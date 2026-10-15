@@ -281,6 +281,13 @@ describe("TerminalView", () => {
     expect(getPasteTarget(tab.id)).toBeUndefined();
   });
 
+  it("runs a command that ends in a newline with a single Enter", () => {
+    render(<TerminalView tab={tab} visible />);
+    getPasteTarget(tab.id)?.run("uptime\n");
+    expect(term().pasted).toEqual(["uptime"]);
+    expect(term().inputs).toEqual(["\r"]);
+  });
+
 it("broadcasts input of the focused pane to connected peers of its group (Review Focus 4)", () => {
     const peer: Tab = { id: "tab-2", title: "db", kind: "ssh", sessionId: "s-2", status: "connected" };
     const picking: Tab = { id: "tab-3", title: "Neuer Bereich", kind: "ssh", status: "picking" };

@@ -20,8 +20,10 @@ export function ReconnectBar({ tab }: { tab: Tab }) {
   const seconds = Math.max(0, Math.ceil((state.retryAt - now) / 1000));
   return (
     <div className={styles.bar}>
-      <span role="status" className={styles.text}>
-        {seconds > 0 ? texts.interrupted(state.attempt, state.maxAttempts, seconds) : texts.connecting(state.attempt, state.maxAttempts)}
+      <span className={styles.text}>
+        {/* Only the attempt is live: the countdown would be re-announced every second. */}
+        <span role="status">{texts.attempt(state.attempt, state.maxAttempts)}</span>
+        {seconds > 0 ? texts.countdown(seconds) : texts.connecting}
       </span>
       <Button size="sm" variant="primary" onClick={() => fireAndForget(() => sessionReconnectNow(sessionId))}>
         {texts.now}

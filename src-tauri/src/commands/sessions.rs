@@ -115,7 +115,10 @@ pub(crate) fn open_local(
 ) -> Result<SessionId> {
     let id = Uuid::new_v4();
     let sink = make_sink(pump.clone(), send_event, cleanup_fn(state, id));
-    let session = LocalPtySession::spawn(cols, rows, sink)?;
+    let session = match &state.local_shell {
+        Some(shell) => LocalPtySession::spawn_shell(shell, cols, rows, sink)?,
+        None => LocalPtySession::spawn(cols, rows, sink)?,
+    };
     register(state, id, Arc::new(session), pump.clone());
     heal_if_already_exited(state, id, &pump);
     Ok(id)

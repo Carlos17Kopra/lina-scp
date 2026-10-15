@@ -24,13 +24,11 @@ fixed before the merge are not listed.
   - `hasSecret` stays set across method changes and keyring failures.
   - Some validation errors show before the user touches a field.
   - A test result stays visible after the draft is edited.
-  - `sftp.parallel` accepts 0, and `uploadPerms` is not validated as octal.
 - Editor nav-stack edge cases:
   - The group write-back is skipped while a profile frame is on top.
   - An edit typed during `saveGroup` is not persisted if the first save succeeds.
 - Connect overlay: focus can drop to `body` after a dialog closes without a view change.
 - In `tauri dev`, the StrictMode double mount can swallow the first prompt of a new terminal (production builds are unaffected).
-- Local tab titles can repeat after closing a tab.
 - WebGL addon not disposed when `loadAddon` throws.
 - Middle-click paste is also forwarded to mouse-tracking apps.
 - Select-to-copy and middle-click use CLIPBOARD, not PRIMARY (a WebKitGTK limitation, accepted for TP1).
@@ -39,7 +37,6 @@ fixed before the merge are not listed.
 - The first-run effect can replace an already open modal.
 - Two concurrent settings saves can revert to a stale value.
 - Duplicate load-failure toasts.
-- The early session-event buffer keeps one entry per closed tab.
 - Toast actions are unreachable by keyboard while a dialog is open (Dialog focus guard).
 - Component a11y polish:
   - Tabs `aria-controls` points at panels that are not rendered.
@@ -55,36 +52,23 @@ fixed before the merge are not listed.
   - The scheme radiogroup has no roving tabindex / arrow keys (10 tab stops).
   - Every xterm resize calls `updateTab`, re-rendering all terminal tabs while the window is dragged.
 - TP2b snippets (from the branch review):
-  - Import "Duplizieren" appends " (Import)" after validation, so a 64-character name is stored with 73; editing it
-    later fails until the name is shortened. Truncate before adding the suffix.
   - The spec asks for field-level validation errors; core returns `Config` without a field and the editor shows a
     toast. Either add field errors or update the spec.
   - The placeholder send after the dialog closes relies on React flushing passive effects for discrete events before
     the `queueMicrotask`; send from an effect after `pending === null` commits instead.
   - Insert/▶ are enabled by `tab.status` only, not by a registered paste target; clicking without one does nothing.
-  - Enter during IME composition confirms the placeholder dialog (check `isComposing`).
-  - ▶ on a command ending in a newline sends a second Enter (empty prompt line).
 - TP2c split panes and broadcast (from the branch review):
-  - Early session-event buffer leaks: a session closed after its pane/key is gone still emits Exit, which stays in
-    the `early` map forever. Drop events for keys that were closed.
   - Divider drag has no `pointercancel`/`lostpointercapture` handler, and every `pointermove` refits all panes and
     sends `sessionResize`; add cancel handling and rAF throttling.
   - A picking pane hides all sidebar panels behind "Kein Terminal"; only the Sitzung panel needs it (Snippets
     already locks insert/▶ by status).
-  - Ctrl+Shift+←/→ is taken from text fields (picker search, snippet search); skip pane focus for inputs outside
-    `[data-terminal]`.
   - With broadcast on, every pane gets the same orange frame; the source pane is not visible. Combine focus and
     broadcast frames.
   - A pane connect whose pane disappeared ends silently (session closed, no notice).
   - The terminal-reply filter for broadcast is a pattern match; a modified F3 (`ESC[1;2R`) is not broadcast either.
 - TP2d auto-reconnect (from the branch review):
-  - The 1 MiB cap on output held during an attempt drops only the chunk that does not fit; later small chunks are
-    still appended, leaving a hole. Stop buffering for good once the cap is hit.
-  - `HostKeyRejected` (`@revoked` key) is retried 8 times before "Verbindung verloren"; add it to `is_fatal` and
-    `FATAL_LOST`.
   - "Jetzt versuchen" right after a backoff wait ended stores a `Notify` permit that can skip the first wait of a
     later round; use one `Notify` per round.
-  - `ReconnectBar` `role="status"` re-announces the countdown every second; keep the seconds out of the live region.
   - `stop_reconnect`/`reconnect_now` and inner events still share the state lock with the app sink, so they wait while
     output flow control is paused (input and resize no longer do).
 
@@ -95,8 +79,6 @@ fixed before the merge are not listed.
 - The README apt/backports commands were not verified on a clean system.
 
 ## Tests / code quality
-
-- `local_pty_roundtrip` and `a_session_that_exits_on_its_own_is_removed_from_both_maps` (src-tauri) spawn the developer's real `$SHELL`; a slow or interactive rc file (e.g. fastfetch waiting for terminal replies) makes them time out. Make them hermetic.
 
 - Test gaps:
   - Prompter events are never asserted.
@@ -109,10 +91,7 @@ fixed before the merge are not listed.
   - No editor test for the keyring-failure toast or the save-failure toast.
   - The disposal test doesn't assert that subscriptions and the ResizeObserver are released.
 - Dead/duplicated code:
-  - Unused `t.stubs.*` strings.
-  - `TAB_ORDER` is duplicated.
   - ConnectScreen duplicates the `connectView` branching.
-  - `pickKeyFailed` is reused across screens; move it to `t.common`.
 - Store:
   - `list_hosts` does N+1 queries.
   - Poison recovery is undocumented.

@@ -113,7 +113,11 @@ impl LocalPtySession {
     /// Spawns `$SHELL` (fallback `/bin/bash`) in the home directory with
     /// `TERM=xterm-256color`.
     pub fn spawn(cols: u16, rows: u16, sink: OutputSink) -> Result<Self> {
-        let shell = default_shell(std::env::var("SHELL").ok());
+        Self::spawn_shell(&default_shell(std::env::var("SHELL").ok()), cols, rows, sink)
+    }
+
+    /// Like `spawn` with a given shell (hermetic tests use `/bin/sh`).
+    pub fn spawn_shell(shell: &str, cols: u16, rows: u16, sink: OutputSink) -> Result<Self> {
         let mut cmd = CommandBuilder::new(shell);
         if let Ok(home) = std::env::var("HOME") {
             cmd.cwd(home);

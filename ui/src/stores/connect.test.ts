@@ -4,7 +4,7 @@ import { makeHost, makeProfile, makeSessionInfo, withUsage } from "../test/fixtu
 import { MAX_ATTEMPTS, nextRetryDelay, useConnectStore } from "./connect";
 import { useHostsStore } from "./hosts";
 import { useNoticeStore } from "./notices";
-import { pendingSessionEventCount } from "./sessionEvents";
+import { pendingSessionEventCount, resetSessionEvents } from "./sessionEvents";
 import { useSessionsStore } from "./sessions";
 import { getStream } from "./streams";
 import { useUiStore } from "./ui";
@@ -27,6 +27,7 @@ const flow = () => useConnectStore.getState().active;
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 beforeEach(() => {
+  resetSessionEvents();
   attempts = [];
   channels = [];
   let next = 0;

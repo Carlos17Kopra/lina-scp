@@ -191,4 +191,11 @@ describe("TerminalScreen", () => {
     render(<TerminalScreen />);
     expect(screen.getByRole("tab", { name: /web-prod-01\s*– Verbindung unterbrochen/ })).toBeInTheDocument();
   });
+
+  it("offers no silent retry for a rejected host key", () => {
+    seed([{ ...web, status: "lost", error: { type: "hostKeyRejected", message: "revoked" } }], "a");
+    render(<TerminalScreen />);
+    expect(screen.queryByRole("button", { name: "Erneut versuchen" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Neu verbinden" })).toBeInTheDocument();
+  });
 });

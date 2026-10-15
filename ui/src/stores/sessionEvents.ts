@@ -10,6 +10,8 @@ import { getStream } from "./streams";
  * `attachSession` apply and clear the entry.
  */
 const early = new Map<string, SessionEventDto>();
+/** Keys whose tab was added and may still get events: an event for such a key without a tab belongs to a closed pane. */
+const added = new Set<string>();
 
 /** The tab fields a session event sets (ended, failed, reconnecting, restored, lost). */
 export function sessionEventPatch(event: SessionEventDto): Partial<Omit<Tab, "id">> {
@@ -41,12 +43,15 @@ export function sessionEventHandler(tabId: string): (event: SessionEventDto) => 
         getStream(tabId)?.inject(new TextEncoder().encode(`\r\n\u001b[2m${t.terminal.reconnecting.restored}\u001b[0m\r\n`));
       }
       sessions.updateTab(tabId, sessionEventPatch(event));
-    } else early.set(tabId, event);
+      // Nothing follows an exit or error: forget the key.
+      if (event.kind === "exit" || event.kind === "error") added.delete(tabId);
+    } else if (!added.delete(tabId)) early.set(tabId, event);
   };
 }
 
 /** Removes and returns the event that arrived before tab `tabId` was added. */
 export function takeEarlySessionEvent(tabId: string): SessionEventDto | undefined {
+  added.add(tabId);
   const event = early.get(tabId);
   early.delete(tabId);
   return event;
@@ -60,4 +65,10 @@ export function discardEarlySessionEvent(tabId: string): void {
 /** Test helper: number of buffered events. */
 export function pendingSessionEventCount(): number {
   return early.size;
+}
+
+/** Test helper: forget all buffered events and added keys (test ids repeat across tests, real ones do not). */
+export function resetSessionEvents(): void {
+  early.clear();
+  added.clear();
 }

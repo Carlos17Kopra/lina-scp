@@ -134,4 +134,16 @@ describe("useGlobalShortcuts", () => {
     expect(focusNeighbour.mock.calls).toEqual([[-1], [1]]);
     expect(closeGroup).toHaveBeenCalledWith("g");
   });
+
+  it("leaves Ctrl+Shift+←/→ to text fields for word selection", () => {
+    const focusNeighbour = vi.fn();
+    useSessionsStore.setState({ activeId: "g", focusNeighbour });
+    useUiStore.setState({ view: "terminal" });
+    render(<Harness />);
+    const search = screen.getByRole("textbox", { name: "Suche" });
+    const event = createEvent.keyDown(search, { key: "ArrowLeft", ctrlKey: true, shiftKey: true });
+    fireEvent(search, event);
+    expect(focusNeighbour).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
 });

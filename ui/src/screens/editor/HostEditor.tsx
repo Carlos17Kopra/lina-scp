@@ -16,10 +16,9 @@ import { GeneralTab } from "./GeneralTab";
 import { storeSecrets } from "./secrets";
 import { SftpTab } from "./SftpTab";
 import { useConnectionTest } from "./useConnectionTest";
-import { errorTabs, type HostField, hasErrors, validateHost } from "./validate";
+import { EDITOR_TAB_ORDER, errorTabs, type HostField, hasErrors, validateHost } from "./validate";
 
-const TAB_ORDER: readonly EditorTab[] = ["general", "auth", "connection", "sftp"];
-const TABS = TAB_ORDER.map((id) => ({ id, label: t.editor.tabs[id] }));
+const TABS = EDITOR_TAB_ORDER.map((id) => ({ id, label: t.editor.tabs[id] }));
 
 export function HostEditor({
   frame,

@@ -22,7 +22,8 @@ export function PlaceholderDialog({
   const [values, setValues] = useState<Record<string, string>>({});
   // Enter in any field confirms; the submit button lives in the dialog footer, outside the fields.
   const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key !== "Enter") return;
+    // An Enter that ends an IME composition only commits the text.
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
     event.preventDefault();
     onConfirm(values);
   };
