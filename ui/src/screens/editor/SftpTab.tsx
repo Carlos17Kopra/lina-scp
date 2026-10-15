@@ -13,7 +13,7 @@ const MODE_OPTIONS: ReadonlyArray<{ value: TransferMode; label: string }> = [
 
 /** Stored with the host; used by the SFTP file manager from TP3 on. */
 export function SftpTab({ draft, edit, fieldError }: HostFormProps) {
-  const set = (patch: Partial<SftpDraft>, field?: "parallel" | "bandwidthLimit") => edit({ sftp: { ...draft.sftp, ...patch } }, field);
+  const set = (patch: Partial<SftpDraft>, field?: "parallel" | "uploadPerms" | "bandwidthLimit") => edit({ sftp: { ...draft.sftp, ...patch } }, field);
   return (
     <div className={styles.grid}>
       <p className={cx(styles.banner, styles.wide)}>{t.editor.sftpHint}</p>
@@ -50,7 +50,8 @@ export function SftpTab({ draft, edit, fieldError }: HostFormProps) {
         mono
         placeholder={t.editor.uploadPermsPlaceholder}
         value={draft.sftp.uploadPerms}
-        onChange={(uploadPerms) => set({ uploadPerms })}
+        onChange={(uploadPerms) => set({ uploadPerms }, "uploadPerms")}
+        error={fieldError("uploadPerms")}
       />
       <TextField
         label={t.editor.bandwidth}

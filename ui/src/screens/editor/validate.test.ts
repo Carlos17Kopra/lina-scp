@@ -64,7 +64,7 @@ describe("validateHost", () => {
       timeout: "-5",
       env: "nope",
       forwards: [{ id: "f", kind: "local", bind: "8080", target: "", autostart: false }],
-      sftp: { ...valid.sftp, parallel: "", bandwidthLimit: "fast" },
+      sftp: { ...valid.sftp, parallel: "", uploadPerms: "rw-r--r--", bandwidthLimit: "fast" },
     });
     expect(errors).toEqual({
       name: "Pflichtfeld",
@@ -75,10 +75,18 @@ describe("validateHost", () => {
       timeout: "Ganze Zahl ≥ 0 eingeben",
       env: "Zeile 1: Format KEY=VALUE",
       forwards: "Jede Regel braucht Bind-Adresse und Ziel",
-      parallel: "Ganze Zahl ≥ 0 eingeben",
+      parallel: "Ganze Zahl ≥ 1 eingeben",
+      uploadPerms: "Oktal angeben, z. B. 0644",
       bandwidthLimit: "Ganze Zahl ≥ 0 eingeben",
     });
     expect(errorTabs(errors)).toEqual(["general", "connection", "sftp"]);
+  });
+
+  it("needs at least one parallel transfer and octal upload permissions", () => {
+    expect(validateHost({ ...valid, sftp: { ...valid.sftp, parallel: "0" } })).toEqual({ parallel: "Ganze Zahl ≥ 1 eingeben" });
+    expect(validateHost({ ...valid, sftp: { ...valid.sftp, uploadPerms: "0844" } })).toEqual({ uploadPerms: "Oktal angeben, z. B. 0644" });
+    expect(validateHost({ ...valid, sftp: { ...valid.sftp, uploadPerms: "644" } })).toEqual({});
+    expect(validateHost({ ...valid, sftp: { ...valid.sftp, uploadPerms: " 0640 " } })).toEqual({});
   });
 
   it("checks auth: profile selection, key path, address without spaces", () => {

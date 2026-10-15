@@ -14,6 +14,7 @@ export type HostField =
   | "env"
   | "forwards"
   | "parallel"
+  | "uploadPerms"
   | "bandwidthLimit";
 export type ProfileField = "name" | "user" | "keyPath";
 export type FieldErrors<F extends string> = Partial<Record<F, string>>;
@@ -31,11 +32,14 @@ export const HOST_FIELD_TAB: Record<HostField, EditorTab> = {
   env: "connection",
   forwards: "connection",
   parallel: "sftp",
+  uploadPerms: "sftp",
   bandwidthLimit: "sftp",
 };
 
 const TAB_ORDER: readonly EditorTab[] = ["general", "auth", "connection", "sftp"];
 const INT_RE = /^\d+$/;
+/** Upload file mode: three octal digits, optionally with a leading 0 (mirrors core `is_upload_mode`). */
+const MODE_RE = /^0?[0-7]{3}$/;
 const ENV_LINE_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
 export function isNonNegativeInt(text: string): boolean {
@@ -94,7 +98,9 @@ export function validateHost(draft: HostDraft): FieldErrors<HostField> {
   if (draft.forwards.some((f) => !f.bind.trim() || (f.kind !== "dynamic" && !f.target.trim()))) {
     errors.forwards = t.editor.errors.forward;
   }
-  if (!isNonNegativeInt(draft.sftp.parallel)) errors.parallel = nonNegative;
+  if (!isNonNegativeInt(draft.sftp.parallel) || Number(draft.sftp.parallel) < 1) errors.parallel = t.editor.errors.positive;
+  const perms = draft.sftp.uploadPerms.trim();
+  if (perms && !MODE_RE.test(perms)) errors.uploadPerms = t.editor.errors.uploadPerms;
   if (draft.sftp.bandwidthLimit.trim() && !isNonNegativeInt(draft.sftp.bandwidthLimit)) errors.bandwidthLimit = nonNegative;
   return errors;
 }

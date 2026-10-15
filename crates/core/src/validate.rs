@@ -86,10 +86,24 @@ pub fn validate_host(host: &Host) -> Result<()> {
     if let Some(user) = &host.user {
         check_value("Benutzer", user)?;
     }
+    if host.sftp.parallel == 0 {
+        return Err(CoreError::config("Parallele Übertragungen: mindestens 1"));
+    }
+    if let Some(perms) = &host.sftp.upload_perms
+        && !is_upload_mode(perms)
+    {
+        return Err(CoreError::config("Upload-Rechte: Oktal angeben, z. B. 0644"));
+    }
     match &host.auth {
         HostAuth::Custom { auth } => check_auth(auth),
         HostAuth::Profile { .. } => Ok(()),
     }
+}
+
+/// File mode for uploads: three octal digits, optionally with a leading 0 (no setuid/setgid/sticky).
+fn is_upload_mode(text: &str) -> bool {
+    let digits = text.strip_prefix('0').filter(|rest| rest.len() == 3).unwrap_or(text);
+    digits.len() == 3 && digits.bytes().all(|b| (b'0'..=b'7').contains(&b))
 }
 
 /// Checks the profile fields that are written to ssh_config (user, key path).
@@ -131,6 +145,22 @@ mod tests {
 
     fn key_auth(path: &str) -> AuthConfig {
         AuthConfig { method: AuthMethod::Key, key_path: Some(path.into()), has_secret: false }
+    }
+
+    #[test]
+    fn sftp_needs_a_parallel_transfer_and_octal_upload_permissions() {
+        let mut host = Host::new("web", "h.example");
+        host.sftp.parallel = 0;
+        assert!(validate_host(&host).is_err());
+        host.sftp.parallel = 4;
+        for bad in ["0844", "rw-r--r--", "12", "07777"] {
+            host.sftp.upload_perms = Some(bad.into());
+            assert!(validate_host(&host).is_err(), "{bad:?}");
+        }
+        for good in ["644", "0644", "0750"] {
+            host.sftp.upload_perms = Some(good.into());
+            assert!(validate_host(&host).is_ok(), "{good:?}");
+        }
     }
 
     #[test]

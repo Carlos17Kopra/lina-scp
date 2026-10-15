@@ -262,6 +262,8 @@ export const t = {
       unsafeValue: (field: string) => `${field} darf kein ' oder \\ enthalten und nicht mit # beginnen`,
       port: "Port muss zwischen 1 und 65535 liegen",
       nonNegative: "Ganze Zahl ≥ 0 eingeben",
+      positive: "Ganze Zahl ≥ 1 eingeben",
+      uploadPerms: "Oktal angeben, z. B. 0644",
       env: (line: number) => `Zeile ${line}: Format KEY=VALUE`,
       forward: "Jede Regel braucht Bind-Adresse und Ziel",
       keyPath: "Pfad zum privaten Schlüssel angeben",
