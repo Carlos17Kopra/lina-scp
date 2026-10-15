@@ -508,6 +508,7 @@ export const t = {
       notFound: "Nicht gefunden",
       alreadyExists: "Existiert bereits",
       notEmpty: "Ordner ist nicht leer",
+      crossDevice: "Liegt auf einem anderen Laufwerk ohne Papierkorb – mit Umschalt+Entf endgültig löschen",
       other: "Dateifehler",
     },
     failed: "Aktion fehlgeschlagen",

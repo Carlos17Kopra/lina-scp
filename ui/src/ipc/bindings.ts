@@ -115,7 +115,9 @@ export type ExportReport = {
 export type ForwardKind = "local" | "remote" | "dynamic";
 
 /**  Classification of file-system failures (local or SFTP), used for UI texts. */
-export type FsKind = "permissionDenied" | "notFound" | "alreadyExists" | "notEmpty" | "other";
+export type FsKind = "permissionDenied" | "notFound" | "alreadyExists" | "notEmpty" | 
+/**  Source and target are on different file systems (e.g. trashing from a USB stick). */
+"crossDevice" | "other";
 
 export type Group = {
 	id: string,

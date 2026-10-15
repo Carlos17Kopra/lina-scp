@@ -20,6 +20,7 @@ pub(crate) fn io_error(error: io::Error, path: &str) -> CoreError {
         io::ErrorKind::NotFound => FsKind::NotFound,
         io::ErrorKind::AlreadyExists => FsKind::AlreadyExists,
         io::ErrorKind::DirectoryNotEmpty => FsKind::NotEmpty,
+        io::ErrorKind::CrossesDevices => FsKind::CrossDevice,
         _ => FsKind::Other,
     };
     CoreError::fs(kind, path, error.to_string())
@@ -110,13 +111,18 @@ pub fn rename(dir: &str, from: &str, to: &str) -> Result<()> {
     validate_file_name(from)?;
     validate_file_name(to)?;
     let (old, new) = (join(dir, from), join(dir, to));
-    let c = |p: &str| CString::new(p).map_err(|_| CoreError::config("Pfad enthält NUL"));
-    let (c_old, c_new) = (c(&old)?, c(&new)?);
+    rename_noreplace(Path::new(&old), Path::new(&new)).map_err(|e| io_error(e, &new))
+}
+
+/// `rename` that fails with `AlreadyExists` instead of replacing `new` (`RENAME_NOREPLACE`).
+fn rename_noreplace(old: &Path, new: &Path) -> io::Result<()> {
+    let c = |p: &Path| CString::new(p.as_os_str().as_bytes()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput));
+    let (c_old, c_new) = (c(old)?, c(new)?);
     // SAFETY: both pointers are valid NUL-terminated strings for the duration of the call.
     let rc = unsafe {
         libc::renameat2(libc::AT_FDCWD, c_old.as_ptr(), libc::AT_FDCWD, c_new.as_ptr(), libc::RENAME_NOREPLACE)
     };
-    if rc == 0 { Ok(()) } else { Err(io_error(io::Error::last_os_error(), &new)) }
+    if rc == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
 }
 
 /// Permanent delete; directories recursively. `remove_dir_all` never follows symlinks, and a link
@@ -196,16 +202,17 @@ pub fn trash(trash_root: &Path, dir: &str, names: &[String]) -> Result<()> {
                 percent_encode(Path::new(&path).as_os_str().as_bytes()),
                 deletion_date()
             );
-            let moved = file.write_all(body.as_bytes()).and_then(|()| fs::rename(&path, files.join(&candidate)));
+            // NOREPLACE: an orphan in `files/` without its `.trashinfo` is never overwritten.
+            let moved = file
+                .write_all(body.as_bytes())
+                .and_then(|()| rename_noreplace(Path::new(&path), &files.join(&candidate)));
             if let Err(e) = moved {
                 let _ = fs::remove_file(&info_path);
-                if e.raw_os_error() == Some(libc::EXDEV) {
-                    return Err(CoreError::fs(
-                        FsKind::Other,
-                        &path,
-                        "liegt auf einem anderen Laufwerk ohne Papierkorb – mit Umschalt+Entf endgültig löschen",
-                    ));
+                if e.kind() == io::ErrorKind::AlreadyExists {
+                    n += 1;
+                    continue;
                 }
+                // EXDEV -> FsKind::CrossDevice: the UI tells the user to delete permanently instead.
                 return Err(io_error(e, &path));
             }
             break;
@@ -332,6 +339,26 @@ mod tests {
         assert!(info.starts_with("[Trash Info]\nPath="), "{info}");
         assert!(info.contains("/a%20b.txt\n"), "{info}");
         assert!(info.contains("\nDeletionDate=20"), "{info}");
+    }
+
+    #[test]
+    fn trash_never_replaces_an_orphan_in_files() {
+        let (_t, d) = tmp();
+        let (_tr, trash_root) = tmp();
+        let trash_root = std::path::Path::new(&trash_root).join("Trash");
+        std::fs::create_dir_all(trash_root.join("files")).unwrap();
+        std::fs::write(trash_root.join("files/a"), b"orphan").unwrap();
+        std::fs::write(format!("{d}/a"), b"new").unwrap();
+        trash(&trash_root, &d, &["a".into()]).unwrap();
+        assert_eq!(std::fs::read(trash_root.join("files/a")).unwrap(), b"orphan");
+        assert_eq!(std::fs::read(trash_root.join("files/a.1")).unwrap(), b"new");
+        assert!(trash_root.join("info/a.1.trashinfo").exists() && !trash_root.join("info/a.trashinfo").exists());
+    }
+
+    #[test]
+    fn cross_device_errors_have_their_own_kind() {
+        let error = io_error(io::Error::from_raw_os_error(libc::EXDEV), "/media/usb/x");
+        assert!(matches!(error, CoreError::Fs { kind: FsKind::CrossDevice, .. }), "{error:?}");
     }
 
     #[test]

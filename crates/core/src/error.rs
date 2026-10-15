@@ -18,6 +18,8 @@ pub enum FsKind {
     NotFound,
     AlreadyExists,
     NotEmpty,
+    /// Source and target are on different file systems (e.g. trashing from a USB stick).
+    CrossDevice,
     Other,
 }
 

@@ -126,6 +126,14 @@ describe("FilePane", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Keine Berechtigung");
   });
 
+  it("tells the user to delete permanently when the trash is on another drive", async () => {
+    render(<FilePane tabId="t1" side="local" onCommand={onCommand} />);
+    await vi.waitFor(() => expect(useSftpStore.getState().tabs[0]!.panes.local.path).toBe("/l"));
+    vi.mocked(api.localTrash).mockRejectedValueOnce({ type: "fs", kind: "crossDevice", path: "/l/x", message: "EXDEV" });
+    await useSftpStore.getState().remove("t1", "local", ["x"], "trash");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Umschalt+Entf");
+  });
+
   it("right-click selects the row and opens a context menu", async () => {
     render(<FilePane tabId="t1" side="remote" onCommand={onCommand} />);
     await userEvent.pointer({ keys: "[MouseRight]", target: screen.getByText("b.txt") });
