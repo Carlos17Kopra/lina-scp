@@ -6,6 +6,7 @@ import { useHostsStore } from "./hosts";
 import { useNoticeStore } from "./notices";
 import { pendingSessionEventCount, resetSessionEvents } from "./sessionEvents";
 import { useSessionsStore } from "./sessions";
+import { useSftpStore } from "./sftp";
 import { getStream } from "./streams";
 import { useUiStore } from "./ui";
 
@@ -34,6 +35,7 @@ beforeEach(() => {
   useConnectStore.setState(useConnectStore.getInitialState(), true);
   useUiStore.setState(useUiStore.getInitialState(), true);
   useSessionsStore.setState(useSessionsStore.getInitialState(), true);
+  useSftpStore.setState(useSftpStore.getInitialState(), true);
   useNoticeStore.setState(useNoticeStore.getInitialState(), true);
   useHostsStore.setState({ hosts: [web, viaProfile], profiles: [withUsage(deploy, 1)], loaded: true });
   vi.mocked(api.newId).mockImplementation(() => `id-${++next}`);
@@ -237,6 +239,24 @@ describe("connect store", () => {
     void useConnectStore.getState().retry();
     eventsOf(0)({ kind: "steps", steps: ["jumpHost"] });
     expect(flow()?.steps).toEqual([]);
+  });
+
+  it("opens an SFTP tab after an sftp connect", async () => {
+    vi.mocked(api.connectSftp).mockResolvedValue({ sessionId: "s1", info: makeSessionInfo(), version: 3, listing: { path: "/home/u", entries: [] } });
+    vi.mocked(api.localHome).mockResolvedValue("/home/me");
+    vi.mocked(api.localList).mockResolvedValue({ path: "/home/me", entries: [] });
+    await useConnectStore.getState().start(web.id, "sftp");
+    expect(useConnectStore.getState().active).toBeNull();
+    expect(useUiStore.getState().view).toBe("sftp");
+    expect(useSftpStore.getState().tabs).toHaveLength(1);
+    expect(api.connectSsh).not.toHaveBeenCalled();
+  });
+
+  it("cancelling an sftp reconnect stays in the sftp view", async () => {
+    vi.mocked(api.connectSftp).mockReturnValue(new Promise(() => {}));
+    void useConnectStore.getState().start(web.id, "sftp", { sftpTabId: "t1" });
+    await useConnectStore.getState().cancel();
+    expect(useUiStore.getState().view).toBe("sftp");
   });
 
   it("reports unknown hosts", async () => {
