@@ -1,4 +1,5 @@
 import type { Host, LoginProfile, ProfileWithUsage, SessionInfo, Snippet } from "../ipc/api";
+import type { Tab, TabGroup } from "../stores/sessions";
 
 /** Complete host with deterministic ids (tests must not rely on `newId()`, which is automocked). */
 export function makeHost(overrides: Partial<Host> = {}): Host {
@@ -77,4 +78,9 @@ export function makeSnippet(overrides: Partial<Snippet> = {}): Snippet {
     updatedAt: 1,
     ...overrides,
   };
+}
+
+/** One single-pane group per tab, as `addTab` creates them. */
+export function singleGroups(tabs: Tab[]): TabGroup[] {
+  return tabs.map((tab) => ({ id: tab.id, layout: { type: "pane", paneId: tab.id }, focusedPaneId: tab.id, broadcast: false }));
 }

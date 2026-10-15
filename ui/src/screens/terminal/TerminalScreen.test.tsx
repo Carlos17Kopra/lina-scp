@@ -7,6 +7,7 @@ import { useConnectStore } from "../../stores/connect";
 import { type Tab, useSessionsStore } from "../../stores/sessions";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../../stores/settings";
 import { useUiStore } from "../../stores/ui";
+import { singleGroups } from "../../test/fixtures";
 import { TerminalScreen } from "./TerminalScreen";
 
 vi.mock("../../ipc/api");
@@ -18,12 +19,13 @@ vi.mock("./TerminalView", () => ({
 
 const openLocal = vi.fn(async () => undefined);
 const closeSession = vi.fn(async () => undefined);
+const closeGroup = vi.fn(async () => undefined);
 const start = vi.fn(async () => undefined);
 const web: Tab = { id: "a", title: "web-prod-01", kind: "ssh", hostId: "h-web", sessionId: "s-a", status: "connected" };
 const local: Tab = { id: "b", title: "Lokales Terminal", kind: "local", sessionId: "s-b", status: "connected" };
 
 function seed(tabs: Tab[], activeId: string | null) {
-  useSessionsStore.setState({ tabs, activeId, openLocal, closeSession });
+  useSessionsStore.setState({ tabs, groups: singleGroups(tabs), activeId, openLocal, closeSession, closeGroup });
 }
 
 beforeEach(() => {
