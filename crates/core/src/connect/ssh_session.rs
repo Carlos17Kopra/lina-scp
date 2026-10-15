@@ -78,6 +78,12 @@ async fn forward_output(
     }
 }
 
+/// Whether a failed write means the connection is gone. A write can also fail because the server
+/// just closed the channel (`exit` plus a keystroke); its regular `Exit` follows from the reader.
+fn write_failure_is_lost(closing: bool, connection_closed: bool) -> bool {
+    !closing && connection_closed
+}
+
 /// How a channel ended: the server's `Close` or our own `close` is a regular end; anything else
 /// (connection reset, keepalive timeout, server gone) is a lost connection.
 fn end_event(saw_close: bool, closing: bool, code: Option<u32>) -> SessionEvent {
@@ -93,7 +99,7 @@ impl Session for SshSession {
     async fn write(&self, data: &[u8]) -> Result<()> {
         let result = self.writer.data(data).await.map_err(map_russh_error);
         if let Err(error @ CoreError::Network { .. }) = &result
-            && !self.closing.load(Ordering::SeqCst)
+            && write_failure_is_lost(self.closing.load(Ordering::SeqCst), self.handle.is_closed())
             && !self.ended.swap(true, Ordering::SeqCst)
         {
             // Hosts without keepalive notice a dead link only when typing.
@@ -135,5 +141,13 @@ mod tests {
         // We closed it ourselves: never a reconnect, even if the server's Close never arrived.
         assert_eq!(end_event(false, true, None), SessionEvent::Exit { code: None });
         assert!(matches!(end_event(false, false, None), SessionEvent::Lost(CoreError::Network { .. })));
+    }
+
+    #[test]
+    fn a_write_error_is_a_lost_connection_only_when_the_connection_is_gone() {
+        assert!(write_failure_is_lost(false, true));
+        // The server closed the channel (`exit` plus a keystroke): its regular end follows.
+        assert!(!write_failure_is_lost(false, false));
+        assert!(!write_failure_is_lost(true, true));
     }
 }

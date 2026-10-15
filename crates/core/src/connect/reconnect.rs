@@ -51,14 +51,18 @@ struct State {
     phase: Phase,
     /// Current connection; events of older ones are ignored.
     generation: u64,
-    cols: u16,
-    rows: u16,
     /// Cancels the running round (wait and attempt).
     round: CancellationToken,
 }
 
 struct Shared {
+    /// Taken by the event paths, which call the app sink under it to keep events in order. That
+    /// sink may block (output flow control), so input and resizes never take this lock.
     state: Mutex<State>,
+    /// The connected session (`Phase::Connected`); set and cleared under `state`, read alone by input.
+    live: Mutex<Option<Arc<dyn Session>>>,
+    /// Last terminal size; read alone by `resize`, and under `state` by attempts.
+    size: Mutex<(u16, u16)>,
     sink: OutputSink,
     connector: Connector,
     enabled: Enabled,
@@ -82,11 +86,19 @@ impl ReconnectingSession {
         let state = State {
             phase: Phase::Attempting { pending: Vec::new(), lost: None },
             generation: 1,
-            cols,
-            rows,
             round: CancellationToken::new(),
         };
-        Self { shared: Arc::new(Shared { state: Mutex::new(state), sink, connector, enabled, now: Notify::new() }) }
+        Self {
+            shared: Arc::new(Shared {
+                state: Mutex::new(state),
+                live: Mutex::new(None),
+                size: Mutex::new((cols, rows)),
+                sink,
+                connector,
+                enabled,
+                now: Notify::new(),
+            }),
+        }
     }
 
     /// Sink for the first connection.
@@ -96,11 +108,8 @@ impl ReconnectingSession {
 
     /// Hands over the first connection's session.
     pub fn attach(&self, session: Arc<dyn Session>) {
-        let (cols, rows) = {
-            let state = self.shared.lock();
-            (state.cols, state.rows)
-        };
-        if let Attached::LostMeanwhile(reason) = self.shared.attached(1, session, (cols, rows), None) {
+        let size = *self.shared.size();
+        if let Attached::LostMeanwhile(reason) = self.shared.attached(1, session, size, None) {
             let mut state = self.shared.lock();
             if state.generation == 1 {
                 self.shared.lose(&mut state, reason);
@@ -129,8 +138,16 @@ impl Shared {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Events of the inner connection `generation`. The sink is cheap and non-blocking, so it is
-    /// called under the lock: that keeps the order of events strict.
+    fn live(&self) -> MutexGuard<'_, Option<Arc<dyn Session>>> {
+        self.live.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn size(&self) -> MutexGuard<'_, (u16, u16)> {
+        self.size.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Events of the inner connection `generation`. The sink is called under the state lock: that
+    /// keeps the order of events strict.
     fn on_inner(self: &Arc<Self>, generation: u64, event: SessionEvent) {
         let mut state = self.lock();
         if state.generation != generation {
@@ -155,7 +172,13 @@ impl Shared {
             }
             end @ (SessionEvent::Exit { .. } | SessionEvent::Error(_)) => {
                 if matches!(state.phase, Phase::Attempting { .. } | Phase::Connected(_)) {
-                    state.phase = Phase::Ended;
+                    // A shell that ends while it is set up (forced command, nologin) keeps its message.
+                    if let Phase::Attempting { pending, .. } = std::mem::replace(&mut state.phase, Phase::Ended)
+                        && !pending.is_empty()
+                    {
+                        (self.sink)(SessionEvent::Output(pending));
+                    }
+                    *self.live() = None;
                     state.round.cancel();
                     (self.sink)(end);
                 }
@@ -169,6 +192,7 @@ impl Shared {
     fn lose(self: &Arc<Self>, state: &mut State, reason: CoreError) {
         state.generation += 1;
         if let Phase::Connected(old) = std::mem::replace(&mut state.phase, Phase::Waiting) {
+            *self.live() = None;
             close_in_background(old);
         }
         if (self.enabled)() {
@@ -210,14 +234,16 @@ impl Shared {
             close_in_background(session);
             return Attached::LostMeanwhile(reason);
         }
+        *self.live() = Some(session.clone());
         if let Some(info) = info {
             (self.sink)(SessionEvent::Reconnected { info });
         }
         if !pending.is_empty() {
             (self.sink)(SessionEvent::Output(pending));
         }
-        let size = (state.cols, state.rows);
         drop(state);
+        // A resize that ran before `live` was set changed only `size`: apply it here.
+        let size = *self.size();
         if size != used {
             tokio::spawn(async move {
                 let _ = session.resize(size.0, size.1).await;
@@ -256,7 +282,19 @@ async fn run_round(shared: Arc<Shared>, round: CancellationToken, mut reason: Co
         }
         tokio::select! {
             () = tokio::time::sleep(delay) => {}
-            () = shared.now.notified() => {}
+            () = shared.now.notified() => {
+                // "Jetzt versuchen": the UI stops its countdown.
+                let _state = shared.lock();
+                if round.is_cancelled() {
+                    return;
+                }
+                (shared.sink)(SessionEvent::Reconnecting {
+                    attempt,
+                    max_attempts: MAX_ATTEMPTS,
+                    retry_in: Duration::ZERO,
+                    reason: reason.clone(),
+                });
+            }
             () = round.cancelled() => return,
         }
         let (generation, cols, rows) = {
@@ -266,7 +304,8 @@ async fn run_round(shared: Arc<Shared>, round: CancellationToken, mut reason: Co
             }
             state.generation += 1;
             state.phase = Phase::Attempting { pending: Vec::new(), lost: None };
-            (state.generation, state.cols, state.rows)
+            let (cols, rows) = *shared.size();
+            (state.generation, cols, rows)
         };
         let sink = inner_sink(Arc::downgrade(&shared), generation);
         let result = tokio::select! {
@@ -297,10 +336,7 @@ async fn run_round(shared: Arc<Shared>, round: CancellationToken, mut reason: Co
 impl Session for ReconnectingSession {
     /// Input while the connection is being restored is dropped.
     async fn write(&self, data: &[u8]) -> Result<()> {
-        let session = match &self.shared.lock().phase {
-            Phase::Connected(session) => Some(session.clone()),
-            _ => None,
-        };
+        let session = self.shared.live().clone();
         match session {
             Some(session) => session.write(data).await,
             None => Ok(()),
@@ -308,15 +344,8 @@ impl Session for ReconnectingSession {
     }
 
     async fn resize(&self, cols: u16, rows: u16) -> Result<()> {
-        let session = {
-            let mut state = self.shared.lock();
-            state.cols = cols;
-            state.rows = rows;
-            match &state.phase {
-                Phase::Connected(session) => Some(session.clone()),
-                _ => None,
-            }
-        };
+        *self.shared.size() = (cols, rows);
+        let session = self.shared.live().clone();
         match session {
             Some(session) => session.resize(cols, rows).await,
             None => Ok(()),
@@ -330,6 +359,7 @@ impl Session for ReconnectingSession {
             state.round.cancel();
             state.generation += 1;
             let previous = std::mem::replace(&mut state.phase, Phase::Ended);
+            *self.shared.live() = None;
             if !matches!(previous, Phase::Ended) {
                 (self.shared.sink)(SessionEvent::Exit { code: None });
             }
@@ -684,5 +714,66 @@ mod tests {
         h.emit(1, SessionEvent::Lost(net()));
         advance(0).await;
         assert_eq!(h.events().last(), Some(&reconnecting(1, 1)));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn input_is_not_blocked_while_the_output_sink_waits() {
+        // The app sink blocks while output flow control is paused (`OutputPump::push`).
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let wait = Mutex::new(wait);
+        let sink: OutputSink = Arc::new(move |event| {
+            if matches!(event, SessionEvent::Output(_)) {
+                let _ = wait.lock().unwrap().recv();
+            }
+        });
+        let connector: Connector = Arc::new(|_, _, _, _| Box::pin(async { Err(CoreError::Cancelled) }));
+        let session = Arc::new(ReconnectingSession::new(sink, 80, 24, connector, Arc::new(|| true)));
+        let first = session.first_sink();
+        let inner = Arc::new(FakeSession::default());
+        session.attach(inner.clone());
+        let reader = std::thread::spawn(move || first(SessionEvent::Output(b"flood".to_vec())));
+        std::thread::sleep(Duration::from_millis(50));
+        let writer = {
+            let session = session.clone();
+            tokio::spawn(async move {
+                session.write(b"\x03").await.unwrap();
+                session.resize(100, 30).await.unwrap();
+            })
+        };
+        let done = tokio::time::timeout(Duration::from_secs(1), writer).await;
+        release.send(()).unwrap();
+        reader.join().unwrap();
+        assert!(done.is_ok(), "Ctrl+C must not wait for the output flow control");
+        assert_eq!(*inner.writes.lock().unwrap(), vec![b"\x03".to_vec()]);
+        assert_eq!(*inner.sizes.lock().unwrap(), vec![(100, 30)]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn output_of_a_shell_that_ends_during_its_setup_is_kept() {
+        let events: Arc<Mutex<Vec<SessionEvent>>> = Arc::default();
+        let sink: OutputSink = {
+            let events = events.clone();
+            Arc::new(move |event| events.lock().unwrap().push(event))
+        };
+        let connector: Connector = Arc::new(|_, _, _, _| Box::pin(async { Err(CoreError::Cancelled) }));
+        let session = ReconnectingSession::new(sink, 80, 24, connector, Arc::new(|| true));
+        let first = session.first_sink();
+        first(SessionEvent::Output(b"no shell access".to_vec()));
+        first(SessionEvent::Exit { code: Some(1) });
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec![SessionEvent::Output(b"no shell access".to_vec()), SessionEvent::Exit { code: Some(1) }]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reconnect_now_reports_the_attempt_as_starting() {
+        let h = harness(vec![]);
+        h.emit(0, SessionEvent::Lost(net()));
+        advance(0).await;
+        h.session.reconnect_now();
+        advance(0).await;
+        // The bar must not keep counting down while the attempt already runs.
+        assert_eq!(h.events()[1], reconnecting(1, 0));
     }
 }
