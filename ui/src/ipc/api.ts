@@ -14,6 +14,7 @@ import type {
   Host,
   ImportPreview,
   ImportReport,
+  Listing,
   LoginProfile,
   ProfileWithUsage,
   PromptAnswer,
@@ -22,6 +23,8 @@ import type {
   SecretOwner,
   SessionEventDto,
   Settings,
+  SftpConnected,
+  SftpEvent,
   Snippet,
 } from "./bindings";
 
@@ -32,9 +35,12 @@ export type {
   Conflict,
   ConnectEvent,
   CoreError,
+  Entry,
+  EntryKind,
   EnvVar,
   ExportReport,
   ForwardKind,
+  FsKind,
   Group,
   Host,
   HostAuth,
@@ -46,6 +52,8 @@ export type {
   ImportReport,
   ItemKind,
   KbdPrompt,
+  LinkTarget,
+  Listing,
   LoginProfile,
   NetworkKind,
   PortForward,
@@ -58,6 +66,8 @@ export type {
   SessionEventDto,
   SessionInfo,
   Settings,
+  SftpConnected,
+  SftpEvent,
   SftpSettings,
   Snippet,
   SshMode,
@@ -168,6 +178,49 @@ export function connectCancel(connectId: Id): Promise<void> {
 /** "Verbindung testen": runs until Auth for an (unsaved) host; cancel with `connectCancel(connectId)`. */
 export function connectTest(connectId: Id, host: Host, events: Channel<ConnectEvent>): Promise<void> {
   return unwrapVoid(commands.connectTest(connectId, host, events));
+}
+
+// SFTP commander
+export function connectSftp(
+  connectId: Id,
+  hostId: Id,
+  events: Channel<ConnectEvent>,
+  sftpEvents: Channel<SftpEvent>,
+): Promise<SftpConnected> {
+  return unwrap(commands.connectSftp(connectId, hostId, events, sftpEvents));
+}
+export function sftpList(sessionId: SessionId, path: string): Promise<Listing> {
+  return unwrap(commands.sftpList(sessionId, path));
+}
+export function sftpMkdir(sessionId: SessionId, dir: string, name: string): Promise<void> {
+  return unwrapVoid(commands.sftpMkdir(sessionId, dir, name));
+}
+export function sftpRename(sessionId: SessionId, dir: string, from: string, to: string): Promise<void> {
+  return unwrapVoid(commands.sftpRename(sessionId, dir, from, to));
+}
+export function sftpDelete(sessionId: SessionId, dir: string, names: string[]): Promise<void> {
+  return unwrapVoid(commands.sftpDelete(sessionId, dir, names));
+}
+export function sftpClose(sessionId: SessionId): Promise<void> {
+  return unwrapVoid(commands.sftpClose(sessionId));
+}
+export function localList(path: string): Promise<Listing> {
+  return unwrap(commands.localList(path));
+}
+export function localHome(hostId: Id | null): Promise<string> {
+  return unwrap(commands.localHome(hostId));
+}
+export function localMkdir(dir: string, name: string): Promise<void> {
+  return unwrapVoid(commands.localMkdir(dir, name));
+}
+export function localRename(dir: string, from: string, to: string): Promise<void> {
+  return unwrapVoid(commands.localRename(dir, from, to));
+}
+export function localDelete(dir: string, names: string[]): Promise<void> {
+  return unwrapVoid(commands.localDelete(dir, names));
+}
+export function localTrash(dir: string, names: string[]): Promise<void> {
+  return unwrapVoid(commands.localTrash(dir, names));
 }
 
 // Sessions

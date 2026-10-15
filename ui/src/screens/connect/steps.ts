@@ -18,6 +18,10 @@ export function stepLabel(step: Step, jumpName = ""): string {
       return t.pipeline.steps.channel;
     case "shell":
       return t.pipeline.steps.shell;
+    case "subsystem":
+      return t.pipeline.steps.subsystem;
+    case "directory":
+      return t.pipeline.steps.directory;
   }
 }
 
