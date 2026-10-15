@@ -115,8 +115,9 @@ export function TerminalView({ tab, visible, focused = false }: { tab: Tab; visi
         term.focus();
       },
       // term.input feeds onData, so Enter is queued behind the pasted text (and outside the paste brackets).
+      // A trailing newline would send a second, empty Enter.
       run: (text) => {
-        term.paste(text);
+        term.paste(text.replace(/[\r\n]+$/, ""));
         term.input("\r");
         term.focus();
       },
