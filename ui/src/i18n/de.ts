@@ -498,7 +498,7 @@ export const t = {
       readFailed: "Die Datei konnte nicht gelesen werden",
       summary: (items: number, conflicts: number) =>
         `${items === 1 ? "1 Eintrag" : `${items} Einträge`}, davon ${conflicts} mit Konflikt`,
-      kinds: { host: "Host", profile: "Login-Profil", group: "Gruppe" },
+      kinds: { host: "Host", profile: "Login-Profil", group: "Gruppe", snippet: "Snippet" },
       conflicts: { sameId: "gleiche ID", sameName: "gleicher Name" },
       noConflict: "neu",
       resolve: (name: string) => `Konflikt lösen für ${name}`,

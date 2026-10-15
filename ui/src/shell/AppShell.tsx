@@ -7,6 +7,7 @@ import { SftpPlaceholder } from "../screens/sftp/SftpPlaceholder";
 import { TerminalScreen } from "../screens/terminal/TerminalScreen";
 import { useHostsStore } from "../stores/hosts";
 import { useSettingsStore } from "../stores/settings";
+import { useSnippetsStore } from "../stores/snippets";
 import { useUiStore } from "../stores/ui";
 import styles from "./AppShell.module.css";
 import { ModalLayer } from "./ModalLayer";
@@ -27,6 +28,7 @@ export function AppShell() {
   const settingsLoaded = useSettingsStore((state) => state.loaded);
   const loadSettings = useSettingsStore((state) => state.load);
   const loadHosts = useHostsStore((state) => state.load);
+  const loadSnippets = useSnippetsStore((state) => state.load);
   const toast = useToast();
 
   useGlobalShortcuts();
@@ -37,7 +39,8 @@ export function AppShell() {
       toast.show({ tone: "red", message: t.shell.loadFailed, details: errorDetails(error) });
     loadSettings().catch(report);
     loadHosts().catch(report);
-  }, [loadSettings, loadHosts, toast]);
+    loadSnippets().catch(report);
+  }, [loadSettings, loadHosts, loadSnippets, toast]);
 
   useEffect(() => {
     setTheme(theme);

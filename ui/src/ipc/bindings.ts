@@ -13,6 +13,9 @@ export const commands = {
 	profilesList: () => typedError<ProfileWithUsage[], CoreError>(__TAURI_INVOKE("profiles_list")),
 	profileSave: (profile: LoginProfile) => typedError<LoginProfile, CoreError>(__TAURI_INVOKE("profile_save", { profile })),
 	profileDelete: (id: string) => typedError<null, CoreError>(__TAURI_INVOKE("profile_delete", { id })),
+	snippetsList: () => typedError<Snippet[], CoreError>(__TAURI_INVOKE("snippets_list")),
+	snippetSave: (snippet: Snippet) => typedError<Snippet, CoreError>(__TAURI_INVOKE("snippet_save", { snippet })),
+	snippetDelete: (id: string) => typedError<null, CoreError>(__TAURI_INVOKE("snippet_delete", { id })),
 	secretSet: (owner: SecretOwner, kind: SecretKind, value: string) => typedError<null, CoreError>(__TAURI_INVOKE("secret_set", { owner, kind, value })),
 	secretDelete: (owner: SecretOwner, kind: SecretKind) => typedError<null, CoreError>(__TAURI_INVOKE("secret_delete", { owner, kind })),
 	settingsGet: () => typedError<Settings, CoreError>(__TAURI_INVOKE("settings_get")),
@@ -151,7 +154,7 @@ export type ImportReport = {
 	invalid: number,
 };
 
-export type ItemKind = "host" | "profile" | "group";
+export type ItemKind = "host" | "profile" | "group" | "snippet";
 
 export type KbdPrompt = {
 	text: string,
@@ -244,6 +247,16 @@ export type SftpSettings = {
 	uploadPerms: string | null,
 	bandwidthLimitKbps: number | null,
 	sftpServerCmd: string | null,
+};
+
+/**  A saved command, global (`host_id == None`) or bound to one stored host. */
+export type Snippet = {
+	id: string,
+	name: string,
+	command: string,
+	hostId: string | null,
+	createdAt: number,
+	updatedAt: number,
 };
 
 export type SshMode = "integrate" | "mirror";

@@ -3,7 +3,9 @@ import * as api from "../ipc/api";
 import { useConnectStore } from "./connect";
 import { useHostsStore } from "./hosts";
 import { useSessionsStore } from "./sessions";
+import { makeSnippet } from "../test/fixtures";
 import { DEFAULT_SETTINGS, useSettingsStore } from "./settings";
+import { useSnippetsStore } from "./snippets";
 import { useUiStore } from "./ui";
 
 vi.mock("../ipc/api");
@@ -82,6 +84,14 @@ describe("settings store", () => {
 });
 
 describe("hosts store", () => {
+  it("reloads the snippets after deleting a host (cascade)", async () => {
+    mockLists();
+    useSnippetsStore.setState({ snippets: [makeSnippet({ hostId: "h1" })], loaded: true });
+    vi.mocked(api.snippetsList).mockResolvedValue([]);
+    await useHostsStore.getState().deleteHost("h1");
+    expect(useSnippetsStore.getState().snippets).toEqual([]);
+  });
+
   it("loads hosts, groups and profiles", async () => {
     mockLists();
     vi.mocked(api.hostsList).mockResolvedValue([host("h1", "web-prod-01")]);

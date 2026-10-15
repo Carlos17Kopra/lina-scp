@@ -16,6 +16,7 @@ import {
   profilesList,
   sshConfigReload,
 } from "../ipc/api";
+import { useSnippetsStore } from "./snippets";
 
 export type ProtocolFilter = "all" | "ssh" | "sftp";
 
@@ -67,7 +68,8 @@ export const useHostsStore = create<HostsState>()((set, get) => ({
   deleteHost: async (id) => {
     await hostDelete(id);
     set((state) => ({ selectedId: state.selectedId === id ? null : state.selectedId }));
-    await get().load();
+    // The host's snippets are gone too (ON DELETE CASCADE).
+    await Promise.all([get().load(), useSnippetsStore.getState().load()]);
   },
   saveProfile: async (profile) => {
     const saved = await profileSave(profile);
