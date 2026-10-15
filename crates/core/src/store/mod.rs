@@ -124,24 +124,7 @@ impl Store {
 
     /// Upserts the profile. `updated_at` is set to now.
     pub fn save_profile(&self, p: &LoginProfile) -> Result<()> {
-        let conn = self.conn();
-        conn.execute(
-            "INSERT INTO login_profiles (id, name, user, method, key_path, has_secret, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
-             ON CONFLICT(id) DO UPDATE SET name = excluded.name, user = excluded.user, method = excluded.method, \
-             key_path = excluded.key_path, has_secret = excluded.has_secret, updated_at = excluded.updated_at",
-            params![
-                p.id.to_string(),
-                p.name,
-                p.user,
-                auth_method_to_db(p.auth.method),
-                p.auth.key_path,
-                p.auth.has_secret,
-                p.created_at,
-                now_unix(),
-            ],
-        )?;
-        Ok(())
+        upsert_profile(&self.conn(), p)
     }
 
     /// Fails with `Store{"profile in use"}` while any host references the profile.
@@ -175,13 +158,7 @@ impl Store {
     }
 
     pub fn save_group(&self, g: &Group) -> Result<()> {
-        let conn = self.conn();
-        conn.execute(
-            "INSERT INTO groups (id, name, sort_order) VALUES (?1, ?2, ?3) \
-             ON CONFLICT(id) DO UPDATE SET name = excluded.name, sort_order = excluded.sort_order",
-            params![g.id.to_string(), g.name, g.sort_order],
-        )?;
-        Ok(())
+        upsert_group(&self.conn(), g)
     }
 
     /// Deletes the group; its hosts get `group_id = NULL`.
@@ -202,13 +179,73 @@ impl Store {
     }
 
     pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
-        let conn = self.conn();
-        conn.execute(
-            "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![key, value],
-        )?;
+        upsert_setting(&self.conn(), key, value)
+    }
+
+    // ---- import ----
+
+    /// Upserts everything an import writes in one transaction: all of it or nothing.
+    pub fn save_import(
+        &self,
+        groups: &[Group],
+        profiles: &[LoginProfile],
+        hosts: &[Host],
+        settings: &[(&str, &str)],
+    ) -> Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        for g in groups {
+            upsert_group(&tx, g)?;
+        }
+        for p in profiles {
+            upsert_profile(&tx, p)?;
+        }
+        for h in hosts {
+            upsert_host(&tx, h)?;
+        }
+        for (key, value) in settings {
+            upsert_setting(&tx, key, value)?;
+        }
+        tx.commit()?;
         Ok(())
     }
+}
+
+fn upsert_group(conn: &Connection, g: &Group) -> Result<()> {
+    conn.execute(
+        "INSERT INTO groups (id, name, sort_order) VALUES (?1, ?2, ?3) \
+         ON CONFLICT(id) DO UPDATE SET name = excluded.name, sort_order = excluded.sort_order",
+        params![g.id.to_string(), g.name, g.sort_order],
+    )?;
+    Ok(())
+}
+
+fn upsert_profile(conn: &Connection, p: &LoginProfile) -> Result<()> {
+    conn.execute(
+        "INSERT INTO login_profiles (id, name, user, method, key_path, has_secret, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+         ON CONFLICT(id) DO UPDATE SET name = excluded.name, user = excluded.user, method = excluded.method, \
+         key_path = excluded.key_path, has_secret = excluded.has_secret, updated_at = excluded.updated_at",
+        params![
+            p.id.to_string(),
+            p.name,
+            p.user,
+            auth_method_to_db(p.auth.method),
+            p.auth.key_path,
+            p.auth.has_secret,
+            p.created_at,
+            now_unix(),
+        ],
+    )?;
+    Ok(())
+}
+
+fn upsert_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
 }
 
 fn upsert_host(tx: &Transaction<'_>, host: &Host) -> Result<()> {

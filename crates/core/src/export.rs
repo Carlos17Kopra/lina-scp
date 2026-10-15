@@ -212,16 +212,11 @@ pub fn import_apply(
         (Some(block), Some(pass)) => Some(decrypt_payload(block, pass)?),
         _ => None,
     };
-
-    let mut report = ImportReport { imported: 0, skipped: 0, secrets_restored: 0, invalid: 0 };
-    match &payload {
-        Some(payload) => {
-            let paths = write_key_files(&payload.key_files, key_dir)?;
-            rewrite_key_paths(&mut doc, &paths);
-        }
-        None => clear_has_secret(&mut doc),
+    if payload.is_none() {
+        clear_has_secret(&mut doc);
     }
 
+    let mut report = ImportReport { imported: 0, skipped: 0, secrets_restored: 0, invalid: 0 };
     let existing = Existing::load(store)?;
     let mut plan = Plan::default();
     for g in &doc.groups {
@@ -233,41 +228,49 @@ pub fn import_apply(
     for h in &doc.hosts {
         plan.decide(&existing, resolutions, ItemKind::Host, h.id, &h.name);
     }
-    // Invalid entries are never written (nor their secrets restored); a host that uses a
-    // rejected profile or jump host from this file is rejected as well.
+    // Invalid entries are never written (nor their secrets or key files restored); a host that
+    // uses a rejected profile or jump host from this file is rejected as well, along whole chains.
     for p in doc.profiles.iter().filter(|p| validate_profile(p).is_err()) {
         plan.reject(p.id);
     }
     for h in doc.hosts.iter().filter(|h| validate_host(h).is_err()) {
         plan.reject(h.id);
     }
-    for h in &doc.hosts {
-        let uses_rejected_profile = matches!(h.auth, HostAuth::Profile { profile_id } if plan.is_rejected(profile_id));
-        let uses_rejected_jump = h.jump_host_id.is_some_and(|j| plan.is_rejected(j));
-        if uses_rejected_profile || uses_rejected_jump {
-            plan.reject(h.id);
+    loop {
+        let newly: Vec<Id> = doc
+            .hosts
+            .iter()
+            .filter(|h| !plan.is_rejected(h.id))
+            .filter(|h| {
+                matches!(h.auth, HostAuth::Profile { profile_id } if plan.is_rejected(profile_id))
+                    || h.jump_host_id.is_some_and(|j| plan.is_rejected(j))
+            })
+            .map(|h| h.id)
+            .collect();
+        if newly.is_empty() {
+            break;
+        }
+        for id in newly {
+            plan.reject(id);
         }
     }
 
+    let mut groups = Vec::new();
     for g in &doc.groups {
         match plan.action(g.id) {
-            Action::Write { id, name } => {
-                store.save_group(&Group { id, name, sort_order: g.sort_order })?;
-                report.imported += 1;
-            }
+            Action::Write { id, name } => groups.push(Group { id, name, sort_order: g.sort_order }),
             Action::Skip => report.skipped += 1,
         }
     }
+    let mut profiles = Vec::new();
     for p in &doc.profiles {
         match plan.action(p.id) {
-            Action::Write { id, name } => {
-                store.save_profile(&LoginProfile { id, name, ..p.clone() })?;
-                report.imported += 1;
-            }
+            Action::Write { id, name } => profiles.push(LoginProfile { id, name, ..p.clone() }),
             Action::Skip if plan.is_rejected(p.id) => report.invalid += 1,
             Action::Skip => report.skipped += 1,
         }
     }
+    let mut hosts = Vec::new();
     for h in &doc.hosts {
         match plan.action(h.id) {
             Action::Write { id, name } => {
@@ -284,13 +287,44 @@ pub fn import_apply(
                 if let HostAuth::Profile { profile_id } = &mut host.auth {
                     *profile_id = plan.map_id(*profile_id);
                 }
-                store.save_host(&host)?;
-                report.imported += 1;
+                hosts.push(host);
             }
             Action::Skip if plan.is_rejected(h.id) => report.invalid += 1,
             Action::Skip => report.skipped += 1,
         }
     }
+    let settings: Vec<(&str, &str)> = doc
+        .settings
+        .iter()
+        .filter(|(key, _)| EXPORTED_SETTINGS.contains(&key.as_str()))
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect();
+
+    // Key files are written first so the stored paths point at them; if anything fails, the
+    // files created here are removed again and the store is left untouched.
+    let mut created_keys = Vec::new();
+    let written = (|| -> Result<()> {
+        if let Some(payload) = &payload {
+            let used: HashSet<&str> = profiles
+                .iter()
+                .map(|p| &p.auth)
+                .chain(hosts.iter().filter_map(custom_auth))
+                .filter_map(key_path)
+                .collect();
+            let files: BTreeMap<&String, &String> =
+                payload.key_files.iter().filter(|(path, _)| used.contains(path.as_str())).collect();
+            let paths = write_key_files(&files, key_dir, &mut created_keys)?;
+            rewrite_key_paths(&mut profiles, &mut hosts, &paths);
+        }
+        store.save_import(&groups, &profiles, &hosts, &settings)
+    })();
+    if let Err(err) = written {
+        for path in &created_keys {
+            let _ = fs::remove_file(path);
+        }
+        return Err(err);
+    }
+    report.imported = (groups.len() + profiles.len() + hosts.len()) as u32;
 
     if let Some(payload) = &payload {
         for (account, value) in &payload.secrets {
@@ -302,12 +336,6 @@ pub fn import_apply(
             };
             secrets.set(owner, kind, &SecretString::from(value.clone()))?;
             report.secrets_restored += 1;
-        }
-    }
-
-    for (key, value) in &doc.settings {
-        if EXPORTED_SETTINGS.contains(&key.as_str()) {
-            store.set_setting(key, value)?;
         }
     }
     Ok(report)
@@ -471,8 +499,20 @@ fn key_path(auth: &AuthConfig) -> Option<&str> {
     }
 }
 
+fn custom_auth(host: &Host) -> Option<&AuthConfig> {
+    match &host.auth {
+        HostAuth::Custom { auth } => Some(auth),
+        HostAuth::Profile { .. } => None,
+    }
+}
+
 /// Writes key files into `key_dir` (0700) as 0600 files and returns original -> new path.
-fn write_key_files(files: &BTreeMap<String, String>, key_dir: &Path) -> Result<HashMap<String, String>> {
+/// Files it creates (not reused identical ones) are pushed to `created` as they are written.
+fn write_key_files(
+    files: &BTreeMap<&String, &String>,
+    key_dir: &Path,
+    created: &mut Vec<PathBuf>,
+) -> Result<HashMap<String, String>> {
     let mut mapping = HashMap::new();
     if files.is_empty() {
         return Ok(mapping);
@@ -484,40 +524,44 @@ fn write_key_files(files: &BTreeMap<String, String>, key_dir: &Path) -> Result<H
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "key".to_string());
-        let target = unique_key_path(key_dir, &base, &content)?;
-        fsutil::write_private(&target, &content)?;
-        mapping.insert(original.clone(), target.to_string_lossy().into_owned());
+        let (target, exists) = unique_key_path(key_dir, &base, &content)?;
+        if !exists {
+            fsutil::write_private(&target, &content)?;
+            created.push(target.clone());
+        }
+        mapping.insert(original.to_string(), target.to_string_lossy().into_owned());
     }
     Ok(mapping)
 }
 
-/// `base`, `base-1`, `base-2`, ...; an existing file with identical content is reused.
-fn unique_key_path(dir: &Path, base: &str, content: &[u8]) -> Result<PathBuf> {
+/// `base`, `base-1`, `base-2`, ...; an existing file with identical content is reused
+/// (returned with `true`).
+fn unique_key_path(dir: &Path, base: &str, content: &[u8]) -> Result<(PathBuf, bool)> {
     for n in 0u32.. {
         let name = if n == 0 { base.to_string() } else { format!("{base}-{n}") };
         let candidate = dir.join(name);
         match fs::read(&candidate) {
-            Ok(existing) if existing == content => return Ok(candidate),
+            Ok(existing) if existing == content => return Ok((candidate, true)),
             Ok(_) => continue,
-            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(candidate),
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok((candidate, false)),
             Err(err) => return Err(err.into()),
         }
     }
     unreachable!("u32 range exhausted while choosing a key file name")
 }
 
-fn rewrite_key_paths(doc: &mut ExportDoc, paths: &HashMap<String, String>) {
+fn rewrite_key_paths(profiles: &mut [LoginProfile], hosts: &mut [Host], paths: &HashMap<String, String>) {
     let rewrite = |auth: &mut AuthConfig| {
         if let Some(new_path) = auth.key_path.as_ref().and_then(|p| paths.get(p)) {
             auth.key_path = Some(new_path.clone());
         }
     };
-    for host in &mut doc.hosts {
+    for host in hosts {
         if let HostAuth::Custom { auth } = &mut host.auth {
             rewrite(auth);
         }
     }
-    for profile in &mut doc.profiles {
+    for profile in profiles {
         rewrite(&mut profile.auth);
     }
 }
