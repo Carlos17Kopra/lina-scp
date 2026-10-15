@@ -101,13 +101,15 @@ describe("TerminalScreen", () => {
     expect(closeSession).toHaveBeenCalledWith("a");
   });
 
-  it("offers close and reconnect when an SSH session ended", async () => {
+  it("offers close and reconnect in the same pane when an SSH session ended", async () => {
+    vi.mocked(api.newId).mockReturnValue("p-new");
     seed([{ ...web, status: "closed" }], "a");
     render(<TerminalScreen />);
     expect(screen.getByRole("heading", { name: "Sitzung beendet" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Neu verbinden" }));
-    expect(closeSession).toHaveBeenCalledWith("a");
-    expect(start).toHaveBeenCalledWith("h-web", "ssh");
+    expect(api.sessionClose).toHaveBeenCalledWith("s-a");
+    expect(start).toHaveBeenCalledWith("h-web", "ssh", { paneId: "p-new" });
+    expect(useSessionsStore.getState().groups[0]).toMatchObject({ id: "a", focusedPaneId: "p-new" });
   });
 
   it("shows the error of a session that ended with an error", () => {
