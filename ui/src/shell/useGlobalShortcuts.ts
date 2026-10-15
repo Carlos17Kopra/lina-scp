@@ -65,6 +65,14 @@ function insideTerminal(target: EventTarget | null): boolean {
   return target instanceof Element && target.closest("[data-terminal]") !== null;
 }
 
+/** Ctrl+Shift+←/→ selects words in text fields; there the pane keys stay with the field. */
+const WORD_SELECTION: ReadonlySet<Shortcut> = new Set<Shortcut>(["focusPrev", "focusNext"]);
+
+function inTextField(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement) || insideTerminal(target)) return false;
+  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target.isContentEditable;
+}
+
 /**
  * Registers the global shortcuts on `window` in the capture phase, so they win over xterm.js
  * (which stops propagation of keys it handles). Inactive while a modal is open.
@@ -77,6 +85,7 @@ export function useGlobalShortcuts(): void {
       const ui = useUiStore.getState();
       if (ui.modal) return;
       if (!TERMINAL_SAFE.has(shortcut) && insideTerminal(event.target)) return;
+      if (WORD_SELECTION.has(shortcut) && inTextField(event.target)) return;
       // Sidebar, panes and tabs belong to the terminal view; elsewhere the keys stay unused.
       if (TERMINAL_VIEW_ONLY.has(shortcut) && ui.view !== "terminal") return;
       event.preventDefault();
