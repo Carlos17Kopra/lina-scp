@@ -2977,6 +2977,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "dbus-secret-service-keyring-store",
+ "futures",
  "getrandom 0.4.3",
  "hmac 0.13.0",
  "keyring-core",

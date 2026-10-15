@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use futures::{StreamExt, stream};
 use russh::client;
 use russh_sftp::client::RawSftpSession;
 use russh_sftp::client::error::Error as SftpError;
@@ -16,6 +17,9 @@ use super::handler::ClientHandler;
 use crate::error::{CoreError, FsKind, NetworkKind, Result};
 use crate::sftp::{Entry, EntryKind, LinkTarget, Listing, join};
 use crate::validate::validate_file_name;
+
+/// In-flight `stat` requests while resolving symlinks of one listing.
+const LINK_STAT_CONCURRENCY: usize = 32;
 
 /// Called at most once when the connection of an SFTP session is gone.
 pub type LostFn = Arc<dyn Fn(CoreError) + Send + Sync>;
@@ -138,11 +142,20 @@ impl SftpSession {
             }
         }
         let _ = self.raw.close(handle.as_str()).await;
+        let files: Vec<_> = files.into_iter().filter(|f| f.filename != "." && f.filename != "..").collect();
+        // One `stat` per link, pipelined: sequential round trips make link-heavy dirs (/etc/alternatives) crawl.
+        let targets: Vec<Option<LinkTarget>> = stream::iter(&files)
+            .map(|file| async {
+                if file.attrs.is_symlink() { self.link_target(&join(&path, &file.filename)).await } else { None }
+            })
+            .buffered(LINK_STAT_CONCURRENCY)
+            .collect()
+            .await;
         let mut entries = Vec::with_capacity(files.len());
-        for file in files.into_iter().filter(|f| f.filename != "." && f.filename != "..") {
+        for (file, target) in files.into_iter().zip(targets) {
             let attrs: &FileAttributes = &file.attrs;
             let kind = if attrs.is_symlink() {
-                EntryKind::Symlink { target: self.link_target(&join(&path, &file.filename)).await }
+                EntryKind::Symlink { target }
             } else if attrs.is_dir() {
                 EntryKind::Dir
             } else if attrs.is_regular() {
