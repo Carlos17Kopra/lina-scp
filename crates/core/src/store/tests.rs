@@ -293,3 +293,23 @@ fn bookmark_paths_are_validated() {
     }
     assert!(store.list_bookmarks(None).unwrap().is_empty());
 }
+
+#[test]
+fn set_settings_writes_all_or_nothing() {
+    let store = Store::open_in_memory().unwrap();
+    store.set_setting("a", "old").unwrap();
+    store
+        .conn()
+        .execute_batch(
+            "CREATE TRIGGER fail_b BEFORE INSERT ON settings WHEN NEW.key = 'b' BEGIN SELECT RAISE(ABORT, 'no'); END",
+        )
+        .unwrap();
+    assert!(store.set_settings(&[("a", "new"), ("b", "x")]).is_err());
+    assert_eq!(store.get_setting("a").unwrap().as_deref(), Some("old"));
+    store.conn().execute_batch("DROP TRIGGER fail_b").unwrap();
+    store.set_settings(&[("a", "new"), ("b", "x")]).unwrap();
+    assert_eq!(
+        (store.get_setting("a").unwrap(), store.get_setting("b").unwrap()),
+        (Some("new".into()), Some("x".into()))
+    );
+}

@@ -782,7 +782,9 @@ async fn run_dir(inner: &Inner, job: &Job, src: &dyn Side, dst: &dyn Side) -> Ou
             if let Err(error) = dst.mkdir(&job.target).await {
                 return Outcome::Failed(error);
             }
-            if let Err(error) = dst.set_mode(&job.target, inner.options.dir_mode(job.direction, source.mode.unwrap_or(0))).await {
+            if let Err(error) =
+                dst.set_mode(&job.target, inner.options.dir_mode(job.direction, source.mode.unwrap_or(0))).await
+            {
                 return Outcome::Failed(error);
             }
         }
