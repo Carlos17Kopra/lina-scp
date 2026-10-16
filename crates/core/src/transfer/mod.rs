@@ -1,6 +1,7 @@
 //! File transfers between the local file system and an SFTP session (TP3b).
 
 mod chmod;
+mod compare;
 mod copy;
 mod local_side;
 mod queue;
@@ -9,6 +10,7 @@ mod side;
 pub(crate) mod test_support;
 
 pub use chmod::{ChmodFailure, ModeChange, chmod};
+pub use compare::{DiffStatus, Difference, NodeInfo, compare};
 pub use local_side::LocalSide;
 pub use queue::{TransferEmit, TransferQueue};
 pub use side::{Child, Node, NodeKind, Reader, Side, Writer};
