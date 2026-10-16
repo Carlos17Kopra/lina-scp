@@ -1,17 +1,21 @@
-import { FolderPlus, Pencil, RefreshCw, SquareTerminal, Trash2, Eye, X } from "lucide-react";
+import { Download, Eye, FolderPlus, Pencil, RefreshCw, SquareTerminal, Trash2, Upload, X } from "lucide-react";
 import { useState } from "react";
 import { Button, cx, IconButton } from "../../components";
 import { t } from "../../i18n/de";
 import { useConnectStore } from "../../stores/connect";
 import { useHostsStore } from "../../stores/hosts";
 import { type Side, useSftpStore } from "../../stores/sftp";
+import { useTransfersStore } from "../../stores/transfers";
 import { hostProfile } from "../../model/hostFormat";
 import { DeleteDialog } from "./DeleteDialog";
 import { isDirLike } from "./entries";
 import { FilePane, type PaneCommand } from "./FilePane";
 import { NameDialog } from "./NameDialog";
+import filePaneStyles from "./FilePane.module.css";
 import { targets } from "./paneKeys";
 import styles from "./SftpScreen.module.css";
+import { dropDirAt, requestFor } from "./transferTargets";
+import { useExternalDrop } from "./useExternalDrop";
 
 type DialogState =
   | { type: "new"; side: Side }
@@ -59,6 +63,7 @@ export function SftpScreen() {
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const tab = tabs.find((x) => x.id === activeTabId) ?? null;
   const store = useSftpStore.getState;
+  const externalOver = useExternalDrop(tab?.id ?? "");
 
   if (!tab || picking) {
     const back = () => setPicking(false);
@@ -69,7 +74,12 @@ export function SftpScreen() {
   const lost = tab.status === "lost";
   const side = tab.active;
   const pane = tab.panes[side];
-  const sideDisabled = (s: Side) => s === "remote" && lost;
+  const sideDisabled = (s: Side) => s === "remote" && tab.status !== "connected";
+
+  const onTransfer = (from: Side) => (names: string[], to: Side, row: string | null) => {
+    const request = requestFor(tab, from, names, row === null ? null : dropDirAt(tab, to, row));
+    if (request) void useTransfersStore.getState().enqueue(tab.id, request.direction, request.sources, request.targetDir);
+  };
 
   const onCommand = (s: Side) => (command: PaneCommand, names: string[]) => {
     if (sideDisabled(s)) return;
@@ -102,6 +112,13 @@ export function SftpScreen() {
         <IconButton size="sm" icon={FolderPlus} label={t.sftp.newTab} onClick={() => setPicking(true)} />
       </div>
       <div role="toolbar" aria-label={t.sftp.toolbar} className={styles.toolbar}>
+        <Button
+          icon={side === "local" ? Upload : Download}
+          disabled={tab.status !== "connected"}
+          onClick={() => onTransfer(side)(targets(pane), side === "local" ? "remote" : "local", null)}
+        >
+          {side === "local" ? t.sftp.upload : t.sftp.download}
+        </Button>
         <Button icon={FolderPlus} disabled={sideDisabled(side)} onClick={() => toolbar("newFolder")}>{t.sftp.newFolder}</Button>
         <Button icon={Pencil} disabled={sideDisabled(side)} onClick={() => toolbar("rename")}>{t.sftp.rename}</Button>
         <Button icon={Trash2} disabled={sideDisabled(side)} onClick={() => toolbar("delete")}>{t.sftp.delete}</Button>
@@ -110,15 +127,15 @@ export function SftpScreen() {
         <Button icon={SquareTerminal} onClick={() => void start(tab.hostId, "ssh")}>{t.sftp.terminal}</Button>
       </div>
       <div className={styles.panes}>
-        <FilePane tabId={tab.id} side="local" onCommand={onCommand("local")} />
-        <div className={styles.remote}>
+        <FilePane tabId={tab.id} side="local" onCommand={onCommand("local")} onTransfer={onTransfer("local")} />
+        <div className={cx(styles.remote, externalOver && filePaneStyles.dropTarget)}>
           {lost ? (
             <div role="status" className={styles.lost}>
               <span>{t.sftp.lost}</span>
               <Button variant="primary" onClick={() => store().reconnect(tab.id)}>{t.sftp.reconnect}</Button>
             </div>
           ) : null}
-          <FilePane tabId={tab.id} side="remote" disabled={lost} onCommand={onCommand("remote")} />
+          <FilePane tabId={tab.id} side="remote" disabled={lost} onCommand={onCommand("remote")} onTransfer={onTransfer("remote")} />
         </div>
       </div>
       <footer className={styles.status}>

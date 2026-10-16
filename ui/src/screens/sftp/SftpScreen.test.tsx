@@ -91,4 +91,23 @@ describe("SftpScreen", () => {
     await userEvent.click(screen.getByRole("button", { name: "web schließen" }));
     expect(api.sftpClose).toHaveBeenCalledWith("s1");
   });
+
+  it("the toolbar transfer button uploads from the local pane", async () => {
+    vi.mocked(api.localList).mockResolvedValue({ path: "/l", entries: [{ name: "a.txt", kind: { type: "file" }, size: 1, mtime: 0, mode: 0o100644, owner: "u", nameLossy: false }] });
+    vi.mocked(api.transferEnqueue).mockResolvedValue(1);
+    openTab();
+    await vi.waitFor(() => expect(useSftpStore.getState().tabs[0]!.panes.local.entries).toHaveLength(1));
+    useSftpStore.getState().select("t1", "local", { selection: ["a.txt"], cursor: "a.txt", anchor: "a.txt" });
+    useSftpStore.getState().setActivePane("t1", "local");
+    render(<SftpScreen />);
+    await userEvent.click(screen.getByRole("button", { name: "Hochladen" }));
+    expect(api.transferEnqueue).toHaveBeenCalledWith("s1", "upload", ["/l/a.txt"], "/srv");
+  });
+
+  it("transfer triggers are off while the session is not connected", () => {
+    openTab();
+    useSftpStore.getState().onEvent("t1", "s1", { kind: "lost", error: { type: "cancelled" } });
+    render(<SftpScreen />);
+    expect(screen.getByRole("button", { name: "Herunterladen" })).toBeDisabled();
+  });
 });

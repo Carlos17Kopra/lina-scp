@@ -1,5 +1,5 @@
 import { AlertTriangle, File, Folder, Link2 } from "lucide-react";
-import { type KeyboardEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type KeyboardEvent, type MouseEvent, type PointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import { cx } from "../../components";
 import { t } from "../../i18n/de";
 import type { Entry } from "../../ipc/api";
@@ -24,11 +24,13 @@ function icon(entry: Entry) {
   return isDirLike(entry) ? Folder : File;
 }
 
-export function FilePane({ tabId, side, disabled = false, onCommand }: {
+export function FilePane({ tabId, side, disabled = false, onCommand, onTransfer }: {
   tabId: string;
   side: Side;
   disabled?: boolean;
   onCommand: (command: PaneCommand, names: string[]) => void;
+  /** `dropRow`: the row of the other pane a drag ended on; `null` for its background, F5 and the menu. */
+  onTransfer: (names: string[], toSide: Side, dropRow: string | null) => void;
 }) {
   const tab = useSftpStore((s) => s.tabs.find((x) => x.id === tabId));
   const store = useSftpStore.getState;
@@ -36,6 +38,8 @@ export function FilePane({ tabId, side, disabled = false, onCommand }: {
   const typed = useRef({ prefix: "", at: 0 });
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [draft, setDraft] = useState("");
+  const drag = useRef<{ names: string[]; x: number; y: number; active: boolean } | null>(null);
+  const [dragging, setDragging] = useState(false);
   const p = tab?.panes[side];
   const rows = useMemo(() => (p ? visibleEntries(p.entries, p.showHidden, p.sort) : []), [p]);
   const names = useMemo(() => [...(p && p.path !== "/" ? [".."] : []), ...rows.map((e) => e.name)], [p, rows]);
@@ -46,6 +50,7 @@ export function FilePane({ tabId, side, disabled = false, onCommand }: {
 
   if (!tab || !p) return null;
   const label = side === "local" ? t.sftp.local : t.sftp.remote;
+  const other: Side = side === "local" ? "remote" : "local";
 
   const open = (name: string) => {
     if (name === "..") {
@@ -95,7 +100,6 @@ export function FilePane({ tabId, side, disabled = false, onCommand }: {
     }
     const action: Record<string, () => void> = {
       Tab: () => {
-        const other: Side = side === "local" ? "remote" : "local";
         store().setActivePane(tabId, other);
         document.querySelector<HTMLElement>(`[data-sftp-grid="${other}"]`)?.focus();
       },
@@ -103,6 +107,10 @@ export function FilePane({ tabId, side, disabled = false, onCommand }: {
       Backspace: () => open(".."),
       " ": () => p.cursor && toggle(p.cursor),
       F2: () => command("rename"),
+      F5: () => {
+        const chosen = targets(p);
+        if (chosen.length) onTransfer(chosen, other, null);
+      },
       F7: () => command("newFolder"),
       F8: () => command("delete"),
       Delete: () => command(shiftKey && side === "local" ? "deletePermanent" : "delete"),
@@ -133,6 +141,34 @@ export function FilePane({ tabId, side, disabled = false, onCommand }: {
     if (name && name !== ".." && !p.selection.includes(name)) store().select(tabId, side, { selection: [name], cursor: name, anchor: name });
     setMenu({ x: event.clientX, y: event.clientY });
   };
+  // Pointer events instead of HTML5 DnD: they work next to Tauri's file-drop handler and in jsdom.
+  const onRowPointerDown = (event: PointerEvent<HTMLDivElement>, name: string) => {
+    if (event.button !== 0 || disabled || name === "..") return;
+    const names = p.selection.includes(name) ? targets(p) : [name];
+    drag.current = { names, x: event.clientX, y: event.clientY, active: false };
+    const move = (e: globalThis.PointerEvent) => {
+      const d = drag.current;
+      if (d && !d.active && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) {
+        d.active = true;
+        setDragging(true);
+      }
+    };
+    const up = (e: globalThis.PointerEvent) => {
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", up);
+      const d = drag.current;
+      drag.current = null;
+      setDragging(false);
+      if (!d?.active) return;
+      const hit = document.elementFromPoint(e.clientX, e.clientY);
+      const pane = hit?.closest<HTMLElement>("[data-sftp-pane]")?.dataset.sftpPane as Side | undefined;
+      if (pane !== other) return;
+      const row = hit?.closest<HTMLElement>("[data-sftp-row]")?.dataset.sftpRow ?? null;
+      onTransfer(d.names, other, row === ".." ? null : row);
+    };
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", up);
+  };
   const menuItem = (text: string, run: () => void) => (
     <button type="button" role="menuitem" className={styles.menuItem} onClick={() => { setMenu(null); run(); }}>
       {text}
@@ -140,7 +176,11 @@ export function FilePane({ tabId, side, disabled = false, onCommand }: {
   );
 
   return (
-    <section className={cx(styles.pane, disabled && styles.dim, tab.active === side && styles.active)} aria-label={label}>
+    <section
+      className={cx(styles.pane, disabled && styles.dim, tab.active === side && styles.active, dragging && styles.dragging)}
+      aria-label={label}
+      data-sftp-pane={side}
+    >
       <header className={styles.head}>
         <span className={styles.side}>{label}</span>
         {p.editingPath ? (
@@ -207,11 +247,13 @@ export function FilePane({ tabId, side, disabled = false, onCommand }: {
             <div
               key={name}
               role="row"
+              data-sftp-row={name}
               aria-selected={p.selection.includes(name)}
               title={entry?.nameLossy ? t.sftp.lossyName : entry?.kind.type === "symlink" && entry.kind.target === null ? t.sftp.brokenLink : undefined}
               className={cx(styles.row, p.cursor === name && styles.cursor, entry?.nameLossy && styles.lossy)}
               onClick={(e) => onRowClick(e, name)}
               onDoubleClick={() => open(name)}
+              onPointerDown={(e) => onRowPointerDown(e, name)}
               onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, name); }}
             >
               <div role="gridcell" className={styles.name}>
@@ -235,6 +277,10 @@ export function FilePane({ tabId, side, disabled = false, onCommand }: {
           onKeyDown={(e) => e.key === "Escape" && setMenu(null)}
         >
           {menuItem(t.sftp.open, () => p.cursor && open(p.cursor))}
+          {menuItem(side === "local" ? t.sftp.upload : t.sftp.download, () => {
+            const chosen = targets(p);
+            if (chosen.length) onTransfer(chosen, other, null);
+          })}
           {menuItem(t.sftp.rename, () => command("rename"))}
           {menuItem(t.sftp.delete, () => command("delete"))}
           {menuItem(t.sftp.newFolder, () => command("newFolder"))}

@@ -459,6 +459,8 @@ export const t = {
     },
   },
   sftp: {
+    upload: "Hochladen",
+    download: "Herunterladen",
     title: "SFTP-Dateimanager",
     tabs: "SFTP-Sitzungen",
     newTab: "Neue SFTP-Sitzung",
