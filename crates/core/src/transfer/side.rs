@@ -22,6 +22,8 @@ pub struct Node {
     pub mtime: Option<i64>,
     /// `st_mode` (type and permission bits).
     pub mode: u32,
+    /// The path itself is a symlink (`kind` describes its target).
+    pub link: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
