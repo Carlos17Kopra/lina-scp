@@ -44,7 +44,7 @@ export function CopyIdDialog({ keyInfo, onClose }: { keyInfo: KeyInfo; onClose: 
     >
       <div className={styles.form}>
         <p className={styles.hint}>{texts.intro}</p>
-        <Select label={texts.host} value={hostId} options={hosts.map((h) => ({ value: h.id, label: h.name }))} onChange={setHostId} />
+        <Select label={texts.host} disabled={running} value={hostId} options={hosts.map((h) => ({ value: h.id, label: h.name }))} onChange={setHostId} />
         <ConnectionTestPanel state={state} onAnswer={answer} />
         {state.status === "ok" ? <p className={styles.ok}>{state.result === false ? texts.present : texts.added}</p> : null}
         {state.status === "failed" && state.error ? (

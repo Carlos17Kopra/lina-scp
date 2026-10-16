@@ -619,17 +619,20 @@ pub async fn test_connection(
     }
 }
 
-/// Appends the key read from stdin to `~/.ssh/authorized_keys` unless that exact line is there (exit 3).
-/// Run through `exec sh -c '…'` so a non-POSIX login shell does not matter: the script holds no single quote.
-const COPY_ID_SCRIPT: &str = r#"umask 077
-mkdir -p "$HOME/.ssh" || exit 1
-f="$HOME/.ssh/authorized_keys"
-IFS= read -r k
-[ -n "$k" ] || exit 2
-touch "$f" || exit 1
-if grep -qxF -- "$k" "$f"; then exit 3; fi
-if [ -s "$f" ] && [ -n "$(tail -c1 "$f")" ]; then echo >> "$f" || exit 1; fi
-printf "%s\n" "$k" >> "$f" || exit 1"#;
+/// Appends the key read from stdin to `~/.ssh/authorized_keys` unless that exact line is there. Ends with a marker on
+/// stdout: a server that runs something else (ForceCommand) never prints it. One line without single quotes, so it
+/// survives `exec sh -c '…'` in any login shell (csh rejects newlines inside quotes).
+const COPY_ID_SCRIPT: &str = concat!(
+    r#"umask 077; mkdir -p "$HOME/.ssh" || exit 1; f="$HOME/.ssh/authorized_keys"; IFS= read -r k; "#,
+    r#"[ -n "$k" ] || exit 2; touch "$f" || exit 1; grep -qxF -- "$k" "$f"; r=$?; "#,
+    r#"if [ $r = 0 ]; then echo linascp-copy-id:present; exit 0; fi; [ $r = 1 ] || exit 1; "#,
+    r#"if [ -s "$f" ] && [ -n "$(tail -c1 "$f")" ]; then echo >> "$f" || exit 1; fi; "#,
+    r#"printf "%s\n" "$k" >> "$f" || exit 1; echo linascp-copy-id:added"#,
+);
+const COPY_ID_ADDED: &str = "linascp-copy-id:added";
+const COPY_ID_PRESENT: &str = "linascp-copy-id:present";
+/// Without a host timeout, the script may run this long.
+const COPY_ID_DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Remote error output shown to the user is capped.
 const COPY_ID_STDERR_MAX: usize = 500;
@@ -660,27 +663,45 @@ pub async fn copy_public_key(
                 channel.data(format!("{key}\n").as_bytes()).await.map_err(map_russh_error)?;
                 channel.eof().await.map_err(map_russh_error)?;
                 let mut code = None;
+                let mut stdout = Vec::new();
                 let mut stderr = Vec::new();
-                while let Some(msg) = channel.wait().await {
-                    match msg {
-                        russh::ChannelMsg::ExitStatus { exit_status } => code = Some(exit_status),
-                        russh::ChannelMsg::ExtendedData { data, .. } if stderr.len() < COPY_ID_STDERR_MAX => {
-                            stderr.extend_from_slice(&data)
+                let limit = match req.target.host.timeout_s {
+                    0 => COPY_ID_DEFAULT_TIMEOUT,
+                    secs => Duration::from_secs(u64::from(secs)),
+                };
+                let read = async {
+                    while let Some(msg) = channel.wait().await {
+                        match msg {
+                            russh::ChannelMsg::Failure => {
+                                return Err(CoreError::config("Der Server hat das Kommando abgelehnt"));
+                            }
+                            russh::ChannelMsg::ExitStatus { exit_status } => code = Some(exit_status),
+                            russh::ChannelMsg::Data { data } if stdout.len() < COPY_ID_STDERR_MAX => {
+                                stdout.extend_from_slice(&data)
+                            }
+                            russh::ChannelMsg::ExtendedData { data, .. } if stderr.len() < COPY_ID_STDERR_MAX => {
+                                stderr.extend_from_slice(&data)
+                            }
+                            _ => {}
                         }
-                        _ => {}
                     }
-                }
+                    Ok(())
+                };
+                tokio::time::timeout(limit, read).await.map_err(|_| {
+                    network_error(NetworkKind::Timeout, format!("keine Antwort nach {} s", limit.as_secs()))
+                })??;
+                let out = String::from_utf8_lossy(&stdout);
                 match code {
-                    Some(0) => Ok(true),
-                    Some(3) => Ok(false),
+                    Some(0) if out.contains(COPY_ID_ADDED) => Ok(true),
+                    Some(0) if out.contains(COPY_ID_PRESENT) => Ok(false),
+                    Some(0) => Err(CoreError::config(
+                        "Der Server hat das Skript nicht ausgeführt (z. B. ForceCommand oder nur SFTP erlaubt)",
+                    )),
                     other => {
                         let text =
                             String::from_utf8_lossy(&stderr[..stderr.len().min(COPY_ID_STDERR_MAX)]).into_owned();
                         let code = other.map_or_else(|| "kein Exit-Status".to_string(), |c| format!("Exit {c}"));
-                        Err(CoreError::config(format!(
-                            "Eintragen fehlgeschlagen ({code}): {}",
-                            sanitize_log_line(text.trim())
-                        )))
+                        Err(CoreError::config(format!("{code}: {}", sanitize_log_line(text.trim()))))
                     }
                 }
             })

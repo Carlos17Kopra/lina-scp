@@ -148,3 +148,10 @@ fixed before the merge are not listed.
   other servers may answer with a different spelling and get rejected.
 - A second „Starten“ while a remote forward is still being requested sends a second `tcpip-forward`; with a fixed
   port it can fail until the first grant is cancelled.
+
+## Deferred from the TP5b review
+
+- „Verwendet von“ matches `~/…` key paths by suffix (the UI does not know `$HOME`): `~/id_rsa` also matches
+  `/home/x/.ssh/id_rsa`. Resolve `~` in core.
+- „Öffentlicher Schlüssel kopiert“ shows even when the clipboard write failed (`copyText` swallows the error).
+- The key comment limit (255) counts bytes, not characters.

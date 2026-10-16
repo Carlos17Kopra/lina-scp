@@ -434,6 +434,24 @@ async fn copy_public_key_appends_once_with_private_modes() {
         Err(CoreError::Config { .. })
     ));
 
+    for (user, pass) in [("fcuser", "fcpass"), ("hanguser", "hangpass")] {
+        let mut other = host(c.port, user, AuthMethod::Password, None);
+        other.timeout_s = 3;
+        env.store_password(&other, pass);
+        let started = std::time::Instant::now();
+        let result = copy_public_key(
+            request(other, None),
+            env.deps(None),
+            p.broker.clone(),
+            p.emit.clone(),
+            CancellationToken::new(),
+            key,
+        )
+        .await;
+        assert!(result.is_err(), "{user}: a server that never ran the script is no success: {result:?}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(15), "{user}: bounded by the host timeout");
+    }
+
     c.exec(&["rm", "-rf", "/home/pwuser/.ssh"]);
     assert!(copy().await.expect("copy into a fresh home"));
     assert_eq!(c.exec(&["stat", "-c", "%a", "/home/pwuser/.ssh", "/home/pwuser/.ssh/authorized_keys"]), "700\n600");

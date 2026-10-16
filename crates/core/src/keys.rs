@@ -167,10 +167,17 @@ pub fn generate_key(
     let public = pub_path(&private);
     let write = |path: &Path, text: &[u8], mode: u32| -> Result<()> {
         let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(mode).open(path)?;
-        file.write_all(text)?;
-        file.sync_all()?;
-        // The umask may have narrowed the mode.
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+        let written = (|| {
+            file.write_all(text)?;
+            // On the open file: the umask may have narrowed the mode.
+            file.set_permissions(std::fs::Permissions::from_mode(mode))?;
+            file.sync_all()
+        })();
+        if let Err(error) = written {
+            // A half-written key must not block the name.
+            let _ = std::fs::remove_file(path);
+            return Err(error.into());
+        }
         Ok(())
     };
     write(&private, private_text.as_bytes(), 0o600)?;

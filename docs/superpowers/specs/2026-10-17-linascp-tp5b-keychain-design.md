@@ -59,7 +59,9 @@ Nicht enthalten:
   kommt über stdin, nie in die Kommandozeile. Das Skript:
   - legt `~/.ssh` (0700) und `~/.ssh/authorized_keys` (0600, `umask 077`) an,
   - fügt die Zeile an, wenn sie nicht genau so schon drin steht (fehlendes Zeilenende davor wird ergänzt),
-  - endet mit 0 (eingetragen), 3 (war schon da) oder einem Fehler.
+  - meldet auf stdout `linascp-copy-id:added` bzw. `…:present`. Nur Exit 0 mit dieser Kennung ist Erfolg; ein Server,
+    der etwas anderes ausführt (ForceCommand, nur SFTP), ist ein Fehler.
+  - ist begrenzt durch das Timeout des Hosts (ohne Timeout 30 s); ein abgelehntes `exec` ist ein Fehler.
 - Ergebnis im Dialog: „Schlüssel eingetragen.“ / „Der Schlüssel war schon eingetragen.“ / Fehler mit Grund.
 - Der Schlüssel wird in Core geprüft (eine Zeile, gültiger OpenSSH-Public-Key).
 
@@ -67,7 +69,7 @@ Nicht enthalten:
 
 - `keys_list() -> Vec<KeyInfo>`
 - `key_generate(kind, name, comment, passphrase: Option<String>) -> KeyInfo`
-- `key_defaults(kind) -> KeyDefaults { name, comment }` (Vorschläge aus 2)
+- `key_defaults_get(kind) -> KeyDefaults { name, comment }` (Vorschläge aus 2)
 - `key_copy_id(connect_id, host_id, public_key, events) -> bool` (`true` = eingetragen), Abbruch über
   `connect_cancel`.
 

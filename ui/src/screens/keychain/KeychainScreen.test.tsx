@@ -119,3 +119,28 @@ describe("KeychainScreen", () => {
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("Eintragen fehlgeschlagen");
   });
 });
+
+describe("GenerateKeyDialog", () => {
+  it("keeps a typed name when the type changes and cannot be closed while generating", async () => {
+    let finish: (key: KeyInfo) => void = () => {};
+    vi.mocked(api.keyGenerate).mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    render(<KeychainScreen />);
+    await screen.findByRole("heading", { name: "id_ed25519" });
+    await userEvent.click(screen.getByRole("button", { name: "Neuer Schlüssel" }));
+    const dialog = await screen.findByRole("dialog", { name: "Neuer Schlüssel" });
+    const name = await within(dialog).findByDisplayValue("id_ed25519_linascp");
+    await userEvent.clear(name);
+    await userEvent.type(name, "deploy");
+    vi.mocked(api.keyDefaults).mockResolvedValue({ name: "id_rsa", comment: "me@box" });
+    await userEvent.click(within(dialog).getByRole("radio", { name: "RSA 4096" }));
+    await vi.waitFor(() => expect(api.keyDefaults).toHaveBeenLastCalledWith("rsa4096"));
+    expect(within(dialog).getByRole("textbox", { name: "Dateiname" })).toHaveValue("deploy");
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Erzeugen" }));
+    expect(within(dialog).getByRole("button", { name: "Abbrechen" })).toBeDisabled();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("dialog", { name: "Neuer Schlüssel" })).toBeInTheDocument();
+    finish(key("deploy"));
+    await vi.waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+});

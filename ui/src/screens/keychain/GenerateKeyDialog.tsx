@@ -21,6 +21,8 @@ export function GenerateKeyDialog({
   const texts = t.keychain.generate;
   const [kind, setKind] = useState<KeyKind>("ed25519");
   const [name, setName] = useState("");
+  // A typed name wins over every later suggestion.
+  const [nameTyped, setNameTyped] = useState(false);
   const [comment, setComment] = useState("");
   const [passphrase, setPassphrase] = useState("");
   const [repeat, setRepeat] = useState("");
@@ -32,14 +34,14 @@ export function GenerateKeyDialog({
     keyDefaults(kind)
       .then((defaults) => {
         if (!current) return;
-        setName(defaults.name);
+        if (!nameTyped) setName(defaults.name);
         setComment((previous) => previous || defaults.comment);
       })
       .catch(() => {});
     return () => {
       current = false;
     };
-  }, [kind]);
+  }, [kind, nameTyped]);
 
   const mismatch = repeat !== passphrase;
   const submit = async () => {
@@ -59,10 +61,11 @@ export function GenerateKeyDialog({
       open
       size="sm"
       title={texts.title}
-      onClose={onClose}
+      // A running generation cannot be called back: the files are written anyway.
+      onClose={busy ? () => {} : onClose}
       footer={
         <>
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="ghost" disabled={busy} onClick={onClose}>
             {t.common.cancel}
           </Button>
           <Button variant="primary" disabled={busy || mismatch || name.trim() === ""} onClick={() => void submit()}>
@@ -73,7 +76,11 @@ export function GenerateKeyDialog({
     >
       <div className={styles.form}>
         <Segmented label={texts.kind} value={kind} options={KINDS} onChange={setKind} />
-        <TextField label={texts.name} mono spellCheck={false} value={name} onChange={setName} hint={texts.where(name.trim())} />
+        <TextField label={texts.name} mono spellCheck={false} value={name}
+          onChange={(value) => {
+            setNameTyped(true);
+            setName(value);
+          }} hint={texts.where(name.trim())} />
         <TextField label={texts.comment} value={comment} onChange={setComment} />
         <TextField type="password" label={texts.passphrase} autoComplete="new-password" hint={texts.hint} value={passphrase} onChange={setPassphrase} />
         <TextField
