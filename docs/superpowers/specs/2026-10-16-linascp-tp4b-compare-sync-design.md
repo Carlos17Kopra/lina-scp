@@ -37,6 +37,8 @@ Nicht enthalten:
 - Unten: Zusammenfassung („3 hochladen, 1 löschen“) und „Synchronisieren“. Mit Löschungen auf dem Server steht
   darüber rot: „N Einträge werden auf dem Server endgültig gelöscht.“ Lokale Löschungen gehen in den Papierkorb.
 - Keine Unterschiede: „Beide Ordner sind gleich.“
+- Der Dialog hält die beiden Ordner und die Sitzung vom Öffnen fest. Ändert sich „Ausschließen“, ist
+  „Synchronisieren“ aus, bis neu verglichen wurde.
 - „Synchronisieren“ schließt den Dialog. Die Übertragungen erscheinen im Übertragungs-Panel, nach Löschungen
   laden die Panels neu.
 
@@ -58,8 +60,11 @@ Nicht enthalten:
 - Kann ein Ordner auf einer Seite nicht gelesen werden, bricht der Vergleich mit diesem Fehler ab (fail closed: ein
   unlesbarer Ordner darf nie als „leer“ gelten und so Löschungen auslösen).
 - `cancel` wird zwischen den Ordnern geprüft, dann `Cancelled`.
-- `Difference { rel, status, local: Option<NodeInfo>, remote: Option<NodeInfo> }`, `NodeInfo { dir, size, mtime }`.
-  `rel` ist relativ zu den Startordnern, mit `/` getrennt.
+- `Difference { rel, status, local: Option<NodeInfo>, remote: Option<NodeInfo>, contents: Option<DirContents> }`,
+  `NodeInfo { dir, size, mtime }`. `rel` ist relativ zu den Startordnern, mit `/` getrennt.
+- Für einen Ordner, den es nur auf einer Seite gibt, enthält `contents` den ganzen Baum darunter (mit denselben
+  Ausschlüssen) und `hidden`, falls darin etwas ausgeblendet wurde (Ausschluss, Link, Sonderdatei, unbrauchbarer
+  Name). Die Vorschau zeigt „Ordner · N Einträge“.
 
 ## 3. Plan (UI, `ui/src/screens/sftp/syncPlan.ts`)
 
@@ -74,7 +79,8 @@ Aktion je Zeile aus Status, Richtung und „Löschen“:
 | sizeDiffers | hochladen | herunterladen | übersprungen („gleiches Datum, andere Größe“) |
 | typeMismatch | übersprungen | übersprungen | übersprungen |
 
-Alle wählbaren Zeilen sind anfangs gewählt.
+Alle wählbaren Zeilen sind anfangs gewählt. Ein zu löschender Ordner mit `hidden` wird übersprungen („enthält
+ausgeschlossene oder besondere Einträge“): sonst verschwände, was die Vorschau nie gezeigt hat.
 
 ## 4. Ausführen
 
@@ -83,9 +89,12 @@ Alle wählbaren Zeilen sind anfangs gewählt.
   - Ist das Ziel noch genau so, wird ohne Frage überschrieben.
   - Ist es anders oder neu aufgetaucht, öffnet sich der normale Konfliktdialog.
   - Sync-Batches sind wie normale Batches wiederholbar.
+  - Ausschlussmuster gelten auch beim Übertragen ganzer Ordner (die Queue lässt passende Namen beim Auflisten weg).
+  - Auch ein nach Verbindungsabbruch fortgesetzter Auftrag prüft das Ziel erneut.
 - Löschen (Tauri `sync_delete`): je Eintrag erst neu `stat`.
   - Datei: nur wenn der Stand noch der aus dem Vergleich ist, sonst „übersprungen (geändert)“.
-  - Ordner: gelöscht, wenn noch ein Ordner. Remote endgültig (`SftpSession::delete`), lokal in den Papierkorb.
+  - Ordner: nur wenn sein ganzer Baum (mit denselben Ausschlüssen neu gelesen) genau der aus dem Vergleich ist und
+    nichts darin ausgeblendet wird. Remote endgültig (`SftpSession::delete`), lokal in den Papierkorb.
   - Ergebnis: Zahl der Fehler, erster Fehler, Zahl der übersprungenen Einträge. Die UI zeigt das als Hinweis.
 - Relative Pfade vom Frontend werden im Core geprüft: jedes Segment mit `validate_file_name`, nie leer, nie
   absolut.

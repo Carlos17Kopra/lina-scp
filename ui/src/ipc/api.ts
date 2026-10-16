@@ -282,11 +282,11 @@ export function syncCompare(sessionId: SessionId, localDir: string, remoteDir: s
 export function syncCancel(sessionId: SessionId): Promise<void> {
   return unwrapVoid(commands.syncCancel(sessionId));
 }
-export function syncEnqueue(sessionId: SessionId, direction: Direction, localDir: string, remoteDir: string, items: SyncItem[]): Promise<number[]> {
-  return unwrap(commands.syncEnqueue(sessionId, direction, localDir, remoteDir, items));
+export function syncEnqueue(sessionId: SessionId, direction: Direction, localDir: string, remoteDir: string, items: SyncItem[], exclude: string[]): Promise<number[]> {
+  return unwrap(commands.syncEnqueue(sessionId, direction, localDir, remoteDir, items, exclude));
 }
-export function syncDelete(sessionId: SessionId, side: PaneSide, baseDir: string, items: SyncItem[]): Promise<SyncDeleteReport> {
-  return unwrap(commands.syncDelete(sessionId, side, baseDir, items));
+export function syncDelete(sessionId: SessionId, side: PaneSide, baseDir: string, items: SyncItem[], exclude: string[]): Promise<SyncDeleteReport> {
+  return unwrap(commands.syncDelete(sessionId, side, baseDir, items, exclude));
 }
 export function sftpCreateFile(sessionId: SessionId, dir: string, name: string): Promise<void> {
   return unwrapVoid(commands.sftpCreateFile(sessionId, dir, name));

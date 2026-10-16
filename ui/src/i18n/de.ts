@@ -552,8 +552,11 @@ export const t = {
         remoteNewer: "Übersprungen: remote neuer",
         sizeDiffers: "Übersprungen: gleiches Datum, andere Größe",
         typeMismatch: "Übersprungen: Datei und Ordner",
+        hidden: "Übersprungen: enthält ausgeschlossene oder besondere Einträge",
       },
       dir: "Ordner",
+      dirWith: (n: number) => `Ordner · ${n === 1 ? "1 Eintrag" : `${n} Einträge`}`,
+      stale: "Muster geändert: bitte neu vergleichen.",
       summary: (c: { upload: number; download: number; deleteLocal: number; deleteRemote: number }) =>
         [
           c.upload ? `${c.upload} hochladen` : "",

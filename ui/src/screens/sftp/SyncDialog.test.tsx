@@ -10,9 +10,12 @@ vi.mock("../../ipc/api");
 
 const f = (size: number, mtime: number) => ({ dir: false, size, mtime });
 const DIFFS: Difference[] = [
-  { rel: "index.html", status: "localNewer", local: f(10, 2000), remote: f(8, 1000) },
-  { rel: "img", status: "onlyLocal", local: { dir: true, size: 0, mtime: 1 }, remote: null },
-  { rel: "old.css", status: "onlyRemote", local: null, remote: f(3, 500) },
+  { rel: "index.html", status: "localNewer", local: f(10, 2000), remote: f(8, 1000), contents: null },
+  {
+    rel: "img", status: "onlyLocal", local: { dir: true, size: 0, mtime: 1 }, remote: null,
+    contents: { entries: [{ rel: "a.png", dir: false, size: 1, mtime: 1 }], hidden: false },
+  },
+  { rel: "old.css", status: "onlyRemote", local: null, remote: f(3, 500), contents: null },
 ];
 
 const props = { tabId: "t1", sessionId: "s1", hostId: "h1", localDir: "/l", remoteDir: "/srv" };
@@ -52,8 +55,8 @@ describe("SyncDialog", () => {
     expect(screen.getByText("1 hochladen, 1 auf dem Server löschen")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Synchronisieren" }));
     await vi.waitFor(() => expect(close).toHaveBeenCalled());
-    expect(api.syncEnqueue).toHaveBeenCalledWith("s1", "upload", "/l", "/srv", [{ rel: "index.html", expected: { size: 8, mtime: 1000 } }]);
-    expect(api.syncDelete).toHaveBeenCalledWith("s1", "remote", "/srv", [{ rel: "old.css", expected: { size: 3, mtime: 500 } }]);
+    expect(api.syncEnqueue).toHaveBeenCalledWith("s1", "upload", "/l", "/srv", [{ rel: "index.html", expected: { size: 8, mtime: 1000 }, tree: null }], []);
+    expect(api.syncDelete).toHaveBeenCalledWith("s1", "remote", "/srv", [{ rel: "old.css", expected: { size: 3, mtime: 500 }, tree: null }], []);
   });
 
   it("downloads when the direction changes", async () => {
@@ -62,7 +65,7 @@ describe("SyncDialog", () => {
     await userEvent.click(screen.getByRole("radio", { name: "Herunterladen" }));
     expect(within(row("index.html")).getByText("Übersprungen: lokal neuer")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Synchronisieren" }));
-    expect(api.syncEnqueue).toHaveBeenCalledWith("s1", "download", "/l", "/srv", [{ rel: "old.css", expected: null }]);
+    expect(api.syncEnqueue).toHaveBeenCalledWith("s1", "download", "/l", "/srv", [{ rel: "old.css", expected: null, tree: null }], []);
     expect(api.syncDelete).not.toHaveBeenCalled();
   });
 
@@ -76,6 +79,26 @@ describe("SyncDialog", () => {
     render(<SyncDialog {...props} onClose={() => {}} />);
     expect(api.syncCompare).toHaveBeenLastCalledWith("s1", "/l", "/srv", [".git", "*.tmp"]);
     expect(screen.getByRole("textbox", { name: "Ausschließen" })).toHaveValue(".git, *.tmp ,");
+  });
+
+  it("shows a one-sided folder's size and needs a new compare after the patterns changed", async () => {
+    render(<SyncDialog {...props} onClose={() => {}} />);
+    expect(await screen.findByText("Ordner · 1 Eintrag")).toBeInTheDocument();
+    await userEvent.type(screen.getByRole("textbox", { name: "Ausschließen" }), "*.png");
+    expect(screen.getByRole("button", { name: "Synchronisieren" })).toBeDisabled();
+    expect(screen.getByText("Muster geändert: bitte neu vergleichen.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Neu vergleichen" }));
+    await vi.waitFor(() => expect(screen.getByRole("button", { name: "Synchronisieren" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: "Synchronisieren" }));
+    expect(api.syncEnqueue).toHaveBeenCalledWith("s1", "upload", "/l", "/srv", expect.anything(), ["*.png"]);
+  });
+
+  it("keeps the folders it compared even when the panes move on", async () => {
+    const { rerender } = render(<SyncDialog {...props} onClose={() => {}} />);
+    await screen.findByText("index.html");
+    rerender(<SyncDialog {...props} localDir="/elsewhere" remoteDir="/tmp" onClose={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: "Synchronisieren" }));
+    expect(api.syncEnqueue).toHaveBeenCalledWith("s1", "upload", "/l", "/srv", expect.anything(), []);
   });
 
   it("says when both folders are equal", async () => {

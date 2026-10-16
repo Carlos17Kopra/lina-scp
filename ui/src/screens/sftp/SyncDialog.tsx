@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Checkbox, Dialog, Segmented, TextField } from "../../components";
 import { t } from "../../i18n/de";
-import { type Difference, type NodeInfo, syncCancel, syncCompare, syncDelete, syncEnqueue, type SyncDeleteReport } from "../../ipc/api";
+import { type Difference, type DirContents, type NodeInfo, syncCancel, syncCompare, syncDelete, syncEnqueue, type SyncDeleteReport } from "../../ipc/api";
 import { errorDetails, isCoreError } from "../../ipc/errors";
 import { pushNotice } from "../../stores/notices";
 import { useSftpStore } from "../../stores/sftp";
@@ -31,9 +31,10 @@ function saveExclude(hostId: string, text: string) {
 const patterns = (text: string) => text.split(",").map((p) => p.trim()).filter(Boolean);
 const reasonOf = (error: unknown) => (isCoreError(error) && "message" in error ? error.message : t.sftp.failed);
 
-function nodeText(node: NodeInfo | null): string {
+function nodeText(node: NodeInfo | null, contents: DirContents | null): string {
   if (!node) return "";
-  return node.dir ? t.sftp.sync.dir : `${formatSize(node.size)} · ${formatMtime(node.mtime)}`;
+  if (node.dir) return contents ? t.sftp.sync.dirWith(contents.entries.length) : t.sftp.sync.dir;
+  return `${formatSize(node.size)} · ${formatMtime(node.mtime)}`;
 }
 
 function reportDeletes(report: SyncDeleteReport) {
@@ -47,7 +48,7 @@ function reportDeletes(report: SyncDeleteReport) {
 
 type View = { kind: "comparing" } | { kind: "result"; diffs: Difference[] } | { kind: "error"; error: unknown };
 
-export function SyncDialog({ tabId, sessionId, hostId, localDir, remoteDir, onClose }: {
+export function SyncDialog(props: {
   tabId: string;
   sessionId: string;
   hostId: string;
@@ -55,17 +56,24 @@ export function SyncDialog({ tabId, sessionId, hostId, localDir, remoteDir, onCl
   remoteDir: string;
   onClose: () => void;
 }) {
+  // Frozen at open: the relative paths of a compare only mean something against the folders it compared.
+  const [{ tabId, sessionId, hostId, localDir, remoteDir }] = useState(() => props);
+  const { onClose } = props;
   const texts = t.sftp.sync;
   const [view, setView] = useState<View>({ kind: "comparing" });
   const [direction, setDirection] = useState<SyncDirection>("upload");
   const [deleteExtra, setDeleteExtra] = useState(false);
-  const [exclude, setExclude] = useState(() => loadExclude(hostId));
+  const [exclude, setExclude] = useState(() => loadExclude(props.hostId));
+  /** The patterns of the shown result; running with others would ignore what the user just excluded. */
+  const [compared, setCompared] = useState(exclude);
+  const stale = exclude !== compared;
   const [unchecked, setUnchecked] = useState<ReadonlySet<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const run = useRef(0);
 
   const startCompare = (text: string) => {
     const id = ++run.current;
+    setCompared(text);
     setView({ kind: "comparing" });
     syncCompare(sessionId, localDir, remoteDir, patterns(text)).then(
       (diffs) => id === run.current && setView({ kind: "result", diffs }),
@@ -82,6 +90,10 @@ export function SyncDialog({ tabId, sessionId, hostId, localDir, remoteDir, onCl
   const chosen = rows.filter((r) => r.action && !unchecked.has(r.diff.rel));
   const counts = { upload: 0, download: 0, deleteLocal: 0, deleteRemote: 0 } satisfies Record<SyncAction, number>;
   for (const r of chosen) counts[r.action!] += 1;
+  // Everything inside a folder goes with it.
+  const remoteDeletes = chosen
+    .filter((r) => r.action === "deleteRemote")
+    .reduce((n, r) => n + 1 + (r.diff.contents?.entries.length ?? 0), 0);
 
   const cancel = () => {
     if (view.kind === "comparing") void syncCancel(sessionId).catch(() => {});
@@ -100,17 +112,18 @@ export function SyncDialog({ tabId, sessionId, hostId, localDir, remoteDir, onCl
   const submit = async () => {
     setBusy(true);
     const req = requestsFor(chosen);
+    const ex = patterns(compared);
     const sftp = useSftpStore.getState();
     try {
       if (req.upload.length || req.download.length) useTransfersStore.getState().setView(tabId, "queue");
-      if (req.upload.length) await syncEnqueue(sessionId, "upload", localDir, remoteDir, req.upload);
-      if (req.download.length) await syncEnqueue(sessionId, "download", localDir, remoteDir, req.download);
+      if (req.upload.length) await syncEnqueue(sessionId, "upload", localDir, remoteDir, req.upload, ex);
+      if (req.download.length) await syncEnqueue(sessionId, "download", localDir, remoteDir, req.download, ex);
       if (req.deleteRemote.length) {
-        reportDeletes(await syncDelete(sessionId, "remote", remoteDir, req.deleteRemote));
+        reportDeletes(await syncDelete(sessionId, "remote", remoteDir, req.deleteRemote, ex));
         void sftp.reload(tabId, "remote");
       }
       if (req.deleteLocal.length) {
-        reportDeletes(await syncDelete(sessionId, "local", localDir, req.deleteLocal));
+        reportDeletes(await syncDelete(sessionId, "local", localDir, req.deleteLocal, ex));
         void sftp.reload(tabId, "local");
       }
     } catch (error) {
@@ -131,7 +144,7 @@ export function SyncDialog({ tabId, sessionId, hostId, localDir, remoteDir, onCl
       footer={
         <>
           <Button variant="ghost" onClick={cancel}>{t.common.cancel}</Button>
-          <Button variant="primary" disabled={busy || chosen.length === 0} onClick={() => void submit()}>
+          <Button variant="primary" disabled={busy || stale || view.kind !== "result" || chosen.length === 0} onClick={() => void submit()}>
             {texts.run}
           </Button>
         </>
@@ -181,15 +194,16 @@ export function SyncDialog({ tabId, sessionId, hostId, localDir, remoteDir, onCl
                   </td>
                   <td>{action ? texts.actions[action] : texts.skipped[reason!]}</td>
                   <td className={`${styles.path} mono`}>{diff.rel}</td>
-                  <td>{nodeText(diff.local)}</td>
-                  <td>{nodeText(diff.remote)}</td>
+                  <td>{nodeText(diff.local, diff.local?.dir ? diff.contents : null)}</td>
+                  <td>{nodeText(diff.remote, diff.remote?.dir ? diff.contents : null)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       ) : null}
-      {counts.deleteRemote > 0 ? <p className={styles.warning}>{texts.remoteDeleteWarning(counts.deleteRemote)}</p> : null}
+      {stale && view.kind === "result" ? <p className={styles.summary}>{texts.stale}</p> : null}
+      {remoteDeletes > 0 ? <p className={styles.warning}>{texts.remoteDeleteWarning(remoteDeletes)}</p> : null}
       {view.kind === "result" && rows.length > 0 ? <p className={styles.summary}>{texts.summary(counts)}</p> : null}
     </Dialog>
   );

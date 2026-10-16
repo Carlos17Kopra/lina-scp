@@ -3,11 +3,14 @@ import type { DiffStatus, Difference, FileStamp, NodeInfo, SyncItem } from "../.
 export type SyncDirection = "upload" | "download" | "both";
 export type SyncAction = "upload" | "download" | "deleteLocal" | "deleteRemote";
 
+/** `hidden`: a folder to delete holds entries the preview does not show (excluded, links, special files). */
+export type SkipReason = DiffStatus | "hidden";
+
 export interface PlannedRow {
   diff: Difference;
   /** `null`: skipped for `reason`. */
   action: SyncAction | null;
-  reason: DiffStatus | null;
+  reason: SkipReason | null;
 }
 
 type Table = Record<DiffStatus, SyncAction | null>;
@@ -32,6 +35,8 @@ export function planSync(diffs: readonly Difference[], direction: SyncDirection,
   const table = TABLES[direction](deleteExtra && direction !== "both");
   return diffs.map((diff) => {
     const action = table[diff.status];
+    const deletes = action === "deleteLocal" || action === "deleteRemote";
+    if (deletes && diff.contents?.hidden) return { diff, action: null, reason: "hidden" };
     return { diff, action, reason: action ? null : diff.status };
   });
 }
@@ -44,7 +49,8 @@ export function requestsFor(rows: readonly PlannedRow[]): Record<SyncAction, Syn
   for (const { diff, action } of rows) {
     if (!action) continue;
     const target = action === "upload" || action === "deleteRemote" ? diff.remote : diff.local;
-    out[action].push({ rel: diff.rel, expected: stampOf(target) });
+    const deletes = action === "deleteLocal" || action === "deleteRemote";
+    out[action].push({ rel: diff.rel, expected: stampOf(target), tree: deletes && diff.contents ? diff.contents.entries : null });
   }
   return out;
 }
