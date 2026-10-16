@@ -6,10 +6,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use futures::{StreamExt, stream};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, Semaphore};
 use tokio_util::sync::CancellationToken;
 
-use super::copy::copy_range;
+use super::copy::{IN_FLIGHT, copy_range};
 use super::side::{Node, NodeKind, Side};
 use super::{
     BatchId, CancelTarget, Decision, Direction, FileStamp, Job, JobId, JobKind, JobNote, JobState, TransferEvent,
@@ -64,6 +64,8 @@ struct Inner {
     emit: TransferEmit,
     /// Signalled whenever a worker finishes (`close` waits for running workers).
     idle: Notify,
+    /// Chunk requests in flight across all files of the session.
+    in_flight: Semaphore,
 }
 
 #[derive(Clone)]
@@ -151,7 +153,16 @@ impl TransferQueue {
             next_id: 1,
             closed: false,
         };
-        Self { inner: Arc::new(Inner { state: Mutex::new(state), local, options, emit, idle: Notify::new() }) }
+        Self {
+            inner: Arc::new(Inner {
+                state: Mutex::new(state),
+                local,
+                options,
+                emit,
+                idle: Notify::new(),
+                in_flight: Semaphore::new(IN_FLIGHT),
+            }),
+        }
     }
 
     /// The SFTP connection came (back) or went. Paused jobs resume on a new connection.
@@ -688,7 +699,9 @@ async fn run_dir(inner: &Inner, job: &Job, src: &dyn Side, dst: &dyn Side) -> Ou
     // ponytail: one stat per child; the SFTP readdir attrs would save the round trips for big dirs.
     let stats: Vec<_> = stream::iter(children)
         .map(|child| async move {
-            let node = if child.lossy { None } else { Some(src.stat(&join(&job.source, &child.name)).await) };
+            // Names come from the server: `../x` or `a/b` must never be joined into a path.
+            let usable = !child.lossy && validate_file_name(&child.name).is_ok();
+            let node = if usable { Some(src.stat(&join(&job.source, &child.name)).await) } else { None };
             (child, node)
         })
         .buffered(STAT_CONCURRENCY)
@@ -708,7 +721,7 @@ async fn run_dir(inner: &Inner, job: &Job, src: &dyn Side, dst: &dyn Side) -> Ou
         let (source, target) = (join(&job.source, &child.name), join(&job.target, &child.name));
         let node = match node {
             Some(node) => node,
-            None => Err(CoreError::config(format!("file name is not valid UTF-8: {}", child.name))),
+            None => Err(CoreError::config(format!("invalid file name: {:?}", child.name))),
         };
         jobs.push(inner.new_job(&mut st, job.batch_id, job.direction, source, target, rel, node));
     }
@@ -731,7 +744,16 @@ async fn run_file(
     };
     let now = stamp(&node);
     // A part from this session continues only if the source is unchanged.
-    let resume = if snap.resume_at > 0 && snap.stamp == Some(now) { snap.resume_at } else { 0 };
+    let mut resume = if snap.resume_at > 0 && snap.stamp == Some(now) { snap.resume_at } else { 0 };
+    let part = format!("{}.filepart", job.target);
+    if resume > 0 {
+        // The part may have vanished or shrunk while paused: never write past what is there.
+        resume = match dst.stat(&part).await {
+            Ok(Some(n)) if n.kind == NodeKind::File => resume.min(n.size),
+            Ok(_) => 0,
+            Err(error) => return Outcome::Failed(error),
+        };
+    }
     if resume == 0 {
         match dst.stat(&job.target).await {
             Ok(Some(t)) if matches!(t.kind, NodeKind::Dir | NodeKind::DirLink) => {
@@ -748,7 +770,6 @@ async fn run_file(
         }
     }
     inner.set_size(job.id, node.size, now);
-    let part = format!("{}.filepart", job.target);
     let result = async {
         let reader = src.open_read(&job.source).await.map_err(|e| (e, resume))?;
         let writer = match dst.open_write(&part, resume > 0).await {
@@ -759,7 +780,7 @@ async fn run_file(
             }
         };
         let mut progress = |done| inner.progress(job.id, done);
-        let copied = copy_range(&*reader, &*writer, resume, node.size, cancel, &mut progress).await;
+        let copied = copy_range(&*reader, &*writer, resume, node.size, &inner.in_flight, cancel, &mut progress).await;
         reader.close().await;
         let closed = writer.close().await;
         let done = copied?;
@@ -1316,5 +1337,39 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         assert!(!e.remote.join("a.filepart").exists());
         assert_eq!(std::fs::read(e.remote.join("b")).unwrap(), b"b");
+    }
+
+    #[tokio::test]
+    async fn hostile_child_names_never_reach_the_file_system() {
+        let (e, faulty) = faulty_env(opts());
+        std::fs::create_dir_all(e.remote.join("d")).unwrap();
+        std::fs::write(e.remote.join("d/ok"), b"1").unwrap();
+        std::fs::write(e.remote.join("evil"), b"x").unwrap();
+        faulty.add_fake_children(&["../evil", "a\u{FFFD}", "sub/x"]);
+        e.queue.enqueue(Direction::Download, vec![p(&e.remote.join("d"))], p(&e.local)).await.unwrap();
+        e.rec.wait_all_final().await;
+        assert_eq!(std::fs::read(e.local.join("d/ok")).unwrap(), b"1");
+        assert!(!e.local.join("evil").exists() && !e.local.join("evil.filepart").exists());
+        assert_eq!(std::fs::read_dir(e.local.join("d")).unwrap().count(), 1);
+        let bad: Vec<_> = e.rec.jobs().into_values().filter(|j| j.rel != "d" && j.rel != "d/ok").collect();
+        assert_eq!(bad.len(), 3);
+        assert!(
+            bad.iter().all(|j| j.state == JobState::Failed && matches!(j.error, Some(CoreError::Config { .. }))),
+            "{bad:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_part_that_vanished_while_paused_starts_over() {
+        let (e, faulty) = faulty_env(opts());
+        let data: Vec<u8> = (0..(4 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
+        std::fs::write(e.local.join("f"), &data).unwrap();
+        faulty.fail_writes_after(1024 * 1024);
+        e.queue.enqueue(Direction::Upload, vec![p(&e.local.join("f"))], p(&e.remote)).await.unwrap();
+        e.rec.wait("paused", |r| r.job_by_rel("f").state == JobState::Paused).await;
+        std::fs::remove_file(e.remote.join("f.filepart")).unwrap();
+        e.queue.set_remote(Some(FaultySide::new()));
+        e.rec.wait_all_final().await;
+        assert!(std::fs::read(e.remote.join("f")).unwrap() == data, "content differs");
     }
 }

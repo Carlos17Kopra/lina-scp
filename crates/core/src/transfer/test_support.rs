@@ -73,6 +73,8 @@ pub(crate) struct FaultySide {
     read: Arc<AtomicU64>,
     broken: Arc<AtomicBool>,
     children_fail: AtomicBool,
+    /// Names a hostile server adds to every listing.
+    fake_children: Mutex<Vec<String>>,
     denied: Mutex<HashSet<String>>,
 }
 
@@ -87,6 +89,9 @@ impl FaultySide {
     pub(crate) fn fail_writes_after(&self, bytes: u64) {
         self.written.store(0, Ordering::SeqCst);
         self.write_limit.store(bytes, Ordering::SeqCst);
+    }
+    pub(crate) fn add_fake_children(&self, names: &[&str]) {
+        self.fake_children.lock().unwrap().extend(names.iter().map(|n| n.to_string()));
     }
     pub(crate) fn fail_children(&self) {
         self.children_fail.store(true, Ordering::SeqCst);
@@ -149,7 +154,10 @@ impl Side for FaultySide {
         if self.children_fail.load(Ordering::SeqCst) {
             return Err(dead());
         }
-        LocalSide.children(path).await
+        let mut children = LocalSide.children(path).await?;
+        let fake = self.fake_children.lock().unwrap().clone();
+        children.extend(fake.into_iter().map(|name| Child { name, lossy: false }));
+        Ok(children)
     }
     async fn mkdir(&self, path: &str) -> Result<()> {
         LocalSide.mkdir(path).await
