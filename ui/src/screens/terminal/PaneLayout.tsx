@@ -2,6 +2,8 @@ import { X } from "lucide-react";
 import { type KeyboardEvent, type PointerEvent, type RefObject, useRef } from "react";
 import { cx, IconButton } from "../../components";
 import { t } from "../../i18n/de";
+import { sessionReconnectNow, sessionReconnectStop } from "../../ipc/api";
+import { fireAndForget } from "../../stores/connectProgress";
 import { type TabGroup, useSessionsStore } from "../../stores/sessions";
 import { arrange, paneIds, type Rect, type SplitDir, type SplitPath } from "./layout";
 import styles from "./PaneLayout.module.css";
@@ -51,7 +53,13 @@ function Pane({ paneId, group, rect, multi, visible }: { paneId: string; group: 
     >
       {pane.status === "picking" ? <PanePicker pane={pane} focused={visible && focused} /> : null}
       {pane.sessionId ? <TerminalView tab={pane} visible={visible} focused={visible && focused} /> : null}
-      {pane.status === "reconnecting" ? <ReconnectBar tab={pane} /> : null}
+      {pane.status === "reconnecting" && pane.reconnect && pane.sessionId ? (
+        <ReconnectBar
+          state={pane.reconnect}
+          onNow={() => fireAndForget(() => sessionReconnectNow(pane.sessionId!))}
+          onStop={() => fireAndForget(() => sessionReconnectStop(pane.sessionId!))}
+        />
+      ) : null}
       {ended ? <SessionEnded tab={pane} /> : null}
       {multi ? (
         <IconButton
