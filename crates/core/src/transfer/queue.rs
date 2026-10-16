@@ -500,6 +500,7 @@ impl Inner {
             return;
         }
         let mut children = Vec::new();
+        let mut dead = false;
         match outcome {
             Outcome::Done => {
                 entry.job.state = JobState::Done;
@@ -526,6 +527,9 @@ impl Inner {
                 // Already reconnected on a new connection (fast reconnect): go again right away.
                 let reconnected = remote.as_ref().is_some_and(|r| !same_side(r, &used));
                 entry.job.state = if reconnected { JobState::Queued } else { JobState::Paused };
+                // The connection it ran on is gone: start nothing more on it until `set_remote`
+                // brings a new one (queued jobs stay queued instead of failing into `Paused`).
+                dead = remote.as_ref().is_some_and(|r| same_side(r, &used));
             }
             Outcome::Interrupted { resume_at, stamp } => {
                 entry.resume_at = resume_at;
@@ -540,6 +544,9 @@ impl Inner {
             }
         }
         let job = entry.job.clone();
+        if dead {
+            st.remote = None;
+        }
         if !closed {
             (self.emit)(TransferEvent::Job { job: job.clone() });
             for child in children {
@@ -554,13 +561,14 @@ impl Inner {
     }
 
     /// Marks matching unfinished jobs `Cancelled` and stops running ones (their worker removes its
-    /// part). Returns the parts of paused jobs, which no worker owns.
+    /// part). Returns the parts of jobs that are not running, which no worker owns.
     fn cancel_where(&self, st: &mut State, matches: impl Fn(&Job) -> bool) -> Vec<(Direction, String)> {
         let closed = st.closed;
         let mut parts = Vec::new();
         let mut reopen = false;
         for entry in st.jobs.iter_mut().filter(|e| !e.job.state.is_final() && matches(&e.job)) {
-            if entry.job.state == JobState::Paused && entry.resume_at > 0 {
+            // A paused or re-queued job owns its part; a running one removes it in its worker.
+            if entry.job.state != JobState::Running && entry.resume_at > 0 {
                 parts.push((entry.job.direction, format!("{}.filepart", entry.job.target)));
             }
             if let Some(token) = &entry.cancel {
@@ -1181,5 +1189,125 @@ mod tests {
         assert_eq!(e.rec.events().len(), before, "no event after close");
         std::fs::write(e.local.join("x"), b"1").unwrap();
         assert!(e.queue.enqueue(Direction::Upload, vec![p(&e.local.join("x"))], p(&e.remote)).await.is_err());
+    }
+
+    use crate::transfer::test_support::FaultySide;
+
+    fn faulty_env(options: TransferOptions) -> (Env, Arc<FaultySide>) {
+        let e = env(options);
+        let faulty = FaultySide::new();
+        e.queue.set_remote(Some(faulty.clone()));
+        (e, faulty)
+    }
+
+    #[tokio::test]
+    async fn a_lost_connection_pauses_and_the_reconnect_resumes_from_the_part() {
+        let (e, faulty) = faulty_env(opts());
+        let data: Vec<u8> = (0..(10 * 1024 * 1024)).map(|i| (i % 253) as u8).collect();
+        std::fs::write(e.local.join("big"), &data).unwrap();
+        faulty.fail_writes_after(3 * 1024 * 1024);
+        e.queue.enqueue(Direction::Upload, vec![p(&e.local.join("big"))], p(&e.remote)).await.unwrap();
+        e.rec.wait("paused", |r| r.job_by_rel("big").state == JobState::Paused).await;
+        let paused = e.rec.job_by_rel("big");
+        assert!(paused.done > 0 && paused.done <= 3 * 1024 * 1024, "{}", paused.done);
+        assert!(e.remote.join("big.filepart").exists());
+        e.queue.set_remote(None);
+        faulty.heal();
+        // A new connection: a different `Side` object.
+        let fresh = FaultySide::new();
+        e.queue.set_remote(Some(fresh.clone()));
+        e.rec.wait_all_final().await;
+        assert_eq!(e.rec.job_by_rel("big").state, JobState::Done);
+        assert_eq!(std::fs::read(e.remote.join("big")).unwrap(), data);
+        assert!(!e.remote.join("big.filepart").exists());
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_download_leaves_no_local_part() {
+        let (e, _faulty) = faulty_env(opts());
+        std::fs::write(e.remote.join("f"), vec![5u8; 64 * 1024 * 1024]).unwrap();
+        e.queue.enqueue(Direction::Download, vec![p(&e.remote.join("f"))], p(&e.local)).await.unwrap();
+        e.rec.wait("running", |r| r.job_by_rel("f").state == JobState::Running).await;
+        e.queue.cancel(CancelTarget::Job { id: e.rec.job_by_rel("f").id }).unwrap();
+        e.rec.wait_all_final().await;
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(!e.local.join("f.filepart").exists());
+        assert!(!e.local.join("f").exists());
+    }
+
+    #[tokio::test]
+    async fn a_changed_source_starts_over_after_the_reconnect() {
+        let (e, faulty) = faulty_env(opts());
+        std::fs::write(e.local.join("f"), vec![1u8; 4 * 1024 * 1024]).unwrap();
+        faulty.fail_writes_after(1024 * 1024);
+        e.queue.enqueue(Direction::Upload, vec![p(&e.local.join("f"))], p(&e.remote)).await.unwrap();
+        e.rec.wait("paused", |r| r.job_by_rel("f").state == JobState::Paused).await;
+        let new_data = vec![2u8; 3 * 1024 * 1024 + 7];
+        std::fs::write(e.local.join("f"), &new_data).unwrap();
+        e.queue.set_remote(Some(FaultySide::new()));
+        e.rec.wait_all_final().await;
+        assert_eq!(std::fs::read(e.remote.join("f")).unwrap(), new_data);
+    }
+
+    #[tokio::test]
+    async fn a_dir_job_paused_mid_listing_adds_its_children_once() {
+        let (e, _faulty) = faulty_env(opts());
+        // Download: the remote (faulty) side lists the children.
+        let faulty_src = FaultySide::new();
+        e.queue.set_remote(Some(faulty_src.clone()));
+        std::fs::create_dir_all(e.remote.join("d")).unwrap();
+        for i in 0..3 {
+            std::fs::write(e.remote.join(format!("d/{i}")), b"x").unwrap();
+        }
+        faulty_src.fail_children();
+        e.queue.enqueue(Direction::Download, vec![p(&e.remote.join("d"))], p(&e.local)).await.unwrap();
+        e.rec.wait("paused", |r| r.job_by_rel("d").state == JobState::Paused).await;
+        faulty_src.heal();
+        e.queue.set_remote(Some(FaultySide::new()));
+        e.rec.wait_all_final().await;
+        let jobs = e.rec.jobs();
+        assert_eq!(jobs.values().filter(|j| j.rel.starts_with("d/")).count(), 3);
+        assert_eq!(std::fs::read_dir(e.local.join("d")).unwrap().count(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_permission_error_fails_only_that_job() {
+        let (e, faulty) = faulty_env(opts());
+        std::fs::write(e.remote.join("secret"), b"s").unwrap();
+        std::fs::write(e.remote.join("open"), b"o").unwrap();
+        faulty.deny_read(&p(&e.remote.join("secret")));
+        e.queue
+            .enqueue(Direction::Download, vec![p(&e.remote.join("secret")), p(&e.remote.join("open"))], p(&e.local))
+            .await
+            .unwrap();
+        e.rec.wait_all_final().await;
+        let secret = e.rec.job_by_rel("secret");
+        assert_eq!(secret.state, JobState::Failed);
+        assert!(matches!(secret.error, Some(CoreError::Fs { kind: FsKind::PermissionDenied, .. })));
+        assert!(!e.local.join("secret.filepart").exists());
+        assert_eq!(std::fs::read(e.local.join("open")).unwrap(), b"o");
+    }
+
+    #[tokio::test]
+    async fn queued_jobs_wait_while_disconnected_and_cancel_removes_paused_parts() {
+        let (e, faulty) = faulty_env(TransferOptions { parallel: 1, upload_mode: None });
+        std::fs::write(e.local.join("a"), vec![1u8; 4 * 1024 * 1024]).unwrap();
+        std::fs::write(e.local.join("b"), b"b").unwrap();
+        faulty.fail_writes_after(1024 * 1024);
+        e.queue
+            .enqueue(Direction::Upload, vec![p(&e.local.join("a")), p(&e.local.join("b"))], p(&e.remote))
+            .await
+            .unwrap();
+        e.rec.wait("a paused", |r| r.job_by_rel("a").state == JobState::Paused).await;
+        e.queue.set_remote(None);
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert_eq!(e.rec.job_by_rel("b").state, JobState::Queued);
+        let a = e.rec.job_by_rel("a");
+        e.queue.set_remote(Some(Arc::new(LocalSide)));
+        e.queue.cancel(CancelTarget::Job { id: a.id }).unwrap();
+        e.rec.wait_all_final().await;
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(!e.remote.join("a.filepart").exists());
+        assert_eq!(std::fs::read(e.remote.join("b")).unwrap(), b"b");
     }
 }
