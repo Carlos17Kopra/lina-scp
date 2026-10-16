@@ -5,7 +5,7 @@ mod local_side;
 mod queue;
 mod side;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 pub use local_side::LocalSide;
 pub use queue::{TransferEmit, TransferQueue};
