@@ -18,6 +18,7 @@ import { DeleteDialog } from "./DeleteDialog";
 import { isDirLike, isFileLike, joinPath } from "./entries";
 import { FilePane, type PaneCommand } from "./FilePane";
 import { NameDialog } from "./NameDialog";
+import { PermissionsDialog } from "./PermissionsDialog";
 import filePaneStyles from "./FilePane.module.css";
 import { targets } from "./paneKeys";
 import styles from "./SftpScreen.module.css";
@@ -28,6 +29,7 @@ import { useExternalDrop } from "./useExternalDrop";
 type DialogState =
   | { type: "new" | "newFile"; side: Side }
   | { type: "rename"; side: Side; name: string }
+  | { type: "properties"; side: Side; names: string[] }
   | { type: "delete"; side: Side; names: string[]; mode: "trash" | "permanent"; folder: boolean };
 
 /** `onCancel` is offered only when there are open tabs to go back to. */
@@ -96,6 +98,10 @@ export function SftpScreen() {
     if (sideDisabled(s)) return;
     if (command === "newFolder" || command === "newFile") {
       setDialog({ type: command === "newFolder" ? "new" : "newFile", side: s });
+      return;
+    }
+    if (command === "properties") {
+      setDialog({ type: "properties", side: s, names });
       return;
     }
     if (command === "rename") {
@@ -196,6 +202,13 @@ export function SftpScreen() {
       ) : null}
       {dialog?.type === "rename" ? (
         <NameDialog mode="rename" initial={dialog.name} onSubmit={(name) => store().rename(tab.id, dialog.side, dialog.name, name)} onClose={() => setDialog(null)} />
+      ) : null}
+      {dialog?.type === "properties" ? (
+        <PermissionsDialog
+          entries={tab.panes[dialog.side].entries.filter((e) => dialog.names.includes(e.name))}
+          onSubmit={(change, recursive) => store().chmod(tab.id, dialog.side, dialog.names, change, recursive)}
+          onClose={() => setDialog(null)}
+        />
       ) : null}
       {dialog?.type === "delete" ? (
         <DeleteDialog mode={dialog.mode} names={dialog.names} folder={dialog.folder}

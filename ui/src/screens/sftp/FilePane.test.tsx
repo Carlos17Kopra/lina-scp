@@ -256,4 +256,15 @@ describe("FilePane", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "Neue Datei" }));
     expect(onCommand).toHaveBeenLastCalledWith("newFile", []);
   });
+
+  it("opens the properties with F9 and from the menu", async () => {
+    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} onTransfer={onTransfer} />);
+    fireEvent.contextMenu(screen.getByText("b.txt"));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Eigenschaften …" }));
+    expect(onCommand).toHaveBeenLastCalledWith("properties", ["b.txt"]);
+    onCommand.mockClear();
+    screen.getByRole("grid").focus();
+    await userEvent.keyboard("{F9}");
+    expect(onCommand).toHaveBeenLastCalledWith("properties", ["b.txt"]);
+  });
 });

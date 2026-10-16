@@ -1,8 +1,10 @@
 import { create } from "zustand";
 import {
+  type ChmodReport,
   type CoreError,
   type Entry,
   type Id,
+  localChmod,
   localCreateFile,
   localDelete,
   localHome,
@@ -11,9 +13,11 @@ import {
   localRename,
   localTrash,
   type Listing,
+  type ModeChange,
   type SessionInfo,
   type SftpConnected,
   type SftpEvent,
+  sftpChmod,
   sftpClose,
   sftpCreateFile,
   sftpDelete,
@@ -22,7 +26,7 @@ import {
   sftpRename,
 } from "../ipc/api";
 import { isCoreError } from "../ipc/errors";
-import { type Sort, type SortKey, visibleEntries } from "../screens/sftp/entries";
+import { joinPath, type Sort, type SortKey, visibleEntries } from "../screens/sftp/entries";
 import { fireAndForget } from "./connectProgress";
 import { useConnectStore } from "./connect";
 import { useHostsStore } from "./hosts";
@@ -81,6 +85,8 @@ export interface SftpState {
   createFile(tabId: string, side: Side, name: string): Promise<void>;
   rename(tabId: string, side: Side, from: string, to: string): Promise<void>;
   remove(tabId: string, side: Side, names: string[], mode: "trash" | "permanent"): Promise<void>;
+  /** Rejects only when nothing could be tried (e.g. the connection is gone); reloads the pane either way. */
+  chmod(tabId: string, side: Side, names: string[], change: ModeChange, recursive: boolean): Promise<ChmodReport>;
 }
 
 const asError = (error: unknown): CoreError =>
@@ -293,6 +299,19 @@ export const useSftpStore = create<SftpState>()((set, get) => {
       } catch (error) {
         await get().reload(tabId, side);
         patchPane(tabId, side, () => ({ error: asError(error) }));
+      }
+    },
+
+    chmod: async (tabId, side, names, change, recursive) => {
+      const tab = findTab(tabId);
+      if (!tab) return { failed: 0, first: null };
+      const paths = names.map((name) => joinPath(tab.panes[side].path, name));
+      try {
+        return await (side === "remote"
+          ? sftpChmod(tab.sessionId, paths, change, recursive)
+          : localChmod(paths, change, recursive));
+      } finally {
+        await get().reload(tabId, side);
       }
     },
   };
