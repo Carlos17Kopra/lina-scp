@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Id } from "../../ipc/api";
 import { newHost, newProfile } from "../../model/defaults";
 import { useHostsStore } from "../../stores/hosts";
+import { useSettingsStore } from "../../stores/settings";
 import { type EditorTarget, useUiStore } from "../../stores/ui";
 import { type EditorTab, type HostDraft, hostToDraft, type ProfileDraft, profileToDraft } from "./drafts";
 import { HostEditor } from "./HostEditor";
@@ -24,7 +25,13 @@ export type EditorFrame = HostFrame | ProfileFrame;
 
 function hostFrame(id?: Id): HostFrame {
   const host = id === undefined ? undefined : useHostsStore.getState().hosts.find((h) => h.id === id);
-  return { kind: "host", draft: hostToDraft(host ?? newHost({ color: "accent" })), tab: "general", isNew: !host };
+  return { kind: "host", draft: hostToDraft(host ?? newHostFromSettings()), tab: "general", isNew: !host };
+}
+
+/** "Neuer Host" starts with the defaults from the settings. */
+function newHostFromSettings() {
+  const { newHostUser, newHostPort, newHostKeepaliveS, newHostTimeoutS } = useSettingsStore.getState().settings;
+  return newHost({ color: "accent", user: newHostUser, port: newHostPort, keepaliveS: newHostKeepaliveS, timeoutS: newHostTimeoutS });
 }
 
 function profileFrame(id?: Id): ProfileFrame {

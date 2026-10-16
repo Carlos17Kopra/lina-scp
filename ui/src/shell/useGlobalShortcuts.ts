@@ -105,7 +105,7 @@ export function useGlobalShortcuts(): void {
           toggleTerminalSidebar();
           break;
         case "settings":
-          ui.openModal({ type: "settings" });
+          ui.setView("settings");
           break;
         case "splitRow":
           useSessionsStore.getState().split("row");

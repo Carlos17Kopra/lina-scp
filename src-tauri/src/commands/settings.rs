@@ -1,13 +1,25 @@
 use linascp_core::error::{CoreError, Result};
 use linascp_core::sshconfig::Mirror;
 use linascp_core::store::{
-    EDITOR_COMMAND, FIRST_RUN_DONE, SSH_MODE, Store, TERMINAL_AUTO_RECONNECT, TERMINAL_FONT_SIZE, TERMINAL_RENDERER,
-    TERMINAL_SCHEME, TERMINAL_SIDEBAR_OPEN, THEME,
+    EDITOR_COMMAND, FIRST_RUN_DONE, LOCAL_SHELL, NEW_HOST_KEEPALIVE, NEW_HOST_PORT, NEW_HOST_TIMEOUT, NEW_HOST_USER,
+    SSH_MODE, Store, TERMINAL_AUTO_RECONNECT, TERMINAL_CURSOR, TERMINAL_CURSOR_BLINK, TERMINAL_FONT_SIZE,
+    TERMINAL_RENDERER, TERMINAL_SCHEME, TERMINAL_SCROLLBACK, TERMINAL_SIDEBAR_OPEN, THEME,
 };
-use linascp_core::validate::{TERMINAL_FONT_SIZES, is_valid_terminal_scheme, validate_editor_command};
+use linascp_core::validate::{
+    TERMINAL_FONT_SIZES, TERMINAL_SCROLLBACKS, is_shell_path, is_valid_terminal_scheme, validate_editor_command,
+    validate_local_shell, validate_user,
+};
 use tauri::State;
 
-use crate::dto::{Settings, SshMode, TerminalRenderer, Theme};
+use crate::dto::{Settings, SshMode, TerminalCursor, TerminalRenderer, Theme};
+
+const KEEPALIVE_MAX: u32 = 3600;
+const TIMEOUT_MAX: u32 = 600;
+
+/// A trimmed optional text; blank = `None`.
+fn blank_none(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|v| !v.is_empty())
+}
 use crate::state::AppState;
 
 /// Store key of the WebKit compatibility switch (`"0"` / `"1"`); not part of core's key list.
@@ -46,6 +58,35 @@ pub(crate) fn load_settings(store: &Store) -> Result<Settings> {
         first_run_done: parse_flag(store.get_setting(FIRST_RUN_DONE)?).unwrap_or(d.first_run_done),
         compat_rendering: parse_flag(store.get_setting(COMPAT_RENDERING)?).unwrap_or(d.compat_rendering),
         editor_command: store.get_setting(EDITOR_COMMAND)?.filter(|c| validate_editor_command(c).is_ok()),
+        terminal_scrollback: store
+            .get_setting(TERMINAL_SCROLLBACK)?
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|lines| TERMINAL_SCROLLBACKS.contains(lines))
+            .unwrap_or(d.terminal_scrollback),
+        terminal_cursor: store
+            .get_setting(TERMINAL_CURSOR)?
+            .as_deref()
+            .and_then(TerminalCursor::parse)
+            .unwrap_or(d.terminal_cursor),
+        terminal_cursor_blink: parse_flag(store.get_setting(TERMINAL_CURSOR_BLINK)?).unwrap_or(d.terminal_cursor_blink),
+        // Only the form is checked here; whether the file runs is checked on save and when a terminal opens.
+        local_shell: store.get_setting(LOCAL_SHELL)?.filter(|p| is_shell_path(p)),
+        new_host_user: store.get_setting(NEW_HOST_USER)?.filter(|u| validate_user(u).is_ok()),
+        new_host_port: store
+            .get_setting(NEW_HOST_PORT)?
+            .and_then(|v| v.parse::<u16>().ok())
+            .filter(|port| *port != 0)
+            .unwrap_or(d.new_host_port),
+        new_host_keepalive_s: store
+            .get_setting(NEW_HOST_KEEPALIVE)?
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|s| *s <= KEEPALIVE_MAX)
+            .unwrap_or(d.new_host_keepalive_s),
+        new_host_timeout_s: store
+            .get_setting(NEW_HOST_TIMEOUT)?
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|s| *s <= TIMEOUT_MAX)
+            .unwrap_or(d.new_host_timeout_s),
     })
 }
 
@@ -81,6 +122,26 @@ pub(crate) fn save_settings(state: &AppState, next: Settings) -> Result<Settings
     if !editor.is_empty() {
         validate_editor_command(editor)?;
     }
+    if !TERMINAL_SCROLLBACKS.contains(&next.terminal_scrollback) {
+        return Err(CoreError::config("Scrollback: 1 000, 5 000, 10 000, 50 000 oder 100 000 Zeilen"));
+    }
+    let shell = blank_none(next.local_shell.as_deref()).unwrap_or_default();
+    if !shell.is_empty() {
+        validate_local_shell(shell)?;
+    }
+    let user = blank_none(next.new_host_user.as_deref()).unwrap_or_default();
+    if !user.is_empty() {
+        validate_user(user)?;
+    }
+    if next.new_host_port == 0 {
+        return Err(CoreError::config("Port muss zwischen 1 und 65535 liegen"));
+    }
+    if next.new_host_keepalive_s > KEEPALIVE_MAX {
+        return Err(CoreError::config("Keepalive: höchstens 3600 s"));
+    }
+    if next.new_host_timeout_s > TIMEOUT_MAX {
+        return Err(CoreError::config("Timeout: höchstens 600 s"));
+    }
     let previous = load_settings(&state.store)?;
     if previous.ssh_mode != next.ssh_mode {
         apply_ssh_mode(state, next.ssh_mode)?;
@@ -96,6 +157,14 @@ pub(crate) fn save_settings(state: &AppState, next: Settings) -> Result<Settings
     store.set_setting(FIRST_RUN_DONE, flag_str(next.first_run_done))?;
     store.set_setting(COMPAT_RENDERING, flag_str(next.compat_rendering))?;
     store.set_setting(EDITOR_COMMAND, editor)?;
+    store.set_setting(TERMINAL_SCROLLBACK, &next.terminal_scrollback.to_string())?;
+    store.set_setting(TERMINAL_CURSOR, next.terminal_cursor.as_str())?;
+    store.set_setting(TERMINAL_CURSOR_BLINK, flag_str(next.terminal_cursor_blink))?;
+    store.set_setting(LOCAL_SHELL, shell)?;
+    store.set_setting(NEW_HOST_USER, user)?;
+    store.set_setting(NEW_HOST_PORT, &next.new_host_port.to_string())?;
+    store.set_setting(NEW_HOST_KEEPALIVE, &next.new_host_keepalive_s.to_string())?;
+    store.set_setting(NEW_HOST_TIMEOUT, &next.new_host_timeout_s.to_string())?;
     load_settings(store)
 }
 
@@ -122,7 +191,12 @@ pub async fn settings_set(state: State<'_, AppState>, settings: Settings) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dto::TerminalCursor;
     use linascp_core::model::Host;
+    use linascp_core::store::{
+        LOCAL_SHELL, NEW_HOST_KEEPALIVE, NEW_HOST_PORT, NEW_HOST_TIMEOUT, NEW_HOST_USER, TERMINAL_CURSOR,
+        TERMINAL_SCROLLBACK,
+    };
 
     fn setup() -> (tempfile::TempDir, AppState) {
         let dir = tempfile::tempdir().unwrap();
@@ -154,6 +228,14 @@ mod tests {
             first_run_done: true,
             compat_rendering: true,
             editor_command: Some("code -w".into()),
+            terminal_scrollback: 50_000,
+            terminal_cursor: TerminalCursor::Bar,
+            terminal_cursor_blink: false,
+            local_shell: Some("/bin/sh".into()),
+            new_host_user: Some("deploy".into()),
+            new_host_port: 2222,
+            new_host_keepalive_s: 0,
+            new_host_timeout_s: 60,
         };
         assert_eq!(save_settings(&state, next.clone()).unwrap(), next);
         assert_eq!(load_settings(&state.store).unwrap(), next);
@@ -231,6 +313,56 @@ mod tests {
         let state = crate::state::AppState::for_tests(dir.path());
         state.store.set_setting(TERMINAL_AUTO_RECONNECT, "false").unwrap();
         assert!(!load_settings(&state.store).unwrap().auto_reconnect);
+    }
+
+    #[test]
+    fn new_settings_have_defaults_and_fall_back_from_bad_stored_values() {
+        let (_dir, state) = setup();
+        let d = load_settings(&state.store).unwrap();
+        assert_eq!(
+            (d.terminal_scrollback, d.terminal_cursor, d.terminal_cursor_blink),
+            (10_000, TerminalCursor::Block, true)
+        );
+        assert_eq!((d.local_shell, d.new_host_user), (None, None));
+        assert_eq!((d.new_host_port, d.new_host_keepalive_s, d.new_host_timeout_s), (22, 30, 15));
+        for (key, value) in [
+            (TERMINAL_SCROLLBACK, "7"),
+            (TERMINAL_CURSOR, "blob"),
+            (LOCAL_SHELL, "relative/sh"),
+            (NEW_HOST_USER, "a'b"),
+            (NEW_HOST_PORT, "0"),
+            (NEW_HOST_KEEPALIVE, "99999"),
+            (NEW_HOST_TIMEOUT, "-1"),
+        ] {
+            state.store.set_setting(key, value).unwrap();
+        }
+        assert_eq!(load_settings(&state.store).unwrap(), Settings::default());
+    }
+
+    #[test]
+    fn invalid_new_settings_are_rejected_without_saving_anything() {
+        let (dir, state) = setup();
+        let not_executable = dir.path().join("plain");
+        std::fs::write(&not_executable, "").unwrap();
+        let base = Settings { theme: Theme::Light, ..Settings::default() };
+        for bad in [
+            Settings { terminal_scrollback: 1234, ..base.clone() },
+            Settings { local_shell: Some("sh".into()), ..base.clone() },
+            Settings { local_shell: Some("/no/such/shell".into()), ..base.clone() },
+            Settings { local_shell: Some(not_executable.display().to_string()), ..base.clone() },
+            Settings { local_shell: Some("/bin/s\nh".into()), ..base.clone() },
+            Settings { new_host_user: Some("a b'".into()), ..base.clone() },
+            Settings { new_host_port: 0, ..base.clone() },
+            Settings { new_host_keepalive_s: 3601, ..base.clone() },
+            Settings { new_host_timeout_s: 601, ..base.clone() },
+        ] {
+            assert!(matches!(save_settings(&state, bad.clone()), Err(CoreError::Config { .. })), "{bad:?}");
+            assert_eq!(load_settings(&state.store).unwrap().theme, Theme::Dark, "nothing saved");
+        }
+        let blank =
+            save_settings(&state, Settings { local_shell: Some(" ".into()), new_host_user: Some(" ".into()), ..base })
+                .unwrap();
+        assert_eq!((blank.local_shell, blank.new_host_user), (None, None));
     }
 
     #[test]

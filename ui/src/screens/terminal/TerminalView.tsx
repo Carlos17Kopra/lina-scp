@@ -39,6 +39,9 @@ export function TerminalView({ tab, visible, focused = false }: { tab: Tab; visi
   const appTheme = useUiStore((state) => state.theme);
   const { scheme, fontSize } = useTerminalPrefs(tab.hostId);
   const renderer = useSettingsStore((state) => state.settings.terminalRenderer);
+  const scrollback = useSettingsStore((state) => state.settings.terminalScrollback);
+  const cursorStyle = useSettingsStore((state) => state.settings.terminalCursor);
+  const cursorBlink = useSettingsStore((state) => state.settings.terminalCursorBlink);
   const initial = useRef({ scheme, appTheme, fontSize });
   initial.current = { scheme, appTheme, fontSize };
   const sessionId = tab.sessionId;
@@ -50,10 +53,8 @@ export function TerminalView({ tab, visible, focused = false }: { tab: Tab; visi
     const term = new Terminal({
       allowProposedApi: true,
       allowTransparency: false,
-      cursorBlink: true,
       fontFamily: TERMINAL_FONT_FAMILY,
       fontSize: initial.current.fontSize,
-      scrollback: 10_000,
       theme: terminalTheme(initial.current.scheme, initial.current.appTheme),
     });
     const fit = new FitAddon();
@@ -194,6 +195,15 @@ export function TerminalView({ tab, visible, focused = false }: { tab: Tab; visi
     const term = termRef.current;
     if (term) term.options.theme = terminalTheme(scheme, appTheme);
   }, [scheme, appTheme, sessionId]);
+
+  // Also right after creation: the terminal starts with xterm's defaults for these.
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.scrollback = scrollback;
+    term.options.cursorStyle = cursorStyle;
+    term.options.cursorBlink = cursorBlink;
+  }, [scrollback, cursorStyle, cursorBlink, sessionId]);
 
   useEffect(() => {
     const term = termRef.current;

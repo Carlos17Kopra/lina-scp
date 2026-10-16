@@ -53,10 +53,10 @@ describe("Rail", () => {
     expect(useUiStore.getState().view).toBe("keychain");
   });
 
-  it("opens the settings dialog", async () => {
+  it("opens the settings", async () => {
     renderRail();
     await userEvent.click(screen.getByRole("button", { name: "Einstellungen" }));
-    expect(useUiStore.getState().modal).toEqual({ type: "settings" });
+    expect(useUiStore.getState().view).toBe("settings");
   });
 
   it("toggles and persists the theme", async () => {

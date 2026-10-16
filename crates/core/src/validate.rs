@@ -84,6 +84,35 @@ pub fn validate_terminal_overrides(host: &Host) -> Result<()> {
     Ok(())
 }
 
+/// Terminal scrollback choices in lines.
+pub const TERMINAL_SCROLLBACKS: [u32; 5] = [1_000, 5_000, 10_000, 50_000, 100_000];
+
+/// A user name as the host editor accepts it (it may be mirrored into the ssh config).
+pub fn validate_user(user: &str) -> Result<()> {
+    check_value("Benutzer", user)?;
+    if user.is_empty() || user.chars().any(char::is_whitespace) {
+        return Err(CoreError::config("Benutzer darf nicht leer sein und keine Leerzeichen enthalten"));
+    }
+    Ok(())
+}
+
+/// The form of a shell path: absolute, one line, at most 1024 characters.
+pub fn is_shell_path(path: &str) -> bool {
+    path.starts_with('/') && path.chars().count() <= 1024 && !path.chars().any(char::is_control)
+}
+
+/// A shell for local terminals: [`is_shell_path`] and an executable file.
+pub fn validate_local_shell(path: &str) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    if !is_shell_path(path) {
+        return Err(CoreError::config("Shell: absoluten Pfad angeben, z. B. /bin/bash"));
+    }
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.is_file() && meta.permissions().mode() & 0o111 != 0 => Ok(()),
+        _ => Err(CoreError::config(format!("Shell: {path} ist keine ausführbare Datei"))),
+    }
+}
+
 /// Checks a host's own fields. A referenced login profile is checked by [`validate_profile`].
 pub fn validate_host(host: &Host) -> Result<()> {
     check_text("Name", &host.name)?;

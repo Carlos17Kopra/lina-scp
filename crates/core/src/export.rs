@@ -38,7 +38,19 @@ const SCRYPT_MAX_WORK_FACTOR: u8 = 20;
 
 /// Settings that travel with an export. `ssh_mode` is excluded on purpose: switching it
 /// has side effects on `~/.ssh` that need the user's confirmation.
-const EXPORTED_SETTINGS: &[&str] = &[store::THEME, store::TERMINAL_RENDERER, store::TERMINAL_FONT_SIZE];
+/// The local shell stays out: it is a path on this machine.
+const EXPORTED_SETTINGS: &[&str] = &[
+    store::THEME,
+    store::TERMINAL_RENDERER,
+    store::TERMINAL_FONT_SIZE,
+    store::TERMINAL_SCROLLBACK,
+    store::TERMINAL_CURSOR,
+    store::TERMINAL_CURSOR_BLINK,
+    store::NEW_HOST_USER,
+    store::NEW_HOST_PORT,
+    store::NEW_HOST_KEEPALIVE,
+    store::NEW_HOST_TIMEOUT,
+];
 
 const DUPLICATE_SUFFIX: &str = " (Import)";
 

@@ -1,14 +1,13 @@
 import { create } from "zustand";
 import type { Id, Theme } from "../ipc/api";
 
-export type View = "hosts" | "terminal" | "sftp" | "snippets" | "keychain";
+export type View = "hosts" | "terminal" | "sftp" | "snippets" | "keychain" | "settings";
 
 /** `id` undefined = create a new host/profile. */
 export type EditorTarget = { kind: "host"; id?: Id } | { kind: "profile"; id?: Id };
 
 export type ModalState =
   | { type: "editor"; target: EditorTarget }
-  | { type: "settings" }
   | { type: "firstRun" }
   | { type: "export" }
   | { type: "import" }

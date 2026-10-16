@@ -155,3 +155,13 @@ fixed before the merge are not listed.
   `/home/x/.ssh/id_rsa`. Resolve `~` in core.
 - „Öffentlicher Schlüssel kopiert“ shows even when the clipboard write failed (`copyText` swallows the error).
 - The key comment limit (255) counts bytes, not characters.
+
+## Deferred from the TP5c review
+
+- `validate_user` is stricter than the host editor (also rejects spaces and empty values); fix its doc comment or
+  apply the space rule to `validate_host` too (a behaviour change for existing hosts).
+- `save_settings` writes ~18 keys without a transaction; a SQLite error midway leaves a partial save (and the mirror
+  already switched). Add a store `set_settings(&[(k, v)])` in one transaction.
+- A configured local shell that was deleted later fails with portable-pty's "cannot spawn shell"; prefix the error
+  with "Shell aus den Einstellungen: {path}" so it points at the setting.
+- Keepalive ≤ 3600 / timeout ≤ 600 apply only to the new-host defaults; the host editor allows larger values.

@@ -72,6 +72,10 @@ fn source(key_path: Option<&Path>) -> Source {
     }
     store.set_setting(store::THEME, "light").unwrap();
     store.set_setting(store::SSH_MODE, "mirror").unwrap();
+    store.set_setting(store::TERMINAL_SCROLLBACK, "50000").unwrap();
+    store.set_setting(store::TERMINAL_CURSOR, "bar").unwrap();
+    store.set_setting(store::NEW_HOST_PORT, "2222").unwrap();
+    store.set_setting(store::LOCAL_SHELL, "/bin/zsh").unwrap();
     Source { store, secrets, group, profile, host }
 }
 
@@ -103,6 +107,10 @@ fn roundtrip_without_secrets_into_empty_store() {
     assert!(!profile.auth.has_secret, "has_secret cleared when no secrets were restored");
     assert_eq!(dst.get_setting(store::THEME).unwrap().as_deref(), Some("light"));
     assert_eq!(dst.get_setting(store::SSH_MODE).unwrap(), None);
+    assert_eq!(dst.get_setting(store::TERMINAL_SCROLLBACK).unwrap().as_deref(), Some("50000"));
+    assert_eq!(dst.get_setting(store::TERMINAL_CURSOR).unwrap().as_deref(), Some("bar"));
+    assert_eq!(dst.get_setting(store::NEW_HOST_PORT).unwrap().as_deref(), Some("2222"));
+    assert_eq!(dst.get_setting(store::LOCAL_SHELL).unwrap(), None, "the shell belongs to this machine");
     assert!(dst_secrets.is_empty());
 }
 

@@ -5,6 +5,7 @@ import { ToastProvider } from "../../components";
 import { open } from "@tauri-apps/plugin-dialog";
 import * as api from "../../ipc/api";
 import { useHostsStore } from "../../stores/hosts";
+import { DEFAULT_SETTINGS, useSettingsStore } from "../../stores/settings";
 import { type EditorTarget, useUiStore } from "../../stores/ui";
 import { makeHost, makeProfile, withUsage } from "../../test/fixtures";
 import { EditorModal } from "./EditorModal";
@@ -62,6 +63,19 @@ beforeEach(() => {
 });
 
 describe("EditorModal — host", () => {
+  it("starts a new host with the defaults from the settings", async () => {
+    useSettingsStore.setState({
+      settings: { ...DEFAULT_SETTINGS, newHostUser: "deploy", newHostPort: 2222, newHostKeepaliveS: 0, newHostTimeoutS: 60 },
+    });
+    renderEditor({ kind: "host" });
+    await userEvent.type(screen.getByLabelText("Anzeigename"), "web-03");
+    await userEvent.type(screen.getByLabelText("Adresse (Host oder IP)"), "10.0.0.3");
+    await userEvent.click(saveButton());
+    await waitFor(() => expect(useUiStore.getState().modal).toBeNull());
+    expect(api.hostSave).toHaveBeenCalledWith(expect.objectContaining({ user: "deploy", port: 2222, keepaliveS: 0, timeoutS: 60 }));
+    useSettingsStore.setState(useSettingsStore.getInitialState(), true);
+  });
+
   it("creates a new host", async () => {
     renderEditor({ kind: "host" });
     expect(screen.getByRole("dialog", { name: "Neuer Host" })).toBeInTheDocument();
