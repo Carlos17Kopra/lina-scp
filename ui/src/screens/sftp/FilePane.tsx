@@ -3,7 +3,9 @@ import { type KeyboardEvent, type MouseEvent, type PointerEvent, useEffect, useM
 import { cx } from "../../components";
 import { t } from "../../i18n/de";
 import type { Entry } from "../../ipc/api";
+import { useBookmarksStore } from "../../stores/bookmarks";
 import { type Side, useSftpStore } from "../../stores/sftp";
+import { BookmarkMenu } from "./BookmarkMenu";
 import { crumbs, formatMode, formatMtime, formatSize, isDirLike, joinPath, parentPath, type SortKey, visibleEntries } from "./entries";
 import styles from "./FilePane.module.css";
 import { moveCursor, rangeBetween, targets, typeAhead } from "./paneKeys";
@@ -50,6 +52,7 @@ export function FilePane({ tabId, side, disabled = false, onCommand, onTransfer 
 
   if (!tab || !p) return null;
   const label = side === "local" ? t.sftp.local : t.sftp.remote;
+  const bookmarkKey = side === "local" ? "local" : tab.hostId;
   const other: Side = side === "local" ? "remote" : "local";
 
   const open = (name: string) => {
@@ -94,6 +97,7 @@ export function FilePane({ tabId, side, disabled = false, onCommand, onTransfer 
       else if (k === "h") store().toggleHidden(tabId, side);
       else if (k === "r") void store().reload(tabId, side);
       else if (k === "l") store().setEditingPath(tabId, side, true);
+      else if (k === "b") void useBookmarksStore.getState().toggle(bookmarkKey, p.path);
       else return;
       handled();
       return;
@@ -207,6 +211,7 @@ export function FilePane({ tabId, side, disabled = false, onCommand, onTransfer 
             ))}
           </nav>
         )}
+        <BookmarkMenu bookmarkKey={bookmarkKey} path={p.path} onNavigate={(path) => void store().navigate(tabId, side, path)} />
       </header>
       {p.error ? (
         <details role="alert" className={styles.error}>

@@ -194,4 +194,17 @@ describe("FilePane", () => {
     fireEvent.pointerUp(document, { clientX: 12, clientY: 11, pointerId: 1 });
     expect(onTransfer).not.toHaveBeenCalled();
   });
+
+  it("Ctrl+B toggles the bookmark of the current folder, per side", async () => {
+    vi.mocked(api.bookmarksList).mockResolvedValue([]);
+    vi.mocked(api.bookmarkAdd).mockResolvedValue({ id: "b1", hostId: "h1", path: "/srv/www", position: 1, createdAt: 0 });
+    renderBothPanes();
+    await localLoaded();
+    screen.getByRole("grid", { name: "Remote" }).focus();
+    await userEvent.keyboard("{Control>}b{/Control}");
+    expect(api.bookmarkAdd).toHaveBeenCalledWith("h1", "/srv/www");
+    screen.getByRole("grid", { name: "Lokal" }).focus();
+    await userEvent.keyboard("{Control>}b{/Control}");
+    expect(api.bookmarkAdd).toHaveBeenLastCalledWith(null, "/l");
+  });
 });

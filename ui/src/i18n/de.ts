@@ -459,6 +459,14 @@ export const t = {
     },
   },
   sftp: {
+    bookmarks: {
+      button: "Lesezeichen",
+      add: "Diesen Ordner merken",
+      remove: "Lesezeichen entfernen",
+      empty: "Noch keine Lesezeichen",
+      removeOne: (name: string) => `${name} entfernen`,
+      failed: "Lesezeichen konnte nicht gespeichert werden",
+    },
     upload: "Hochladen",
     download: "Herunterladen",
     transfers: {
