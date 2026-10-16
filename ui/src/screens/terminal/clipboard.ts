@@ -6,11 +6,13 @@
  */
 import { readText as readClipboard, writeText as writeClipboard } from "@tauri-apps/plugin-clipboard-manager";
 
-export async function copyText(text: string): Promise<void> {
+/** `false` when the clipboard is unavailable (a terminal selection then simply stays local). */
+export async function copyText(text: string): Promise<boolean> {
   try {
     await writeClipboard(text);
+    return true;
   } catch {
-    // clipboard unavailable – selection simply stays local
+    return false;
   }
 }
 

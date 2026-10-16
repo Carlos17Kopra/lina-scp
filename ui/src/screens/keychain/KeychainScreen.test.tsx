@@ -4,8 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../ipc/api";
 import type { KeyInfo } from "../../ipc/api";
 import { useHostsStore } from "../../stores/hosts";
+import { useNoticeStore } from "../../stores/notices";
 import { makeHost, makeProfile, withUsage } from "../../test/fixtures";
-import { KeychainScreen } from "./KeychainScreen";
+import { KeychainScreen, pointsTo } from "./KeychainScreen";
 
 vi.mock("../../ipc/api");
 const clipboard = vi.hoisted(() => ({ writeText: vi.fn(async (_text: string) => undefined), readText: vi.fn(async () => "") }));
@@ -53,6 +54,21 @@ describe("KeychainScreen", () => {
     expect(within(old).getByText("Nicht verwendet")).toBeInTheDocument();
     await userEvent.click(within(first).getByRole("button", { name: "Öffentlichen Schlüssel kopieren" }));
     expect(clipboard.writeText).toHaveBeenCalledWith("ssh-ed25519 AAAAid_ed25519 me@box");
+  });
+
+  it("matches ~ paths against the home the key lives in, not by suffix", () => {
+    expect(pointsTo("~/.ssh/id_rsa", "/home/me/.ssh/id_rsa")).toBe(true);
+    expect(pointsTo("~/id_rsa", "/home/me/.ssh/id_rsa")).toBe(false);
+    expect(pointsTo("/home/me/.ssh/id_rsa", "/home/me/.ssh/id_rsa")).toBe(true);
+  });
+
+  it("says so when copying fails", async () => {
+    clipboard.writeText.mockRejectedValueOnce(new Error("no clipboard"));
+    useNoticeStore.setState(useNoticeStore.getInitialState(), true);
+    render(<KeychainScreen />);
+    const first = card(await screen.findByRole("heading", { name: "id_ed25519" }).then((h) => h.textContent ?? ""));
+    await userEvent.click(within(first).getByRole("button", { name: "Öffentlichen Schlüssel kopieren" }));
+    expect(useNoticeStore.getState().notices.map((n) => n.tone)).toEqual(["red"]);
   });
 
   it("shows an empty list and a failed read", async () => {

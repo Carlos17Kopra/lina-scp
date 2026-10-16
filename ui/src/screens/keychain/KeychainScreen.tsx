@@ -10,11 +10,11 @@ import { CopyIdDialog } from "./CopyIdDialog";
 import { GenerateKeyDialog } from "./GenerateKeyDialog";
 import styles from "./Keychain.module.css";
 
-/** Whether a stored key path names this file. */
-// ponytail: `~/…` is matched by suffix (the UI does not know $HOME); another user's home would match too.
+/** Whether a stored key path names this file. Listed keys live in `~/.ssh`, so their path tells `$HOME`. */
 export function pointsTo(keyPath: string | null, path: string): boolean {
   if (!keyPath) return false;
-  return keyPath === path || (keyPath.startsWith("~/") && path.endsWith(keyPath.slice(1)));
+  const home = path.slice(0, path.lastIndexOf("/.ssh/"));
+  return keyPath === path || (keyPath.startsWith("~/") && home + keyPath.slice(1) === path);
 }
 
 /** Rail screen "Schlüsselbund": the key files in ~/.ssh, generate new ones, enter them on hosts. */
@@ -44,8 +44,8 @@ export function KeychainScreen() {
     ...profiles.filter(({ profile }) => pointsTo(profile.auth.keyPath, key.path)).map(({ profile }) => texts.profile(profile.name)),
   ];
   const copy = async (key: KeyInfo) => {
-    await copyText(key.publicKey);
-    pushNotice({ tone: "green", message: texts.copied });
+    if (await copyText(key.publicKey)) pushNotice({ tone: "green", message: texts.copied });
+    else pushNotice({ tone: "red", message: texts.copyFailed });
   };
 
   return (
