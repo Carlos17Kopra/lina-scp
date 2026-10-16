@@ -514,6 +514,69 @@ async fn sftp_unreadable_remote_start_fails_the_directory_step_once() {
 
 #[tokio::test]
 #[ignore = "requires docker"]
+async fn sftp_chmod_is_recursive_and_reports_failures() {
+    use linascp_core::transfer::{ModeChange, Side, chmod};
+    let c = Container::start(None);
+    let env = Env::new();
+    let h = host(c.port, "pwuser", AuthMethod::Password, None);
+    env.store_password(&h, "pwpass");
+    let (s, home, _) = sftp(&env, h, no_lost()).await;
+    let d = home.path;
+    s.mkdir(&d, "t").await.unwrap();
+    let t = format!("{d}/t");
+    s.create_file(&t, "f").await.unwrap();
+    s.mkdir(&t, "sub").await.unwrap();
+    let exact = ModeChange { set: 0o640, clear: 0o137 };
+    let failures = chmod(&s, &[t.clone(), "/etc/passwd".into()], exact, true).await.unwrap();
+    assert_eq!(failures.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["/etc/passwd"]);
+    let mode = async |path: &str| s.stat(path).await.unwrap().unwrap().mode & 0o7777;
+    assert_eq!((mode(&t).await, mode(&format!("{t}/sub")).await, mode(&format!("{t}/f")).await), (0o750, 0o750, 0o640));
+    s.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn sftp_server_command_runs_sftp_with_sudo() {
+    let c = Container::start(None);
+    let env = Env::new();
+    let mut h = host(c.port, "pwuser", AuthMethod::Password, None);
+    h.sftp.sftp_server_cmd = Some("sudo -n /usr/lib/openssh/sftp-server".into());
+    env.store_password(&h, "pwpass");
+    let (s, home, _) = sftp(&env, h, no_lost()).await;
+    assert_eq!(home.path, "/home/pwuser");
+    assert!(s.list("/root").await.is_ok(), "root can read /root");
+    s.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn a_failing_sftp_server_command_fails_the_subsystem_step_once() {
+    let c = Container::start(None);
+    // pwuser may sudo only the sftp-server itself: `sudo -n` exits instead of prompting for anything else.
+    for cmd in ["sudo -n /usr/bin/env /usr/lib/openssh/sftp-server", "/bin/false"] {
+        let env = Env::new();
+        let mut h = host(c.port, "pwuser", AuthMethod::Password, None);
+        h.sftp.sftp_server_cmd = Some(cmd.into());
+        env.store_password(&h, "pwpass");
+        let p = prompter(trust_all);
+        let result = connect_sftp(
+            request(h, None),
+            env.deps(None),
+            p.broker.clone(),
+            p.emit.clone(),
+            no_lost(),
+            CancellationToken::new(),
+        )
+        .await;
+        assert!(matches!(result, Err(CoreError::Config { .. })), "{cmd}: {:?}", result.err());
+        let events = p.events();
+        assert!(events.iter().any(|e| matches!(e, ConnectEvent::StepFailed { step: Step::Subsystem, .. })), "{cmd}");
+        assert_eq!(events.iter().filter(|e| matches!(e, ConnectEvent::Failed { .. })).count(), 1, "{cmd}");
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
 async fn sftp_mkdir_rename_and_errors() {
     let c = Container::start(None);
     let env = Env::new();

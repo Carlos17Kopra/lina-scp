@@ -37,6 +37,7 @@ use crate::model::{AuthMethod, Host, LoginProfile};
 use crate::secrets::SecretStore;
 use crate::session::{OutputSink, SessionId};
 use crate::sftp::{Listing, join};
+use crate::validate::sftp_server_command;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
@@ -480,14 +481,29 @@ impl Pipeline {
         let Established { handle, jump, info } = est;
         let opened = self
             .step(Step::Subsystem, async {
-                self.log("debug1: Requesting subsystem sftp");
+                let command = sftp_server_command(host)?;
                 let channel = handle.channel_open_session().await.map_err(map_russh_error)?;
-                channel.request_subsystem(false, "sftp").await.map_err(map_russh_error)?;
+                match command {
+                    Some(command) => {
+                        self.log("debug1: Starting SFTP server command");
+                        channel.exec(false, command).await.map_err(map_russh_error)?;
+                    }
+                    None => {
+                        self.log("debug1: Requesting subsystem sftp");
+                        channel.request_subsystem(false, "sftp").await.map_err(map_russh_error)?;
+                    }
+                }
                 let raw = RawSftpSession::new(channel.into_stream());
                 if host.timeout_s > 0 {
                     raw.set_timeout(u64::from(host.timeout_s));
                 }
-                let version = raw.init().await.map_err(|e| sftp_session::map_sftp_error(e, ""))?;
+                let version = raw.init().await.map_err(|e| match command {
+                    // The command ended or spoke something else (e.g. sudo wanted a password): name it as the cause.
+                    Some(_) if !handle.is_closed() => CoreError::config(
+                        "Der SFTP-Server-Befehl hat keine SFTP-Sitzung gestartet (sudo ohne -n oder NOPASSWD?)",
+                    ),
+                    _ => sftp_session::map_sftp_error(e, ""),
+                })?;
                 self.log(format!("debug1: SFTP protocol version {}", version.version));
                 let posix_rename = version.extensions.contains_key("posix-rename@openssh.com");
                 Ok((raw, version.version, posix_rename))

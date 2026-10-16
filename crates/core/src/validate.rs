@@ -105,10 +105,22 @@ pub fn validate_host(host: &Host) -> Result<()> {
     {
         return Err(CoreError::config("Upload-Rechte: Oktal angeben, z. B. 0644"));
     }
+    sftp_server_command(host)?;
     match &host.auth {
         HostAuth::Custom { auth } => check_auth(auth),
         HostAuth::Profile { .. } => Ok(()),
     }
+}
+
+/// The host's SFTP server command, trimmed; `None` = the `sftp` subsystem. Run with `exec`, so one line only.
+pub fn sftp_server_command(host: &Host) -> Result<Option<&str>> {
+    let Some(cmd) = host.sftp.sftp_server_cmd.as_deref().map(str::trim).filter(|c| !c.is_empty()) else {
+        return Ok(None);
+    };
+    if cmd.chars().count() > 1024 || cmd.chars().any(char::is_control) {
+        return Err(CoreError::config("SFTP-Server: eine Zeile, höchstens 1024 Zeichen"));
+    }
+    Ok(Some(cmd))
 }
 
 /// File mode for uploads: three octal digits, optionally with a leading 0 (no setuid/setgid/sticky).
@@ -198,6 +210,24 @@ mod tests {
             host.sftp.upload_perms = Some(good.into());
             assert!(validate_host(&host).is_ok(), "{good:?}");
         }
+    }
+
+    #[test]
+    fn the_sftp_server_command_is_one_line_of_bounded_length() {
+        let mut host = Host::new("web", "h.example");
+        for (cmd, expected) in [
+            (None, Ok(None)),
+            (Some("  "), Ok(None)),
+            (Some(" sudo -n /usr/lib/openssh/sftp-server "), Ok(Some("sudo -n /usr/lib/openssh/sftp-server"))),
+            (Some("sudo\nrm -rf /"), Err(())),
+            (Some("a\u{7}b"), Err(())),
+        ] {
+            host.sftp.sftp_server_cmd = cmd.map(str::to_string);
+            assert_eq!(sftp_server_command(&host).map_err(|_| ()), expected, "{cmd:?}");
+            assert_eq!(validate_host(&host).is_ok(), expected.is_ok(), "{cmd:?}");
+        }
+        host.sftp.sftp_server_cmd = Some("x".repeat(1025));
+        assert!(sftp_server_command(&host).is_err());
     }
 
     #[test]
