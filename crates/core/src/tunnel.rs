@@ -91,6 +91,8 @@ struct Running {
     token: CancellationToken,
     /// Connection and port the forward was granted on; `None` while not (yet) granted.
     bound: Option<(u64, u16)>,
+    /// A remote forward is being requested right now (a second start must not request it again).
+    requesting: bool,
 }
 
 /// A handshake that does not finish in time is dropped (it would otherwise hold a task until the rule stops).
@@ -149,6 +151,7 @@ impl Tunnels {
             .filter(|(_, run)| run.spec.kind == ForwardKind::Remote)
             .map(|(id, run)| {
                 run.bound = None;
+                run.requesting = true;
                 (*id, run.spec.bind.clone(), run.token.clone())
             })
             .collect();
@@ -158,6 +161,7 @@ impl Tunnels {
                 let mut running = lock(&self.inner.running);
                 match running.get_mut(&id) {
                     Some(run) if run.token == token => {
+                        run.requesting = false;
                         if let Ok(port) = &granted {
                             run.bound = Some((epoch, *port));
                         }
@@ -216,12 +220,13 @@ impl Tunnels {
         {
             let mut running = lock(&inner.running);
             match running.get(&id) {
+                Some(run) if run.requesting => return Ok(()),
                 // A remote forward without a grant (failed after a reconnect) is requested again.
                 Some(run) if run.spec.kind == ForwardKind::Remote && run.bound.is_none() => run.token.cancel(),
                 Some(_) => return Ok(()),
                 None => {}
             }
-            running.insert(id, Running { spec: spec.clone(), token: token.clone(), bound: None });
+            running.insert(id, Running { spec: spec.clone(), token: token.clone(), bound: None, requesting: spec.kind == ForwardKind::Remote });
             // Under the lock: a concurrent `stop` sends its `Off` after this.
             inner.send(id, TunnelState::Starting);
         }
@@ -244,6 +249,7 @@ impl Tunnels {
             Ok(port) => {
                 let current = match lock(&inner.running).get_mut(&id) {
                     Some(run) if run.token == token => {
+                        run.requesting = false;
                         run.bound = Some((link.epoch, port));
                         inner.send(id, TunnelState::Active { port });
                         true
@@ -722,6 +728,28 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(2)).await;
         }
         panic!("request_remote was not called");
+    }
+
+    #[tokio::test]
+    async fn a_second_start_while_a_remote_forward_is_requested_sends_no_second_request() {
+        let r = rule(ForwardKind::Remote, "0".into(), "127.0.0.1:5432".into(), false);
+        let (emit, events) = recorder();
+        let tunnels = Arc::new(Tunnels::new(vec![r.clone()], emit));
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let link = Arc::new(DirectLink { gate: Some(gate.clone()), ..DirectLink::default() });
+        connect(&tunnels, link.clone()).await;
+
+        let first = tokio::spawn({
+            let tunnels = tunnels.clone();
+            async move { tunnels.start(r.id).await }
+        });
+        requested(&link, 1).await;
+        let second = tokio::time::timeout(Duration::from_secs(1), tunnels.start(r.id)).await;
+        assert!(matches!(second, Ok(Ok(()))), "the second start returns at once");
+        gate.notify_one();
+        first.await.unwrap().unwrap();
+        assert_eq!(link.requested.lock().unwrap().len(), 1);
+        assert_eq!(last_state(&events, r.id), Some(TunnelState::Active { port: 41234 }));
     }
 
     #[tokio::test]
