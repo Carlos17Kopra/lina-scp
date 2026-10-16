@@ -34,6 +34,9 @@ import type {
 
 export type {
   Bookmark,
+  EditEvent,
+  EditFile,
+  EditState,
   CancelTarget,
   Decision,
   Direction,
@@ -248,8 +251,25 @@ export function sftpRename(sessionId: SessionId, dir: string, from: string, to: 
 export function sftpDelete(sessionId: SessionId, dir: string, names: string[]): Promise<void> {
   return unwrapVoid(commands.sftpDelete(sessionId, dir, names));
 }
-export function sftpClose(sessionId: SessionId): Promise<void> {
-  return unwrapVoid(commands.sftpClose(sessionId));
+/** Resolves with the edited copies that were kept (they hold changes the server does not have). */
+export function sftpClose(sessionId: SessionId): Promise<string[]> {
+  return unwrap(commands.sftpClose(sessionId));
+}
+export function editOpen(sessionId: SessionId, path: string): Promise<number> {
+  return unwrap(commands.editOpen(sessionId, path));
+}
+export function localEdit(path: string): Promise<void> {
+  return unwrapVoid(commands.localEdit(path));
+}
+export function editResolve(sessionId: SessionId, editId: number, overwrite: boolean): Promise<void> {
+  return unwrapVoid(commands.editResolve(sessionId, editId, overwrite));
+}
+export function editReopen(sessionId: SessionId, editId: number): Promise<void> {
+  return unwrapVoid(commands.editReopen(sessionId, editId));
+}
+/** Resolves with the kept copy's path when it holds changes the server does not have. */
+export function editStop(sessionId: SessionId, editId: number): Promise<string | null> {
+  return unwrap(commands.editStop(sessionId, editId));
 }
 export function localList(path: string): Promise<Listing> {
   return unwrap(commands.localList(path));

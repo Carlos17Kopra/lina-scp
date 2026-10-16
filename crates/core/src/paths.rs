@@ -19,18 +19,30 @@ pub struct AppPaths {
     pub state_dir: PathBuf,
     pub ssh_dir: PathBuf,
     pub home: PathBuf,
+    pub cache_dir: PathBuf,
 }
 
 impl AppPaths {
     /// Resolves the real locations from `HOME`, `XDG_DATA_HOME` and `XDG_STATE_HOME`.
     pub fn from_env() -> Result<Self> {
-        Self::resolve(std::env::var_os("HOME"), std::env::var_os("XDG_DATA_HOME"), std::env::var_os("XDG_STATE_HOME"))
+        Self::resolve(
+            std::env::var_os("HOME"),
+            std::env::var_os("XDG_DATA_HOME"),
+            std::env::var_os("XDG_STATE_HOME"),
+            std::env::var_os("XDG_CACHE_HOME"),
+        )
     }
 
     /// Test layout: everything lives below `root`.
     pub fn for_root(root: &Path) -> Self {
         let home = root.join("home");
-        Self { data_dir: root.join("data"), state_dir: root.join("state"), ssh_dir: home.join(".ssh"), home }
+        Self {
+            data_dir: root.join("data"),
+            state_dir: root.join("state"),
+            ssh_dir: home.join(".ssh"),
+            home,
+            cache_dir: root.join("cache"),
+        }
     }
 
     /// freedesktop.org home trash (`$XDG_DATA_HOME/Trash`), the parent of `data_dir`.
@@ -54,6 +66,11 @@ impl AppPaths {
         self.state_dir.join("logs")
     }
 
+    /// Private copies of files being edited (TP3c).
+    pub fn edit_dir(&self) -> PathBuf {
+        self.cache_dir.join("edit")
+    }
+
     pub fn imported_keys_dir(&self) -> PathBuf {
         self.ssh_dir.join("linascp")
     }
@@ -65,16 +82,23 @@ impl AppPaths {
         Ok(())
     }
 
-    fn resolve(home: Option<OsString>, xdg_data: Option<OsString>, xdg_state: Option<OsString>) -> Result<Self> {
+    fn resolve(
+        home: Option<OsString>,
+        xdg_data: Option<OsString>,
+        xdg_state: Option<OsString>,
+        xdg_cache: Option<OsString>,
+    ) -> Result<Self> {
         let home =
             home.filter(|h| !h.is_empty()).map(PathBuf::from).ok_or_else(|| CoreError::config("HOME is not set"))?;
         let data_base = absolute_or(xdg_data, home.join(".local/share"));
         let state_base = absolute_or(xdg_state, home.join(".local/state"));
+        let cache_base = absolute_or(xdg_cache, home.join(".cache"));
         Ok(Self {
             data_dir: data_base.join("linascp"),
             state_dir: state_base.join("linascp"),
             ssh_dir: home.join(".ssh"),
             home,
+            cache_dir: cache_base.join("linascp"),
         })
     }
 }
@@ -116,7 +140,7 @@ mod tests {
 
     #[test]
     fn resolve_uses_xdg_defaults() {
-        let p = AppPaths::resolve(Some("/home/u".into()), None, None).unwrap();
+        let p = AppPaths::resolve(Some("/home/u".into()), None, None, None).unwrap();
         assert_eq!(p.data_dir, PathBuf::from("/home/u/.local/share/linascp"));
         assert_eq!(p.state_dir, PathBuf::from("/home/u/.local/state/linascp"));
         assert_eq!(p.ssh_dir, PathBuf::from("/home/u/.ssh"));
@@ -124,14 +148,14 @@ mod tests {
 
     #[test]
     fn resolve_honours_absolute_xdg_vars_and_ignores_relative_ones() {
-        let p = AppPaths::resolve(Some("/home/u".into()), Some("/xdg/data".into()), Some("rel".into())).unwrap();
+        let p = AppPaths::resolve(Some("/home/u".into()), Some("/xdg/data".into()), Some("rel".into()), None).unwrap();
         assert_eq!(p.data_dir, PathBuf::from("/xdg/data/linascp"));
         assert_eq!(p.state_dir, PathBuf::from("/home/u/.local/state/linascp"));
     }
 
     #[test]
     fn resolve_without_home_is_config_error() {
-        let err = AppPaths::resolve(None, None, None).unwrap_err();
+        let err = AppPaths::resolve(None, None, None, None).unwrap_err();
         assert!(matches!(err, CoreError::Config { .. }));
     }
 
@@ -142,5 +166,14 @@ mod tests {
         p.ensure_dirs().unwrap();
         assert!(p.data_dir.is_dir());
         assert!(p.log_dir().is_dir());
+    }
+
+    #[test]
+    fn edit_dir_lives_in_the_cache() {
+        let p = AppPaths::resolve(Some("/home/u".into()), None, None, None).unwrap();
+        assert_eq!(p.edit_dir(), PathBuf::from("/home/u/.cache/linascp/edit"));
+        let p = AppPaths::resolve(Some("/home/u".into()), None, None, Some("/xdg/cache".into())).unwrap();
+        assert_eq!(p.edit_dir(), PathBuf::from("/xdg/cache/linascp/edit"));
+        assert_eq!(AppPaths::for_root(Path::new("/r")).edit_dir(), PathBuf::from("/r/cache/edit"));
     }
 }

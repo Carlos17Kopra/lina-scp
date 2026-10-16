@@ -13,6 +13,13 @@ export const commands = {
 	profilesList: () => typedError<ProfileWithUsage[], CoreError>(__TAURI_INVOKE("profiles_list")),
 	profileSave: (profile: LoginProfile) => typedError<LoginProfile, CoreError>(__TAURI_INVOKE("profile_save", { profile })),
 	profileDelete: (id: string) => typedError<null, CoreError>(__TAURI_INVOKE("profile_delete", { id })),
+	/**  Downloads a remote file, opens it in the editor and uploads every save. */
+	editOpen: (sessionId: string, path: string) => typedError<number, CoreError>(__TAURI_INVOKE("edit_open", { sessionId, path })),
+	localEdit: (path: string) => typedError<null, CoreError>(__TAURI_INVOKE("local_edit", { path })),
+	editResolve: (sessionId: string, editId: number, overwrite: boolean) => typedError<null, CoreError>(__TAURI_INVOKE("edit_resolve", { sessionId, editId, overwrite })),
+	editReopen: (sessionId: string, editId: number) => typedError<null, CoreError>(__TAURI_INVOKE("edit_reopen", { sessionId, editId })),
+	/**  Returns the path of a copy that was kept because it holds changes the server does not have. */
+	editStop: (sessionId: string, editId: number) => typedError<string | null, CoreError>(__TAURI_INVOKE("edit_stop", { sessionId, editId })),
 	/**  `host_id`: `None` lists the local bookmarks. */
 	bookmarksList: (hostId: string | null) => typedError<Bookmark[], CoreError>(__TAURI_INVOKE("bookmarks_list", { hostId })),
 	bookmarkAdd: (hostId: string | null, path: string) => typedError<Bookmark, CoreError>(__TAURI_INVOKE("bookmark_add", { hostId, path })),
@@ -35,8 +42,11 @@ export const commands = {
 	sftpMkdir: (sessionId: string, dir: string, name: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_mkdir", { sessionId, dir, name })),
 	sftpRename: (sessionId: string, dir: string, from: string, to: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_rename", { sessionId, dir, from, to })),
 	sftpDelete: (sessionId: string, dir: string, names: string[]) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_delete", { sessionId, dir, names })),
-	/**  Disconnects and forgets the session; unknown ids are fine (already closed). */
-	sftpClose: (sessionId: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_close", { sessionId })),
+	/**
+	 *  Disconnects and forgets the session; unknown ids are fine (already closed). Returns the
+	 *  edited copies that were kept because they hold changes the server does not have.
+	 */
+	sftpClose: (sessionId: string) => typedError<string[], CoreError>(__TAURI_INVOKE("sftp_close", { sessionId })),
 	localList: (path: string) => typedError<Listing, CoreError>(__TAURI_INVOKE("local_list", { path })),
 	localHome: (hostId: string | null) => typedError<string, CoreError>(__TAURI_INVOKE("local_home", { hostId })),
 	localMkdir: (dir: string, name: string) => typedError<null, CoreError>(__TAURI_INVOKE("local_mkdir", { dir, name })),
@@ -112,6 +122,29 @@ export type Decision = "overwrite" | "skip" |
 "newer" | "cancelBatch";
 
 export type Direction = "upload" | "download";
+
+export type EditEvent = 
+/**  Full file on creation and on every change. */
+{ kind: "file"; file: EditFile };
+
+export type EditFile = {
+	id: number,
+	name: string,
+	/**  Canonical path on the server (symlinks resolved). */
+	remotePath: string,
+	state: EditState,
+	/**  The local copy holds a state the server does not have. */
+	dirty: boolean,
+	error: CoreError | null,
+};
+
+export type EditState = "downloading" | 
+/**  The server has the content of the local copy. */
+"synced" | 
+/**  Saved locally, not uploaded yet. */
+"changed" | "uploading" | 
+/**  The server's file changed since it was opened; answer with `EditManager::resolve`. */
+"conflict" | "failed";
 
 export type Entry = {
 	name: string,
@@ -346,6 +379,8 @@ export type Settings = {
 	autoReconnect: boolean,
 	firstRunDone: boolean,
 	compatRendering: boolean,
+	/**  Command for editing files; `None` = the system's text editor. */
+	editorCommand: string | null,
 };
 
 export type SftpConnected = {
@@ -357,7 +392,7 @@ export type SftpConnected = {
 
 export type SftpEvent = { kind: "reconnecting"; attempt: number; maxAttempts: number; retryInMs: number; reason: CoreError } | { kind: "reconnected"; info: SessionInfo } | 
 /**  Reconnecting gave up (or is off); `connect_sftp` with this session id re-attaches. */
-{ kind: "lost"; error: CoreError } | { kind: "transfer"; event: TransferEvent };
+{ kind: "lost"; error: CoreError } | { kind: "transfer"; event: TransferEvent } | { kind: "edit"; event: EditEvent };
 
 export type SftpSettings = {
 	remoteStart: string | null,

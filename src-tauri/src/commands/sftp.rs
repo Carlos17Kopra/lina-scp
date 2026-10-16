@@ -1,11 +1,13 @@
 //! SFTP commander: remote operations on `SftpSession`s and local operations (left pane).
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use linascp_core::connect::{
     ConnConnector, ConnStatus, ConnectEvent, EmitFn, PromptBroker, Reconnecting, SessionInfo, SftpSession,
     connect_sftp as run_pipeline,
 };
+use linascp_core::edit::{EditEvent, EditManager};
 use linascp_core::error::{CoreError, Result};
 use linascp_core::model::Id;
 use linascp_core::session::SessionId;
@@ -22,6 +24,7 @@ use super::connect::{
     register_connect,
 };
 use super::settings::auto_reconnect_enabled;
+use crate::editor::SystemLauncher;
 use crate::state::{AppState, ConnectEnv};
 use crate::util::lock;
 
@@ -53,15 +56,22 @@ pub enum SftpEvent {
     Transfer {
         event: TransferEvent,
     },
+    Edit {
+        event: EditEvent,
+    },
 }
 
 pub(crate) type SftpEmit = Arc<dyn Fn(SftpEvent) + Send + Sync>;
 
-/// One SFTP tab: the self-healing connection and its transfer queue.
+/// One SFTP tab: the self-healing connection, its transfer queue and the files being edited.
 pub struct SftpEntry {
     pub conn: Reconnecting<SftpSession>,
     pub queue: TransferQueue,
+    pub edits: EditManager,
 }
+
+/// How often edited copies are checked for a save.
+const EDIT_POLL: Duration = Duration::from_secs(1);
 
 fn status_event(status: ConnStatus) -> SftpEvent {
     match status {
@@ -103,6 +113,16 @@ fn new_entry(state: &AppState, host: &linascp_core::model::Host, sftp_emit: Sftp
             Arc::new(move |event| emit(SftpEvent::Transfer { event })),
         )
     };
+    let edits = {
+        let emit = sftp_emit.clone();
+        EditManager::new(
+            queue.clone(),
+            state.paths.edit_dir(),
+            Arc::new(SystemLauncher::new(state.store.clone())),
+            Arc::new(move |event| emit(SftpEvent::Edit { event })),
+            EDIT_POLL,
+        )
+    };
     let store = state.store.clone();
     let conn = Reconnecting::new(
         sftp_connector(state.connect_env(), host.id),
@@ -113,7 +133,7 @@ fn new_entry(state: &AppState, host: &linascp_core::model::Host, sftp_emit: Sftp
             Arc::new(move |session: Option<Arc<SftpSession>>| queue.set_remote(session.map(|s| s as Arc<dyn Side>)))
         },
     );
-    Arc::new(SftpEntry { conn, queue })
+    Arc::new(SftpEntry { conn, queue, edits })
 }
 
 /// `existing`: re-attach a fresh, interactive connection to that tab's session (queue survives).
@@ -264,16 +284,17 @@ pub async fn sftp_delete(
     session(&state, session_id)?.delete(&dir, &names).await
 }
 
-/// Disconnects and forgets the session; unknown ids are fine (already closed).
+/// Disconnects and forgets the session; unknown ids are fine (already closed). Returns the
+/// edited copies that were kept because they hold changes the server does not have.
 #[tauri::command]
 #[specta::specta]
-pub async fn sftp_close(state: State<'_, AppState>, session_id: SessionId) -> Result<()> {
+pub async fn sftp_close(state: State<'_, AppState>, session_id: SessionId) -> Result<Vec<String>> {
     let removed = lock(&state.sftp).remove(&session_id);
-    if let Some(entry) = removed {
-        entry.queue.close().await;
-        entry.conn.close().await;
-    }
-    Ok(())
+    let Some(entry) = removed else { return Ok(Vec::new()) };
+    let kept = entry.edits.close().await;
+    entry.queue.close().await;
+    entry.conn.close().await;
+    Ok(kept.into_iter().map(|p| p.to_string_lossy().into_owned()).collect())
 }
 
 #[tauri::command]
@@ -398,6 +419,21 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&event).unwrap(),
             serde_json::json!({ "kind": "transfer", "event": { "kind": "progress", "jobId": 1, "done": 2 } })
+        );
+        let file = linascp_core::edit::EditFile {
+            id: 3,
+            name: "a.conf".into(),
+            remote_path: "/etc/a.conf".into(),
+            state: linascp_core::edit::EditState::Synced,
+            dirty: false,
+            error: None,
+        };
+        let event = SftpEvent::Edit { event: linascp_core::edit::EditEvent::File { file } };
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            serde_json::json!({ "kind": "edit", "event": { "kind": "file", "file": {
+                "id": 3, "name": "a.conf", "remotePath": "/etc/a.conf", "state": "synced", "dirty": false, "error": null
+            } } })
         );
     }
 }

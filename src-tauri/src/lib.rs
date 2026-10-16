@@ -1,12 +1,14 @@
 pub mod commands;
 pub mod dto;
+pub mod editor;
 pub mod output;
 pub mod startup;
 pub mod state;
 mod util;
 
 use commands::{
-    bookmarks, connect, hosts, profiles, secrets, sessions, settings, sftp, sftp_transfers, snippets, transfer,
+    bookmarks, connect, hosts, profiles, secrets, sessions, settings, sftp, sftp_edit, sftp_transfers, snippets,
+    transfer,
 };
 
 /// Where the generated TypeScript bindings live (committed to git).
@@ -25,6 +27,11 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             profiles::profiles_list,
             profiles::profile_save,
             profiles::profile_delete,
+            sftp_edit::edit_open,
+            sftp_edit::local_edit,
+            sftp_edit::edit_resolve,
+            sftp_edit::edit_reopen,
+            sftp_edit::edit_stop,
             bookmarks::bookmarks_list,
             bookmarks::bookmark_add,
             bookmarks::bookmark_remove,

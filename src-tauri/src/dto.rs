@@ -91,6 +91,8 @@ pub struct Settings {
     pub auto_reconnect: bool,
     pub first_run_done: bool,
     pub compat_rendering: bool,
+    /// Command for editing files; `None` = the system's text editor.
+    pub editor_command: Option<String>,
 }
 
 impl Default for Settings {
@@ -105,6 +107,7 @@ impl Default for Settings {
             auto_reconnect: true,
             first_run_done: false,
             compat_rendering: false,
+            editor_command: None,
         }
     }
 }
@@ -150,7 +153,7 @@ mod tests {
             serde_json::json!({
                 "theme": "dark", "sshMode": "integrate", "terminalRenderer": "auto",
                 "terminalFontSize": 14, "terminalScheme": "auto", "terminalSidebarOpen": false,
-                "autoReconnect": true, "firstRunDone": false, "compatRendering": false
+                "autoReconnect": true, "firstRunDone": false, "compatRendering": false, "editorCommand": null
             })
         );
     }

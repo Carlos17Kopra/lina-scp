@@ -1,10 +1,10 @@
 use linascp_core::error::{CoreError, Result};
 use linascp_core::sshconfig::Mirror;
 use linascp_core::store::{
-    FIRST_RUN_DONE, SSH_MODE, Store, TERMINAL_AUTO_RECONNECT, TERMINAL_FONT_SIZE, TERMINAL_RENDERER, TERMINAL_SCHEME,
-    TERMINAL_SIDEBAR_OPEN, THEME,
+    EDITOR_COMMAND, FIRST_RUN_DONE, SSH_MODE, Store, TERMINAL_AUTO_RECONNECT, TERMINAL_FONT_SIZE, TERMINAL_RENDERER,
+    TERMINAL_SCHEME, TERMINAL_SIDEBAR_OPEN, THEME,
 };
-use linascp_core::validate::{TERMINAL_FONT_SIZES, is_valid_terminal_scheme};
+use linascp_core::validate::{TERMINAL_FONT_SIZES, is_valid_terminal_scheme, validate_editor_command};
 use tauri::State;
 
 use crate::dto::{Settings, SshMode, TerminalRenderer, Theme};
@@ -45,6 +45,7 @@ pub(crate) fn load_settings(store: &Store) -> Result<Settings> {
         auto_reconnect: parse_flag(store.get_setting(TERMINAL_AUTO_RECONNECT)?).unwrap_or(d.auto_reconnect),
         first_run_done: parse_flag(store.get_setting(FIRST_RUN_DONE)?).unwrap_or(d.first_run_done),
         compat_rendering: parse_flag(store.get_setting(COMPAT_RENDERING)?).unwrap_or(d.compat_rendering),
+        editor_command: store.get_setting(EDITOR_COMMAND)?.filter(|c| validate_editor_command(c).is_ok()),
     })
 }
 
@@ -76,6 +77,10 @@ pub(crate) fn save_settings(state: &AppState, next: Settings) -> Result<Settings
     if !is_valid_terminal_scheme(&next.terminal_scheme) {
         return Err(CoreError::Config { message: "invalid terminal color scheme id".to_string() });
     }
+    let editor = next.editor_command.as_deref().map(str::trim).filter(|c| !c.is_empty()).unwrap_or_default();
+    if !editor.is_empty() {
+        validate_editor_command(editor)?;
+    }
     let previous = load_settings(&state.store)?;
     if previous.ssh_mode != next.ssh_mode {
         apply_ssh_mode(state, next.ssh_mode)?;
@@ -90,6 +95,7 @@ pub(crate) fn save_settings(state: &AppState, next: Settings) -> Result<Settings
     store.set_setting(TERMINAL_AUTO_RECONNECT, flag_str(next.auto_reconnect))?;
     store.set_setting(FIRST_RUN_DONE, flag_str(next.first_run_done))?;
     store.set_setting(COMPAT_RENDERING, flag_str(next.compat_rendering))?;
+    store.set_setting(EDITOR_COMMAND, editor)?;
     load_settings(store)
 }
 
@@ -147,6 +153,7 @@ mod tests {
             auto_reconnect: false,
             first_run_done: true,
             compat_rendering: true,
+            editor_command: Some("code -w".into()),
         };
         assert_eq!(save_settings(&state, next.clone()).unwrap(), next);
         assert_eq!(load_settings(&state.store).unwrap(), next);
@@ -224,5 +231,17 @@ mod tests {
         let state = crate::state::AppState::for_tests(dir.path());
         state.store.set_setting(TERMINAL_AUTO_RECONNECT, "false").unwrap();
         assert!(!load_settings(&state.store).unwrap().auto_reconnect);
+    }
+
+    #[test]
+    fn editor_command_roundtrips_and_empty_is_none() {
+        let (_dir, state) = setup();
+        assert_eq!(load_settings(&state.store).unwrap().editor_command, None);
+        let base = load_settings(&state.store).unwrap();
+        let saved = save_settings(&state, Settings { editor_command: Some("  kate ".into()), ..base.clone() }).unwrap();
+        assert_eq!(saved.editor_command.as_deref(), Some("kate"));
+        let saved = save_settings(&state, Settings { editor_command: Some("   ".into()), ..base.clone() }).unwrap();
+        assert_eq!(saved.editor_command, None);
+        assert!(save_settings(&state, Settings { editor_command: Some("a\nb".into()), ..base }).is_err());
     }
 }

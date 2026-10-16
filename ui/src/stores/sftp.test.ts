@@ -21,7 +21,7 @@ beforeEach(() => {
   vi.mocked(api.localHome).mockResolvedValue("/home/me");
   vi.mocked(api.localList).mockImplementation(async (path) => listing(path, ["l1"]));
   vi.mocked(api.sftpList).mockImplementation(async (_s, path) => listing(path, ["x"]));
-  vi.mocked(api.sftpClose).mockResolvedValue();
+  vi.mocked(api.sftpClose).mockResolvedValue([]);
   useSftpStore.setState(useSftpStore.getInitialState(), true);
   useTransfersStore.setState(useTransfersStore.getInitialState(), true);
   useHostsStore.setState({ ...useHostsStore.getInitialState(), hosts: [makeHost({ id: "h1", name: "web" })] }, true);

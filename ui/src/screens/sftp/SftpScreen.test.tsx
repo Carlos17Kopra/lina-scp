@@ -17,7 +17,7 @@ beforeEach(() => {
   start.mockClear();
   vi.mocked(api.localHome).mockResolvedValue("/l");
   vi.mocked(api.localList).mockResolvedValue({ path: "/l", entries: [] });
-  vi.mocked(api.sftpClose).mockResolvedValue();
+  vi.mocked(api.sftpClose).mockResolvedValue([]);
   useConnectStore.setState({ ...useConnectStore.getInitialState(), start }, true);
   useSftpStore.setState(useSftpStore.getInitialState(), true);
   useTransfersStore.setState(useTransfersStore.getInitialState(), true);

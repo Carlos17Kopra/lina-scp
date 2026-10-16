@@ -12,6 +12,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoReconnect: true,
   firstRunDone: false,
   compatRendering: false,
+  editorCommand: null,
 };
 
 export interface SettingsState {

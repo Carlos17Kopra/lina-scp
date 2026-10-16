@@ -31,6 +31,8 @@ pub const TERMINAL_SCHEME: &str = "terminal_scheme";
 pub const TERMINAL_SIDEBAR_OPEN: &str = "terminal_sidebar_open";
 /// Setting key: `"0"` turns automatic SSH reconnects off (default on).
 pub const TERMINAL_AUTO_RECONNECT: &str = "terminal_auto_reconnect";
+/// "Editor" for SFTP editing; empty = the system's text editor.
+pub const EDITOR_COMMAND: &str = "editor_command";
 /// Setting key: `"true"` once the first-run dialog was completed.
 pub const FIRST_RUN_DONE: &str = "first_run_done";
 

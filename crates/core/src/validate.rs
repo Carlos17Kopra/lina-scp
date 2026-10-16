@@ -157,6 +157,14 @@ pub fn validate_bookmark_path(path: &str) -> Result<()> {
     Ok(())
 }
 
+/// The "Editor" setting: one plain command line of at most 512 bytes.
+pub fn validate_editor_command(command: &str) -> Result<()> {
+    if command.trim().is_empty() || command.len() > 512 || command.chars().any(char::is_control) {
+        return Err(CoreError::config("Ungültiger Editor-Befehl"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,5 +335,15 @@ mod tests {
             assert!(validate_bookmark_path(bad).is_err(), "{bad:?}");
         }
         assert!(validate_bookmark_path(&format!("/{}", "a".repeat(4096))).is_err());
+    }
+
+    #[test]
+    fn editor_commands_are_plain_single_lines() {
+        assert!(validate_editor_command("code -w").is_ok());
+        assert!(validate_editor_command("gnome-text-editor").is_ok());
+        for bad in ["", "   ", "a\nb", "vim\t-x"] {
+            assert!(validate_editor_command(bad).is_err(), "{bad:?}");
+        }
+        assert!(validate_editor_command(&"a".repeat(513)).is_err());
     }
 }
