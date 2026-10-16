@@ -46,6 +46,7 @@ export const commands = {
 	sftpList: (sessionId: string, path: string) => typedError<Listing, CoreError>(__TAURI_INVOKE("sftp_list", { sessionId, path })),
 	sftpMkdir: (sessionId: string, dir: string, name: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_mkdir", { sessionId, dir, name })),
 	sftpCreateFile: (sessionId: string, dir: string, name: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_create_file", { sessionId, dir, name })),
+	sftpChmod: (sessionId: string, paths: string[], change: ModeChange, recursive: boolean) => typedError<ChmodReport, CoreError>(__TAURI_INVOKE("sftp_chmod", { sessionId, paths, change, recursive })),
 	sftpRename: (sessionId: string, dir: string, from: string, to: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_rename", { sessionId, dir, from, to })),
 	sftpDelete: (sessionId: string, dir: string, names: string[]) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_delete", { sessionId, dir, names })),
 	/**
@@ -57,6 +58,7 @@ export const commands = {
 	localHome: (hostId: string | null) => typedError<string, CoreError>(__TAURI_INVOKE("local_home", { hostId })),
 	localMkdir: (dir: string, name: string) => typedError<null, CoreError>(__TAURI_INVOKE("local_mkdir", { dir, name })),
 	localCreateFile: (dir: string, name: string) => typedError<null, CoreError>(__TAURI_INVOKE("local_create_file", { dir, name })),
+	localChmod: (paths: string[], change: ModeChange, recursive: boolean) => typedError<ChmodReport, CoreError>(__TAURI_INVOKE("local_chmod", { paths, change, recursive })),
 	localRename: (dir: string, from: string, to: string) => typedError<null, CoreError>(__TAURI_INVOKE("local_rename", { dir, from, to })),
 	localDelete: (dir: string, names: string[]) => typedError<null, CoreError>(__TAURI_INVOKE("local_delete", { dir, names })),
 	localTrash: (dir: string, names: string[]) => typedError<null, CoreError>(__TAURI_INVOKE("local_trash", { dir, names })),
@@ -100,6 +102,17 @@ export type Bookmark = {
 };
 
 export type CancelTarget = { type: "job"; id: number } | { type: "batch"; id: number };
+
+export type ChmodFailure = {
+	path: string,
+	error: CoreError,
+};
+
+/**  Outcome of a permission change: how many entries failed and the first of them. */
+export type ChmodReport = {
+	failed: number,
+	first: ChmodFailure | null,
+};
 
 /**  The app picked in the system's "Open with" dialog. */
 export type ChosenApp = {
@@ -327,6 +340,12 @@ export type LoginProfile = {
 	auth: AuthConfig,
 	createdAt: number,
 	updatedAt: number,
+};
+
+/**  Bits to set and to clear (each within `0o777`); bits in neither stay as they are per entry. */
+export type ModeChange = {
+	set: number,
+	clear: number,
 };
 
 /**  Classification of network failures, used by the UI to pick the error screen. */

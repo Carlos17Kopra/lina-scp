@@ -12,7 +12,9 @@ use linascp_core::error::{CoreError, Result};
 use linascp_core::model::Id;
 use linascp_core::session::SessionId;
 use linascp_core::sftp::{Listing, local};
-use linascp_core::transfer::{LocalSide, Side, TransferEvent, TransferOptions, TransferQueue};
+use linascp_core::transfer::{
+    ChmodFailure, LocalSide, ModeChange, Side, TransferEvent, TransferOptions, TransferQueue, chmod,
+};
 use serde::Serialize;
 use tauri::State;
 use tauri::ipc::Channel;
@@ -223,6 +225,24 @@ pub(crate) async fn local_trash_inner(state: &AppState, dir: String, names: Vec<
     let root = state.paths.trash_dir();
     blocking(move || local::trash(&root, &dir, &names)).await
 }
+/// Outcome of a permission change: how many entries failed and the first of them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ChmodReport {
+    pub failed: u32,
+    pub first: Option<ChmodFailure>,
+}
+
+pub(crate) async fn chmod_inner(
+    side: &dyn Side,
+    paths: Vec<String>,
+    change: ModeChange,
+    recursive: bool,
+) -> Result<ChmodReport> {
+    let failures = chmod(side, &paths, change, recursive).await?;
+    Ok(ChmodReport { failed: failures.len() as u32, first: failures.into_iter().next() })
+}
+
 pub(crate) fn local_home_inner(state: &AppState, host_id: Option<Id>) -> Result<String> {
     let start = match host_id {
         Some(id) => find_host(state, id)?.sftp.local_start,
@@ -295,6 +315,18 @@ pub async fn sftp_delete(
     session(&state, session_id)?.delete(&dir, &names).await
 }
 
+#[tauri::command]
+#[specta::specta]
+pub async fn sftp_chmod(
+    state: State<'_, AppState>,
+    session_id: SessionId,
+    paths: Vec<String>,
+    change: ModeChange,
+    recursive: bool,
+) -> Result<ChmodReport> {
+    chmod_inner(&*session(&state, session_id)?, paths, change, recursive).await
+}
+
 /// Disconnects and forgets the session; unknown ids are fine (already closed). Returns the
 /// edited copies that were kept because they hold changes the server does not have.
 #[tauri::command]
@@ -346,6 +378,12 @@ pub async fn local_delete(dir: String, names: Vec<String>) -> Result<()> {
 
 #[tauri::command]
 #[specta::specta]
+pub async fn local_chmod(paths: Vec<String>, change: ModeChange, recursive: bool) -> Result<ChmodReport> {
+    chmod_inner(&LocalSide, paths, change, recursive).await
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn local_trash(state: State<'_, AppState>, dir: String, names: Vec<String>) -> Result<()> {
     local_trash_inner(&state, dir, names).await
 }
@@ -378,6 +416,19 @@ mod tests {
         assert!(state.paths.trash_dir().join("files/y").is_dir());
         let listing = local_list_inner(root.clone()).await.unwrap();
         assert!(!listing.entries.iter().any(|e| e.name == "y"));
+    }
+
+    #[tokio::test]
+    async fn local_chmod_reports_the_count_and_first_failure() {
+        use std::os::unix::fs::PermissionsExt;
+        let (d, _state) = setup();
+        let file = d.path().join("f");
+        std::fs::write(&file, b"").unwrap();
+        let (file, gone) = (file.to_string_lossy().into_owned(), d.path().join("gone").to_string_lossy().into_owned());
+        let change = ModeChange { set: 0o640, clear: 0o137 };
+        let report = local_chmod(vec![gone.clone(), file.clone()], change, false).await.unwrap();
+        assert_eq!((report.failed, report.first.map(|f| f.path)), (1, Some(gone)));
+        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o640);
     }
 
     #[tokio::test]

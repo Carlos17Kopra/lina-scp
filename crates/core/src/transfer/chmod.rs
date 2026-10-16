@@ -27,7 +27,8 @@ impl ModeChange {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
 pub struct ChmodFailure {
     pub path: String,
     pub error: CoreError,
