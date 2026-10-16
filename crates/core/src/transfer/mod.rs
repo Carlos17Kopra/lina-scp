@@ -1,5 +1,6 @@
 //! File transfers between the local file system and an SFTP session (TP3b).
 
+mod chmod;
 mod copy;
 mod local_side;
 mod queue;
@@ -7,6 +8,7 @@ mod side;
 #[cfg(test)]
 pub(crate) mod test_support;
 
+pub use chmod::{ChmodFailure, ModeChange, chmod};
 pub use local_side::LocalSide;
 pub use queue::{TransferEmit, TransferQueue};
 pub use side::{Child, Node, NodeKind, Reader, Side, Writer};
@@ -138,6 +140,8 @@ pub struct TransferOptions {
     pub parallel: usize,
     /// Host setting "Rechte beim Upload".
     pub upload_mode: Option<u32>,
+    /// Bytes per second for the whole session; `None` = unlimited.
+    pub bandwidth: Option<u64>,
 }
 
 impl TransferOptions {
@@ -149,7 +153,8 @@ impl TransferOptions {
             .map(str::trim)
             .filter(|m| !m.is_empty() && m.len() <= 4 && m.chars().all(|c| ('0'..='7').contains(&c)))
             .and_then(|m| u32::from_str_radix(m, 8).ok());
-        Self { parallel: (settings.parallel as usize).max(1), upload_mode }
+        let bandwidth = settings.bandwidth_limit_kbps.filter(|&k| k > 0).map(|k| u64::from(k) * 1024);
+        Self { parallel: (settings.parallel as usize).max(1), upload_mode, bandwidth }
     }
 
     pub fn file_mode(&self, direction: Direction, source_mode: u32) -> u32 {
@@ -175,23 +180,23 @@ mod tests {
 
     #[test]
     fn upload_mode_applies_to_files_and_adds_x_for_dirs() {
-        let o = TransferOptions { parallel: 4, upload_mode: Some(0o644) };
+        let o = TransferOptions { parallel: 4, upload_mode: Some(0o644), bandwidth: None };
         assert_eq!(o.file_mode(Direction::Upload, 0o100600), 0o644);
         assert_eq!(o.dir_mode(Direction::Upload, 0o40700), 0o755);
-        let o = TransferOptions { parallel: 4, upload_mode: Some(0o640) };
+        let o = TransferOptions { parallel: 4, upload_mode: Some(0o640), bandwidth: None };
         assert_eq!(o.dir_mode(Direction::Upload, 0o40700), 0o750);
     }
 
     #[test]
     fn without_upload_mode_the_local_mode_is_kept() {
-        let o = TransferOptions { parallel: 4, upload_mode: None };
+        let o = TransferOptions { parallel: 4, upload_mode: None, bandwidth: None };
         assert_eq!(o.file_mode(Direction::Upload, 0o100751), 0o751);
         assert_eq!(o.dir_mode(Direction::Upload, 0o40711), 0o711);
     }
 
     #[test]
     fn downloads_keep_the_remote_mode_but_stay_usable() {
-        let o = TransferOptions { parallel: 4, upload_mode: Some(0o666) };
+        let o = TransferOptions { parallel: 4, upload_mode: Some(0o666), bandwidth: None };
         assert_eq!(o.file_mode(Direction::Download, 0o100600), 0o600);
         assert_eq!(o.file_mode(Direction::Download, 0o100444), 0o644);
         assert_eq!(o.dir_mode(Direction::Download, 0o40500), 0o700);
@@ -200,12 +205,28 @@ mod tests {
     #[test]
     fn options_from_settings_fall_back_on_invalid_values() {
         let mut s = SftpSettings { parallel: 3, upload_perms: Some("0640".into()), ..SftpSettings::default() };
-        assert_eq!(TransferOptions::from_settings(&s), TransferOptions { parallel: 3, upload_mode: Some(0o640) });
+        assert_eq!(
+            TransferOptions::from_settings(&s),
+            TransferOptions { parallel: 3, upload_mode: Some(0o640), bandwidth: None }
+        );
         s.parallel = 0;
         s.upload_perms = Some("rwx".into());
-        assert_eq!(TransferOptions::from_settings(&s), TransferOptions { parallel: 1, upload_mode: None });
+        assert_eq!(
+            TransferOptions::from_settings(&s),
+            TransferOptions { parallel: 1, upload_mode: None, bandwidth: None }
+        );
         s.upload_perms = Some("  ".into());
         assert_eq!(TransferOptions::from_settings(&s).upload_mode, None);
+    }
+
+    #[test]
+    fn bandwidth_is_kib_per_second_and_zero_means_unlimited() {
+        let mut s = SftpSettings { bandwidth_limit_kbps: Some(512), ..SftpSettings::default() };
+        assert_eq!(TransferOptions::from_settings(&s).bandwidth, Some(512 * 1024));
+        s.bandwidth_limit_kbps = Some(0);
+        assert_eq!(TransferOptions::from_settings(&s).bandwidth, None);
+        s.bandwidth_limit_kbps = None;
+        assert_eq!(TransferOptions::from_settings(&s).bandwidth, None);
     }
 
     #[test]

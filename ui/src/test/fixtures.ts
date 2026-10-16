@@ -24,7 +24,6 @@ export function makeHost(overrides: Partial<Host> = {}): Host {
     sftp: {
       remoteStart: null,
       localStart: null,
-      transferMode: "binary",
       parallel: 4,
       uploadPerms: null,
       bandwidthLimitKbps: null,

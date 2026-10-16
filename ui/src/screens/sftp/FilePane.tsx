@@ -10,7 +10,7 @@ import { crumbs, formatMode, formatMtime, formatSize, isDirLike, isFileLike, joi
 import styles from "./FilePane.module.css";
 import { moveCursor, rangeBetween, targets, typeAhead } from "./paneKeys";
 
-export type PaneCommand = "newFolder" | "newFile" | "rename" | "delete" | "deletePermanent";
+export type PaneCommand = "newFolder" | "newFile" | "rename" | "delete" | "deletePermanent" | "properties";
 
 const COLUMNS: SortKey[] = ["name", "size", "mtime", "mode", "owner"];
 const PAGE = 15;
@@ -127,6 +127,7 @@ export function FilePane({ tabId, side, disabled = false, onCommand, onTransfer,
       },
       F7: () => command("newFolder"),
       F8: () => command("delete"),
+      F9: () => command("properties"),
       Delete: () => command(shiftKey && side === "local" ? "deletePermanent" : "delete"),
     };
     const run = action[key];
@@ -299,6 +300,7 @@ export function FilePane({ tabId, side, disabled = false, onCommand, onTransfer,
             if (chosen.length) onTransfer(chosen, other, null);
           })}
           {menuItem(t.sftp.rename, () => command("rename"))}
+          {menuItem(t.sftp.permissions.menu, () => command("properties"))}
           {menuItem(t.sftp.delete, () => command("delete"))}
           {menuItem(t.sftp.newFolder, () => command("newFolder"))}
           {menuItem(t.sftp.newFile, () => command("newFile"))}

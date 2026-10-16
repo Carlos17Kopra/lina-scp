@@ -6,10 +6,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use futures::{StreamExt, stream};
-use tokio::sync::{Notify, Semaphore};
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
-use super::copy::{IN_FLIGHT, copy_range};
+use super::copy::{IN_FLIGHT, Limits, copy_range};
 use super::side::{Node, NodeKind, Side};
 use super::{
     BatchId, CancelTarget, Decision, Direction, EnqueueOptions, FileStamp, Job, JobId, JobKind, JobNote, JobState,
@@ -68,8 +68,8 @@ struct Inner {
     idle: Notify,
     /// Signalled when a batch may have become final, and on close (`wait_batch`).
     settled: Notify,
-    /// Chunk requests in flight across all files of the session.
-    in_flight: Semaphore,
+    /// Chunk requests in flight and the bandwidth limit, across all files of the session.
+    limits: Limits,
 }
 
 #[derive(Clone)]
@@ -165,7 +165,7 @@ impl TransferQueue {
                 emit,
                 idle: Notify::new(),
                 settled: Notify::new(),
-                in_flight: Semaphore::new(IN_FLIGHT),
+                limits: Limits::new(IN_FLIGHT, options.bandwidth),
             }),
         }
     }
@@ -836,7 +836,7 @@ async fn run_file(
             }
         };
         let mut progress = |done| inner.progress(job.id, done);
-        let copied = copy_range(&*reader, &*writer, resume, node.size, &inner.in_flight, cancel, &mut progress).await;
+        let copied = copy_range(&*reader, &*writer, resume, node.size, &inner.limits, cancel, &mut progress).await;
         reader.close().await;
         let closed = writer.close().await;
         let done = copied?;
@@ -888,7 +888,7 @@ mod tests {
     }
 
     fn opts() -> TransferOptions {
-        TransferOptions { parallel: 4, upload_mode: None }
+        TransferOptions { parallel: 4, upload_mode: None, bandwidth: None }
     }
 
     #[tokio::test]
@@ -921,7 +921,7 @@ mod tests {
 
     #[tokio::test]
     async fn downloads_a_tree_and_merges_into_an_existing_dir() {
-        let e = env(TransferOptions { parallel: 2, upload_mode: Some(0o600) });
+        let e = env(TransferOptions { parallel: 2, upload_mode: Some(0o600), bandwidth: None });
         std::fs::create_dir_all(e.remote.join("site/css")).unwrap();
         std::fs::create_dir_all(e.remote.join("site/empty")).unwrap();
         std::fs::write(e.remote.join("site/index.html"), b"<h1>").unwrap();
@@ -940,7 +940,7 @@ mod tests {
 
     #[tokio::test]
     async fn upload_mode_sets_files_and_created_dirs() {
-        let e = env(TransferOptions { parallel: 4, upload_mode: Some(0o644) });
+        let e = env(TransferOptions { parallel: 4, upload_mode: Some(0o644), bandwidth: None });
         std::fs::create_dir_all(e.local.join("d")).unwrap();
         std::fs::write(e.local.join("d/f"), b"x").unwrap();
         std::fs::set_permissions(e.local.join("d/f"), std::fs::Permissions::from_mode(0o600)).unwrap();
@@ -976,7 +976,7 @@ mod tests {
 
     #[tokio::test]
     async fn at_most_parallel_files_run_at_once() {
-        let e = env(TransferOptions { parallel: 2, upload_mode: None });
+        let e = env(TransferOptions { parallel: 2, upload_mode: None, bandwidth: None });
         let sources: Vec<String> = (0..6)
             .map(|i| {
                 let f = e.local.join(format!("f{i}"));
@@ -1094,7 +1094,7 @@ mod tests {
     /// One file at a time, so `a` reaches its conflict before `b` (with more workers, conflicts
     /// open in the order the workers find them).
     fn serial() -> TransferOptions {
-        TransferOptions { parallel: 1, upload_mode: None }
+        TransferOptions { parallel: 1, upload_mode: None, bandwidth: None }
     }
 
     /// Two local files `a`, `b` that both exist on the remote with older content.
@@ -1204,7 +1204,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancelling_a_running_job_removes_its_part_and_keeps_finished_files() {
-        let e = env(TransferOptions { parallel: 1, upload_mode: None });
+        let e = env(TransferOptions { parallel: 1, upload_mode: None, bandwidth: None });
         std::fs::write(e.local.join("small"), b"s").unwrap();
         std::fs::write(e.local.join("big"), vec![0u8; 64 * 1024 * 1024]).unwrap();
         e.queue
@@ -1263,7 +1263,7 @@ mod tests {
 
     #[tokio::test]
     async fn close_cancels_and_removes_parts_without_events() {
-        let e = env(TransferOptions { parallel: 1, upload_mode: None });
+        let e = env(TransferOptions { parallel: 1, upload_mode: None, bandwidth: None });
         std::fs::write(e.local.join("big"), vec![0u8; 64 * 1024 * 1024]).unwrap();
         e.queue.enqueue(Direction::Upload, vec![p(&e.local.join("big"))], p(&e.remote)).await.unwrap();
         e.rec.wait("running", |r| r.job_by_rel("big").state == JobState::Running).await;
@@ -1375,7 +1375,7 @@ mod tests {
 
     #[tokio::test]
     async fn queued_jobs_wait_while_disconnected_and_cancel_removes_paused_parts() {
-        let (e, faulty) = faulty_env(TransferOptions { parallel: 1, upload_mode: None });
+        let (e, faulty) = faulty_env(TransferOptions { parallel: 1, upload_mode: None, bandwidth: None });
         std::fs::write(e.local.join("a"), vec![1u8; 4 * 1024 * 1024]).unwrap();
         std::fs::write(e.local.join("b"), b"b").unwrap();
         faulty.fail_writes_after(1024 * 1024);
@@ -1453,7 +1453,7 @@ mod tests {
 
         #[tokio::test]
         async fn enqueue_with_file_mode_sets_exactly_that_mode() {
-            let e = env(TransferOptions { parallel: 4, upload_mode: Some(0o600) });
+            let e = env(TransferOptions { parallel: 4, upload_mode: Some(0o600), bandwidth: None });
             std::fs::write(e.local.join("a"), b"x").unwrap();
             let options = EnqueueOptions { decision: None, file_mode: Some(0o640) };
             let batch = e

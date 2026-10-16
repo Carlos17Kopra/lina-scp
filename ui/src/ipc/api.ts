@@ -7,6 +7,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { commands } from "./bindings";
 import type {
   Bookmark,
+  ChmodReport,
   ChosenApp,
   CancelTarget,
   Decision,
@@ -21,6 +22,7 @@ import type {
   ImportReport,
   Listing,
   LoginProfile,
+  ModeChange,
   OpenApp,
   ProfileWithUsage,
   PromptAnswer,
@@ -57,6 +59,8 @@ export type {
   ConnectEvent,
   CoreError,
   Entry,
+  ChmodFailure,
+  ChmodReport,
   EntryKind,
   EnvVar,
   ExportReport,
@@ -76,6 +80,7 @@ export type {
   LinkTarget,
   Listing,
   LoginProfile,
+  ModeChange,
   NetworkKind,
   PortForward,
   ProfileWithUsage,
@@ -95,7 +100,6 @@ export type {
   Step,
   TerminalRenderer,
   Theme,
-  TransferMode,
 } from "./bindings";
 
 /** UUID string (hosts, profiles, groups, connect attempts). */
@@ -259,6 +263,9 @@ export function sftpDelete(sessionId: SessionId, dir: string, names: string[]): 
 export function sftpClose(sessionId: SessionId): Promise<string[]> {
   return unwrap(commands.sftpClose(sessionId));
 }
+export function sftpChmod(sessionId: SessionId, paths: string[], change: ModeChange, recursive: boolean): Promise<ChmodReport> {
+  return unwrap(commands.sftpChmod(sessionId, paths, change, recursive));
+}
 export function sftpCreateFile(sessionId: SessionId, dir: string, name: string): Promise<void> {
   return unwrapVoid(commands.sftpCreateFile(sessionId, dir, name));
 }
@@ -293,6 +300,9 @@ export function localMkdir(dir: string, name: string): Promise<void> {
 }
 export function localCreateFile(dir: string, name: string): Promise<void> {
   return unwrapVoid(commands.localCreateFile(dir, name));
+}
+export function localChmod(paths: string[], change: ModeChange, recursive: boolean): Promise<ChmodReport> {
+  return unwrap(commands.localChmod(paths, change, recursive));
 }
 export function localRename(dir: string, from: string, to: string): Promise<void> {
   return unwrapVoid(commands.localRename(dir, from, to));

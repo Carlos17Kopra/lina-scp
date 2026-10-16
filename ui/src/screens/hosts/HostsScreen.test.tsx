@@ -19,7 +19,7 @@ const web = makeHost({
   tags: ["nginx"],
   auth: { kind: "profile", profileId: deploy.id },
   jumpHostId: "h-bastion",
-  sftp: { remoteStart: "/var/www", localStart: null, transferMode: "binary", parallel: 4, uploadPerms: null, bandwidthLimitKbps: null, sftpServerCmd: null },
+  sftp: { remoteStart: "/var/www", localStart: null, parallel: 4, uploadPerms: null, bandwidthLimitKbps: null, sftpServerCmd: null },
   forwards: [{ id: "f1", kind: "local", bind: "8080", target: "localhost:80", autostart: true }],
 });
 const bastion = makeHost({ id: "h-bastion", name: "bastion", address: "bastion.example.net", port: 2222, user: "admin", protocolSftp: false, source: "sshConfig", groupId: "g-infra" });

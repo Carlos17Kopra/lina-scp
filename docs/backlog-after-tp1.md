@@ -110,3 +110,11 @@ fixed before the merge are not listed.
 - Local rename reports every error at the new path, also a vanished source.
 - Cancelling a new SFTP connect started from the SFTP picker returns to Hosts instead of SFTP.
 - Local path field: no `~` expansion; relative paths resolve against the process cwd.
+
+## TP4a review (deferred minors)
+
+- `chmod` on a remote entry without `permissions` in its attributes starts from mode 0: the "mixed" bits are cleared instead of kept.
+- The SFTP server command uses `exec(false, …)`: a refused exec only shows as the generic "sudo ohne -n oder NOPASSWD?" init error; a server-side `ForceCommand internal-sftp` silently replaces the command.
+- `PermissionsDialog` keeps its initial state after a partially failed apply while the pane reloads underneath.
+- An invalid `ModeChange` mask is `CoreError::Config`, not a dedicated validation error.
+- A selected symlink to a directory never offers "rekursiv" (unlike `chmod -R`, which follows links named on the command line).

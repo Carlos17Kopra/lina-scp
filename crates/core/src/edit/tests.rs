@@ -77,7 +77,7 @@ fn env_with(remote: Arc<dyn Side>) -> Env {
     let transfers = Recorder::default();
     let queue = TransferQueue::new(
         Arc::new(LocalSide),
-        TransferOptions { parallel: 4, upload_mode: Some(0o600) },
+        TransferOptions { parallel: 4, upload_mode: Some(0o600), bandwidth: None },
         transfers.emit(),
     );
     queue.set_remote(Some(remote));

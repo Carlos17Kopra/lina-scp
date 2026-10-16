@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::{EnvVar, SftpSettings, Snippet, TransferMode};
+use crate::model::{EnvVar, SftpSettings, Snippet};
 
 fn full_host() -> Host {
     let mut h = Host::new("web-1", "10.0.0.5");
@@ -25,7 +25,6 @@ fn full_host() -> Host {
     h.sftp = SftpSettings {
         remote_start: Some("/var/www".into()),
         local_start: None,
-        transfer_mode: TransferMode::Auto,
         parallel: 8,
         upload_perms: Some("0644".into()),
         bandwidth_limit_kbps: Some(512),

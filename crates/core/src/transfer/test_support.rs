@@ -76,6 +76,7 @@ pub(crate) struct FaultySide {
     /// Names a hostile server adds to every listing.
     fake_children: Mutex<Vec<String>>,
     denied: Mutex<HashSet<String>>,
+    mode_denied: Mutex<HashSet<String>>,
     /// Slows `rename_over` down (the last step of every file), in milliseconds.
     rename_delay_ms: AtomicU64,
     /// Slows `open_read` down, in milliseconds.
@@ -102,6 +103,9 @@ impl FaultySide {
     }
     pub(crate) fn deny_read(&self, path: &str) {
         self.denied.lock().unwrap().insert(path.to_string());
+    }
+    pub(crate) fn deny_set_mode(&self, path: &str) {
+        self.mode_denied.lock().unwrap().insert(path.to_string());
     }
     pub(crate) fn delay_reads(&self, ms: u64) {
         self.read_delay_ms.store(ms, Ordering::SeqCst);
@@ -194,6 +198,9 @@ impl Side for FaultySide {
         }))
     }
     async fn set_mode(&self, path: &str, mode: u32) -> Result<()> {
+        if self.mode_denied.lock().unwrap().contains(path) {
+            return Err(CoreError::fs(FsKind::PermissionDenied, path, "denied"));
+        }
         LocalSide.set_mode(path, mode).await
     }
     async fn set_mtime(&self, path: &str, mtime: i64) -> Result<()> {

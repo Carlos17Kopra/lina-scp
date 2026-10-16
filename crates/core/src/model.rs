@@ -69,20 +69,11 @@ pub struct EnvVar {
     pub value: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub enum TransferMode {
-    Binary,
-    Text,
-    Auto,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SftpSettings {
     pub remote_start: Option<String>,
     pub local_start: Option<String>,
-    pub transfer_mode: TransferMode,
     pub parallel: u32,
     pub upload_perms: Option<String>,
     pub bandwidth_limit_kbps: Option<u32>,
@@ -94,7 +85,6 @@ impl Default for SftpSettings {
         Self {
             remote_start: None,
             local_start: None,
-            transfer_mode: TransferMode::Binary,
             parallel: 4,
             upload_perms: None,
             bandwidth_limit_kbps: None,
@@ -286,7 +276,6 @@ mod tests {
     #[test]
     fn sftp_settings_default() {
         let s = SftpSettings::default();
-        assert_eq!(s.transfer_mode, TransferMode::Binary);
         assert_eq!(s.parallel, 4);
         assert!(s.remote_start.is_none() && s.bandwidth_limit_kbps.is_none());
     }
@@ -310,8 +299,12 @@ mod tests {
         let v = serde_json::to_value(&h).unwrap();
         assert_eq!(v["keepaliveS"], json!(30));
         assert_eq!(v["source"], json!("linascp"));
-        assert_eq!(v["sftp"]["transferMode"], json!("binary"));
-        let back: Host = serde_json::from_value(v).unwrap();
+        assert!(v["sftp"].get("transferMode").is_none());
+        let back: Host = serde_json::from_value(v.clone()).unwrap();
         assert_eq!(back, h);
+        // Rows and exports from before TP4a still carry the dropped transfer mode.
+        let mut old = v;
+        old["sftp"]["transferMode"] = json!("text");
+        assert_eq!(serde_json::from_value::<Host>(old).unwrap(), h);
     }
 }

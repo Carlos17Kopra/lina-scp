@@ -1,0 +1,49 @@
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0 0 16px;
+  font-size: 13px;
+}
+
+.facts dt {
+  color: var(--muted);
+}
+
+.facts dd {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.grid {
+  border-collapse: collapse;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.grid th {
+  padding: 4px 12px 4px 0;
+  color: var(--text2);
+  font-weight: 500;
+  text-align: left;
+}
+
+.grid td {
+  padding: 4px 12px;
+  text-align: center;
+}
+
+.grid input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.error {
+  margin: 12px 0 0;
+  color: var(--red-text);
+  font-size: 13px;
+}

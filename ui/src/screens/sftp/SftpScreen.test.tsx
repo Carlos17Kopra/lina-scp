@@ -199,6 +199,22 @@ describe("SftpScreen", () => {
     expect(api.sftpList).toHaveBeenCalledWith("s1", "/srv");
   });
 
+  it("changes permissions through the properties dialog and reloads", async () => {
+    vi.mocked(api.sftpChmod).mockResolvedValue({ failed: 0, first: null });
+    const entries = [{ name: "a.sh", kind: { type: "file" as const }, size: 1, mtime: 0, mode: 0o100644, owner: "u", nameLossy: false }];
+    vi.mocked(api.sftpList).mockResolvedValue({ path: "/srv", entries });
+    useSftpStore.getState().openTab("t1", "h1", { sessionId: "s1", info: makeSessionInfo(), version: 3, listing: { path: "/srv", entries } });
+    render(<SftpScreen />);
+    fireEvent.contextMenu(within(screen.getByRole("grid", { name: "Remote" })).getByText("a.sh"));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Eigenschaften …" }));
+    const dialog = screen.getByRole("dialog", { name: "Eigenschaften" });
+    await userEvent.click(within(dialog).getByRole("checkbox", { name: "Besitzer: Ausführen" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Übernehmen" }));
+    expect(api.sftpChmod).toHaveBeenCalledWith("s1", ["/srv/a.sh"], { set: 0o100, clear: 0 }, false);
+    await vi.waitFor(() => expect(screen.queryByRole("dialog", { name: "Eigenschaften" })).not.toBeInTheDocument());
+    expect(api.sftpList).toHaveBeenCalledWith("s1", "/srv");
+  });
+
   it("the toolbar edit button is off on the remote side while not connected", () => {
     openTab();
     useSftpStore.getState().onEvent("t1", "s1", { kind: "lost", error: { type: "cancelled" } });

@@ -362,6 +362,7 @@ fn node_of(attrs: &FileAttributes, kind: NodeKind) -> Node {
         size: attrs.size.unwrap_or(0),
         mtime: attrs.mtime.map(i64::from),
         mode: attrs.permissions.unwrap_or(0),
+        link: false,
     }
 }
 
@@ -390,13 +391,14 @@ impl Side for SftpSession {
             };
             return Ok(Some(node_of(&attrs, kind)));
         }
-        Ok(Some(match self.raw.stat(path).await {
+        let target = match self.raw.stat(path).await {
             Ok(t) if t.attrs.is_dir() => node_of(&t.attrs, NodeKind::DirLink),
             Ok(t) if t.attrs.is_regular() => node_of(&t.attrs, NodeKind::File),
             Ok(t) => node_of(&t.attrs, NodeKind::Other),
             Err(SftpError::Status(_)) => node_of(&attrs, NodeKind::BrokenLink),
             Err(e) => return self.check(Err(e), path),
-        }))
+        };
+        Ok(Some(Node { link: true, ..target }))
     }
 
     async fn children(&self, path: &str) -> Result<Vec<Child>> {

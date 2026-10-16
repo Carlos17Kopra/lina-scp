@@ -1,15 +1,8 @@
-import { cx, Select, TextField } from "../../components";
+import { cx, TextField } from "../../components";
 import { t } from "../../i18n/de";
-import type { TransferMode } from "../../ipc/api";
 import type { SftpDraft } from "./drafts";
 import styles from "./Editor.module.css";
 import type { HostFormProps } from "./form";
-
-const MODE_OPTIONS: ReadonlyArray<{ value: TransferMode; label: string }> = [
-  { value: "auto", label: t.editor.transferModes.auto },
-  { value: "binary", label: t.editor.transferModes.binary },
-  { value: "text", label: t.editor.transferModes.text },
-];
 
 /** Stored with the host; used by the SFTP file manager from TP3 on. */
 export function SftpTab({ draft, edit, fieldError }: HostFormProps) {
@@ -30,12 +23,6 @@ export function SftpTab({ draft, edit, fieldError }: HostFormProps) {
         spellCheck={false}
         value={draft.sftp.localStart}
         onChange={(localStart) => set({ localStart })}
-      />
-      <Select
-        label={t.editor.transferMode}
-        value={draft.sftp.transferMode}
-        options={MODE_OPTIONS}
-        onChange={(transferMode) => set({ transferMode })}
       />
       <TextField
         label={t.editor.parallel}

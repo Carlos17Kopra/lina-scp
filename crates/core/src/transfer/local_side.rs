@@ -19,7 +19,7 @@ async fn run<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) 
 }
 
 fn node(meta: &std::fs::Metadata, kind: NodeKind) -> Node {
-    Node { kind, size: meta.len(), mtime: Some(meta.mtime()), mode: meta.mode() }
+    Node { kind, size: meta.len(), mtime: Some(meta.mtime()), mode: meta.mode(), link: false }
 }
 
 fn stat_sync(path: &str) -> Result<Option<Node>> {
@@ -30,12 +30,13 @@ fn stat_sync(path: &str) -> Result<Option<Node>> {
     };
     let ft = meta.file_type();
     Ok(Some(if ft.is_symlink() {
-        match std::fs::metadata(path) {
+        let target = match std::fs::metadata(path) {
             Ok(target) if target.is_dir() => node(&target, NodeKind::DirLink),
             Ok(target) if target.is_file() => node(&target, NodeKind::File),
             Ok(target) => node(&target, NodeKind::Other),
             Err(_) => node(&meta, NodeKind::BrokenLink),
-        }
+        };
+        Node { link: true, ..target }
     } else if ft.is_dir() {
         node(&meta, NodeKind::Dir)
     } else if ft.is_file() {
@@ -195,7 +196,8 @@ mod tests {
         assert_eq!((f.kind, f.size), (NodeKind::File, 3));
         assert!(f.mtime.is_some());
         assert_eq!(side.stat(&p(&root.join("dir"))).await.unwrap().unwrap().kind, NodeKind::Dir);
-        assert_eq!(side.stat(&p(&root.join("lf"))).await.unwrap().unwrap().kind, NodeKind::File);
+        let lf = side.stat(&p(&root.join("lf"))).await.unwrap().unwrap();
+        assert_eq!((lf.kind, lf.link, f.link), (NodeKind::File, true, false));
         assert_eq!(side.stat(&p(&root.join("ld"))).await.unwrap().unwrap().kind, NodeKind::DirLink);
         assert_eq!(side.stat(&p(&root.join("lb"))).await.unwrap().unwrap().kind, NodeKind::BrokenLink);
         assert!(side.stat(&p(&root.join("none"))).await.unwrap().is_none());
