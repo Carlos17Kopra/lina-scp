@@ -46,6 +46,7 @@ struct Batch {
     /// "Für alle weiteren Konflikte übernehmen".
     default: Option<Decision>,
     file_mode: Option<u32>,
+    retryable: bool,
     done_sent: bool,
 }
 
@@ -249,6 +250,7 @@ impl TransferQueue {
                 target_dir: target_dir.clone(),
                 default: options.decision,
                 file_mode: options.file_mode.map(|m| m & 0o7777),
+                retryable: options == EnqueueOptions::default(),
                 done_sent: false,
             },
         );
@@ -334,6 +336,9 @@ impl TransferQueue {
         let index = st.jobs.iter().position(|e| e.job.id == id).ok_or_else(|| unknown("job", id))?;
         if st.jobs[index].job.state != JobState::Failed {
             return Err(CoreError::internal(format!("job {id} has not failed")));
+        }
+        if !st.jobs[index].job.retryable {
+            return Err(CoreError::internal(format!("job {id} cannot be retried")));
         }
         let mut entry = st.jobs.remove(index);
         entry.job.state = JobState::Queued;
@@ -429,6 +434,7 @@ impl Inner {
             state: JobState::Queued,
             note: None,
             error: None,
+            retryable: st.batches.get(&batch_id).is_none_or(|b| b.retryable),
         };
         match node {
             Ok(Some(node)) => match classify(&node) {
@@ -1495,6 +1501,29 @@ mod tests {
             assert!(e.queue.remote().is_some());
             e.queue.set_remote(None);
             assert!(e.queue.remote().is_none());
+        }
+
+        #[tokio::test]
+        async fn edit_batches_are_not_retryable() {
+            let e = env(opts());
+            for name in ["plain", "edit"] {
+                std::fs::write(e.local.join(name), b"x").unwrap();
+                std::fs::set_permissions(e.local.join(name), std::fs::Permissions::from_mode(0o000)).unwrap();
+            }
+            let plain =
+                e.queue.enqueue(Direction::Upload, vec![p(&e.local.join("plain"))], p(&e.remote)).await.unwrap();
+            let options = EnqueueOptions { decision: Some(Decision::Overwrite), file_mode: Some(0o644) };
+            let edit = e
+                .queue
+                .enqueue_with(Direction::Upload, vec![p(&e.local.join("edit"))], p(&e.remote), options)
+                .await
+                .unwrap();
+            let plain = e.queue.wait_batch(plain).await.remove(0);
+            let edit = e.queue.wait_batch(edit).await.remove(0);
+            assert_eq!((plain.state, plain.retryable), (JobState::Failed, true));
+            assert_eq!((edit.state, edit.retryable), (JobState::Failed, false));
+            assert!(e.queue.retry(edit.id).is_err());
+            assert!(e.queue.retry(plain.id).is_ok());
         }
     }
 }

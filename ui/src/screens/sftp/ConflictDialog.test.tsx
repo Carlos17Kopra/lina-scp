@@ -12,7 +12,7 @@ beforeEach(() => {
   useTransfersStore.setState(useTransfersStore.getInitialState(), true);
   useSftpStore.setState({ tabs: [{ id: "t", sessionId: "s1" } as never] });
   const s = useTransfersStore.getState();
-  s.onEvent("t", { kind: "job", job: { id: 5, batchId: 2, direction: "upload", source: "/l/site.sql.gz", target: "/srv/site.sql.gz", rel: "site.sql.gz", kind: "file", size: 18_400_000, done: 0, state: "waitingDecision", note: null, error: null } });
+  s.onEvent("t", { kind: "job", job: { id: 5, batchId: 2, direction: "upload", source: "/l/site.sql.gz", target: "/srv/site.sql.gz", rel: "site.sql.gz", kind: "file", size: 18_400_000, done: 0, state: "waitingDecision", note: null, error: null, retryable: true } });
   s.onEvent("t", { kind: "conflict", jobId: 5, source: { size: 18_400_000, mtime: 1_791_000_000 }, target: { size: 17_900_000, mtime: 1_790_000_000 } });
 });
 

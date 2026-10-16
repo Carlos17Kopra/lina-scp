@@ -16,6 +16,11 @@ export function BookmarkMenu({ bookmarkKey, path, onNavigate }: { bookmarkKey: B
   const marked = bookmarks.some((b) => b.path === path);
   const store = useBookmarksStore.getState;
 
+  // The button shows whether the current folder is bookmarked, and Ctrl+B toggles it: load up front.
+  useEffect(() => {
+    void useBookmarksStore.getState().load(bookmarkKey).catch(() => undefined);
+  }, [bookmarkKey]);
+
   useEffect(() => {
     if (open) menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
   }, [open]);

@@ -99,7 +99,7 @@ export function TransferPanel({ tabId }: { tabId: string }) {
                 <span className={styles.state}>{stateText(job)}</span>
                 {viewOf(job.state) === "queue" ? (
                   <IconButton size="sm" icon={X} label={texts.cancel(job.rel)} onClick={() => store().cancel(tabId, { type: "job", id: job.id })} />
-                ) : job.state === "failed" ? (
+                ) : job.state === "failed" && job.retryable ? (
                   <IconButton size="sm" icon={RotateCcw} label={texts.retry(job.rel)} onClick={() => store().retry(tabId, job.id)} />
                 ) : <span />}
               </div>

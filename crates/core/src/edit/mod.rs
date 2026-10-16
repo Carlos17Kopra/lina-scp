@@ -112,8 +112,12 @@ struct FileState {
 }
 
 impl FileState {
+    /// A downloaded copy that is missing counts as dirty: editors move it away while saving.
     fn dirty(&self) -> bool {
-        local_stamp(&self.copy).is_some_and(|now| Some(now) != self.synced)
+        match local_stamp(&self.copy) {
+            Some(now) => Some(now) != self.synced,
+            None => self.synced.is_some(),
+        }
     }
 }
 
@@ -155,11 +159,25 @@ impl EditManager {
         if node.kind != NodeKind::File {
             return Err(CoreError::fs(FsKind::Other, &real, "not a file"));
         }
-        let existing =
-            inner.lock().iter().find(|(_, f)| f.file.remote_path == real).map(|(id, f)| (*id, f.copy.clone()));
-        if let Some((id, copy)) = existing {
-            inner.launcher.open(&copy)?;
-            return Ok(id);
+        let existing = inner
+            .lock()
+            .iter()
+            .find(|(_, f)| f.file.remote_path == real)
+            .map(|(id, f)| (*id, f.copy.clone(), f.file.state, f.synced.is_some()));
+        let mut reuse = None;
+        match existing {
+            // The first `open` launches the editor once the copy exists.
+            Some((id, _, EditState::Downloading, _)) => return Ok(id),
+            // The download failed: start over under the same id.
+            Some((id, _, EditState::Failed, false)) => {
+                inner.lock().remove(&id);
+                reuse = Some(id);
+            }
+            Some((id, copy, _, _)) => {
+                inner.launcher.open(&copy)?;
+                return Ok(id);
+            }
+            None => {}
         }
         let name = real.rsplit('/').next().unwrap_or_default().to_string();
         validate_file_name(&name)?;
@@ -167,7 +185,7 @@ impl EditManager {
         let dir = inner.root.join(uuid::Uuid::new_v4().to_string());
         make_private_dir(&dir)?;
         let copy = dir.join(&name);
-        let id = inner.next_id.fetch_add(1, Ordering::SeqCst);
+        let id = reuse.unwrap_or_else(|| inner.next_id.fetch_add(1, Ordering::SeqCst));
         let file =
             EditFile { id, name, remote_path: real.clone(), state: EditState::Downloading, dirty: false, error: None };
         (inner.emit)(EditEvent::File { file: file.clone() });

@@ -133,7 +133,7 @@ describe("SftpScreen", () => {
 
   it("asks before closing a tab with open transfers", async () => {
     openTab();
-    useTransfersStore.getState().onEvent("t1", { kind: "job", job: { id: 1, batchId: 1, direction: "upload", source: "/a", target: "/b", rel: "a", kind: "file", size: 1, done: 0, state: "running", note: null, error: null } });
+    useTransfersStore.getState().onEvent("t1", { kind: "job", job: { id: 1, batchId: 1, direction: "upload", source: "/a", target: "/b", rel: "a", kind: "file", size: 1, done: 0, state: "running", note: null, error: null, retryable: true } });
     render(<SftpScreen />);
     await userEvent.click(screen.getByRole("button", { name: "web schließen" }));
     expect(screen.getByRole("alertdialog", { name: "Übertragungen offen" })).toBeInTheDocument();
@@ -144,7 +144,7 @@ describe("SftpScreen", () => {
 
   it("marks another tab that waits for a conflict decision and shows the dialog only in its own tab", () => {
     openTwoTabs();
-    useTransfersStore.getState().onEvent("t2", { kind: "job", job: { id: 1, batchId: 1, direction: "upload", source: "/a", target: "/srv/a", rel: "a", kind: "file", size: 1, done: 0, state: "waitingDecision", note: null, error: null } });
+    useTransfersStore.getState().onEvent("t2", { kind: "job", job: { id: 1, batchId: 1, direction: "upload", source: "/a", target: "/srv/a", rel: "a", kind: "file", size: 1, done: 0, state: "waitingDecision", note: null, error: null, retryable: true } });
     useTransfersStore.getState().onEvent("t2", { kind: "conflict", jobId: 1, source: { size: 1, mtime: 1 }, target: { size: 1, mtime: 1 } });
     render(<SftpScreen />);
     expect(screen.getByRole("tab", { name: /Wartet auf eine Entscheidung/ })).toBeInTheDocument();

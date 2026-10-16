@@ -277,6 +277,11 @@ export type Job = {
 	state: JobState,
 	note: JobNote | null,
 	error: CoreError | null,
+	/**
+	 *  `false` for batches with `EnqueueOptions` (editing): retrying them would skip the edit's
+	 *  check for changes on the server; saving again is the retry.
+	 */
+	retryable: boolean,
 };
 
 export type JobKind = "file" | "dir";

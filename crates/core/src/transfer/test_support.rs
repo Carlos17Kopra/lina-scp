@@ -78,6 +78,8 @@ pub(crate) struct FaultySide {
     denied: Mutex<HashSet<String>>,
     /// Slows `rename_over` down (the last step of every file), in milliseconds.
     rename_delay_ms: AtomicU64,
+    /// Slows `open_read` down, in milliseconds.
+    read_delay_ms: AtomicU64,
 }
 
 fn dead() -> CoreError {
@@ -100,6 +102,9 @@ impl FaultySide {
     }
     pub(crate) fn deny_read(&self, path: &str) {
         self.denied.lock().unwrap().insert(path.to_string());
+    }
+    pub(crate) fn delay_reads(&self, ms: u64) {
+        self.read_delay_ms.store(ms, Ordering::SeqCst);
     }
     pub(crate) fn delay_renames(&self, ms: u64) {
         self.rename_delay_ms.store(ms, Ordering::SeqCst);
@@ -170,6 +175,10 @@ impl Side for FaultySide {
     async fn open_read(&self, path: &str) -> Result<Box<dyn Reader>> {
         if self.denied.lock().unwrap().contains(path) {
             return Err(CoreError::fs(FsKind::PermissionDenied, path, "denied"));
+        }
+        let delay = self.read_delay_ms.load(Ordering::SeqCst);
+        if delay > 0 {
+            tokio::time::sleep(Duration::from_millis(delay)).await;
         }
         Ok(Box::new(CountingReader { inner: LocalSide.open_read(path).await?, read: self.read.clone() }))
     }

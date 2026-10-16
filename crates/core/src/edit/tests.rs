@@ -334,3 +334,55 @@ impl Env {
         self.events.lock().unwrap().last().map(|EditEvent::File { file }| file.id).expect("an edit event")
     }
 }
+
+#[tokio::test]
+async fn opening_while_downloading_does_not_launch_early() {
+    let side = FaultySide::new();
+    let e = env_with(side.clone());
+    let remote = remote_file(&e, "a.conf", b"content", 0o644);
+    side.delay_reads(200);
+    let first = {
+        let (mgr, path) = (e.mgr.clone(), p(&remote));
+        tokio::spawn(async move { mgr.open(&path).await })
+    };
+    for _ in 0..100 {
+        if e.last_id_opt().is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let again = e.mgr.open(&p(&remote)).await.unwrap();
+    assert_eq!(e.launches(), 0, "no editor on a file that is not there yet");
+    assert_eq!(first.await.unwrap().unwrap(), again);
+    assert_eq!(e.launches(), 1);
+    assert_eq!(std::fs::read(e.copy()).unwrap(), b"content");
+}
+
+#[tokio::test]
+async fn opening_after_a_failed_download_downloads_again() {
+    let e = env();
+    let remote = remote_file(&e, "a.conf", b"content", 0o000);
+    assert!(e.mgr.open(&p(&remote)).await.is_err());
+    assert_eq!(e.launches(), 0);
+    std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let id = e.mgr.open(&p(&remote)).await.unwrap();
+    assert_eq!(std::fs::read(e.copy()).unwrap(), b"content");
+    assert_eq!(e.last(id).unwrap().state, EditState::Synced);
+}
+
+#[tokio::test]
+async fn stop_keeps_the_dir_while_the_copy_is_moved_away() {
+    let e = env();
+    let remote = remote_file(&e, "a.conf", b"old", 0o644);
+    let id = e.mgr.open(&p(&remote)).await.unwrap();
+    let copy = e.copy();
+    std::fs::rename(&copy, copy.with_file_name("a.conf~")).unwrap();
+    assert_eq!(e.mgr.stop(id).await.unwrap(), Some(copy.clone()));
+    assert!(copy.with_file_name("a.conf~").exists());
+}
+
+impl Env {
+    fn last_id_opt(&self) -> Option<EditId> {
+        self.events.lock().unwrap().last().map(|EditEvent::File { file }| file.id)
+    }
+}

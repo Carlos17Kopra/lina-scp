@@ -81,6 +81,9 @@ pub struct Job {
     pub state: JobState,
     pub note: Option<JobNote>,
     pub error: Option<CoreError>,
+    /// `false` for batches with `EnqueueOptions` (editing): retrying them would skip the edit's
+    /// check for changes on the server; saving again is the retry.
+    pub retryable: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]

@@ -8,7 +8,7 @@ vi.mock("../ipc/api");
 
 const job = (patch: Partial<Job>): Job => ({
   id: 1, batchId: 1, direction: "upload", source: "/l/a", target: "/r/a", rel: "a", kind: "file",
-  size: 100, done: 0, state: "queued", note: null, error: null, ...patch,
+  size: 100, done: 0, state: "queued", note: null, error: null, retryable: true, ...patch,
 });
 const store = useTransfersStore.getState;
 

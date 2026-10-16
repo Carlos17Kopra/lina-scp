@@ -72,4 +72,11 @@ describe("BookmarkMenu", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     expect(button).toHaveFocus();
   });
+
+  it("knows a bookmarked folder before the menu was ever opened", async () => {
+    vi.mocked(api.bookmarksList).mockResolvedValue([bm("b1", "/srv")]);
+    renderMenu();
+    await vi.waitFor(() => expect(screen.getByRole("button", { name: "Lesezeichen" })).toHaveAttribute("aria-pressed", "true"));
+    expect(api.bookmarksList).toHaveBeenCalledWith("h1");
+  });
 });

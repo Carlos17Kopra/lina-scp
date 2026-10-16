@@ -12,7 +12,7 @@ vi.mock("../../ipc/api");
 
 const job = (patch: Partial<Job>): Job => ({
   id: 1, batchId: 1, direction: "upload", source: "/l/a", target: "/srv/a", rel: "a.zip", kind: "file",
-  size: 1000, done: 0, state: "queued", note: null, error: null, ...patch,
+  size: 1000, done: 0, state: "queued", note: null, error: null, retryable: true, ...patch,
 });
 const event = (j: Partial<Job>) => useTransfersStore.getState().onEvent("t", { kind: "job", job: job(j) });
 
@@ -91,5 +91,13 @@ describe("TransferPanel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Bearbeitung von a.conf beenden" }));
     expect(api.editStop).toHaveBeenCalledWith("s1", 1);
     await vi.waitFor(() => expect(screen.queryByText("Synchron")).not.toBeInTheDocument());
+  });
+
+  it("offers no retry for failed edit uploads (saving again retries)", async () => {
+    event({ id: 7, state: "failed", rel: "a.conf", retryable: false, error: { type: "fs", kind: "permissionDenied", path: "/etc/a.conf", message: "denied" } });
+    render(<TransferPanel tabId="t" />);
+    await userEvent.click(screen.getByRole("tab", { name: "Fehler 1" }));
+    expect(screen.getByText("a.conf")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "a.conf wiederholen" })).not.toBeInTheDocument();
   });
 });
