@@ -226,7 +226,15 @@ impl Tunnels {
                 Some(_) => return Ok(()),
                 None => {}
             }
-            running.insert(id, Running { spec: spec.clone(), token: token.clone(), bound: None, requesting: spec.kind == ForwardKind::Remote });
+            running.insert(
+                id,
+                Running {
+                    spec: spec.clone(),
+                    token: token.clone(),
+                    bound: None,
+                    requesting: spec.kind == ForwardKind::Remote,
+                },
+            );
             // Under the lock: a concurrent `stop` sends its `Off` after this.
             inner.send(id, TunnelState::Starting);
         }

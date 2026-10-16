@@ -106,8 +106,11 @@ impl Tracker {
 
     /// `rel` finished. Each local entry it carried counts as tried (a failed or skipped one waits for the next
     /// change); the server state is known only for the entries that were uploaded.
-    fn finish(&mut self, rel: &str, outcome: Vec<(TreeEntry, Option<TreeEntry>)>) {
+    /// `gone`: folders found missing on the server; they and everything below are forgotten, so the next change
+    /// creates them again.
+    fn finish(&mut self, rel: &str, outcome: Vec<(TreeEntry, Option<TreeEntry>)>, gone: &[String]) {
         self.pending.remove(rel);
+        self.server.retain(|k, _| !gone.iter().any(|g| k == g || under(k, g)));
         for (local, server) in outcome {
             self.sent.insert(local.rel.clone(), stamp(&local));
             if let Some(server) = server {
@@ -150,14 +153,12 @@ async fn server_tree(
     Ok(server)
 }
 
-/// What a finished batch did to each entry it carried: the server's state for the uploaded ones.
-async fn outcome(
-    queue: &TransferQueue,
-    remote_dir: &str,
-    entries: Vec<TreeEntry>,
-    jobs: &[Job],
-) -> (Vec<(TreeEntry, Option<TreeEntry>)>, u32) {
-    let (mut out, mut uploaded) = (Vec::with_capacity(entries.len()), 0u32);
+type Outcome = (Vec<(TreeEntry, Option<TreeEntry>)>, u32, Vec<String>);
+
+/// What a finished batch did to each entry it carried: the server's state for the uploaded ones, the count of
+/// uploaded files, and the folders a failed entry was missing on the server.
+async fn outcome(queue: &TransferQueue, remote_dir: &str, entries: Vec<TreeEntry>, jobs: &[Job]) -> Outcome {
+    let (mut out, mut uploaded, mut gone) = (Vec::with_capacity(entries.len()), 0u32, Vec::new());
     for e in entries {
         let target = join(remote_dir, &e.rel);
         let done = jobs.iter().any(|j| j.target == target && j.state == JobState::Done);
@@ -176,9 +177,20 @@ async fn outcome(
         if done && !e.dir {
             uploaded += 1;
         }
+        // The outermost missing folder above a failed entry (deleted on the server since the start).
+        if !done && let Some(remote) = queue.remote() {
+            let mut dir = String::new();
+            for part in e.rel.split('/').take(e.rel.matches('/').count()) {
+                dir = if dir.is_empty() { part.to_string() } else { format!("{dir}/{part}") };
+                if matches!(remote.stat(&join(remote_dir, &dir)).await, Ok(None)) {
+                    gone.push(dir);
+                    break;
+                }
+            }
+        }
         out.push((e, server));
     }
-    (out, uploaded)
+    (out, uploaded, gone)
 }
 
 /// Stops polling when stopped or dropped.
@@ -230,9 +242,9 @@ pub async fn keep_up_to_date(
             tokio::time::sleep(poll).await;
             while let Ok((planned, jobs)) = results.try_recv() {
                 for p in planned {
-                    let (out, n) = outcome(&queue, &remote_dir, p.entries, &jobs).await;
+                    let (out, n, gone) = outcome(&queue, &remote_dir, p.entries, &jobs).await;
                     uploaded = uploaded.saturating_add(n);
-                    tracker.finish(&p.item.rel, out);
+                    tracker.finish(&p.item.rel, out, &gone);
                 }
             }
             // ponytail: polls a full walk like editing does (TP3c); inotify if trees get large. Times are seconds, so a
@@ -302,7 +314,7 @@ mod tests {
     fn ready_done(t: &mut Tracker, now: Vec<TreeEntry>) -> Vec<Planned> {
         let planned = t.ready(now);
         for p in planned.clone() {
-            t.finish(&p.item.rel, p.entries.into_iter().map(|e| (e.clone(), Some(e))).collect());
+            t.finish(&p.item.rel, p.entries.into_iter().map(|e| (e.clone(), Some(e))).collect(), &[]);
         }
         planned
     }
@@ -334,9 +346,9 @@ mod tests {
         let v2 = vec![file("a", 3, 30)];
         t.ready(v2.clone());
         assert!(t.ready(v2.clone()).is_empty(), "never two jobs for one target");
-        t.finish("a", vec![(file("a", 2, 20), None)]);
+        t.finish("a", vec![(file("a", 2, 20), None)], &[]);
         assert_eq!(rels(&t.ready(v2.clone())), [("a", Some(FileStamp { size: 1, mtime: Some(10) }))], "server unknown");
-        t.finish("a", vec![(file("a", 3, 30), None)]);
+        t.finish("a", vec![(file("a", 3, 30), None)], &[]);
         assert!(t.ready(v2).is_empty(), "a failed upload is not retried by itself");
     }
 
@@ -429,6 +441,20 @@ mod tests {
         std::fs::write(e.l.join("after_stop"), b"x").unwrap();
         tokio::time::sleep(Duration::from_millis(150)).await;
         assert!(!e.r.join("after_stop").exists());
+    }
+
+    #[tokio::test]
+    async fn a_folder_deleted_on_the_server_is_created_again_by_the_next_change() {
+        let e = env();
+        std::fs::create_dir_all(e.l.join("sub")).unwrap();
+        std::fs::create_dir_all(e.r.join("sub")).unwrap();
+        let _keep = e.start(&[]).await;
+        std::fs::remove_dir(e.r.join("sub")).unwrap();
+        std::fs::write(e.l.join("sub/a"), b"1").unwrap();
+        e.wait("the failed upload", |e| !e.rec.jobs().is_empty()).await;
+        e.rec.wait_all_final().await;
+        std::fs::write(e.l.join("sub/a"), b"22").unwrap();
+        e.wait("the second upload", |e| std::fs::read(e.r.join("sub/a")).is_ok_and(|b| b == b"22")).await;
     }
 
     #[tokio::test]
