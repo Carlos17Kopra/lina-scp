@@ -33,6 +33,19 @@ pub const TERMINAL_SIDEBAR_OPEN: &str = "terminal_sidebar_open";
 pub const TERMINAL_AUTO_RECONNECT: &str = "terminal_auto_reconnect";
 /// "Editor" for SFTP editing; empty = the system's text editor.
 pub const EDITOR_COMMAND: &str = "editor_command";
+/// Setting key: terminal scrollback in lines (one of `validate::TERMINAL_SCROLLBACKS`).
+pub const TERMINAL_SCROLLBACK: &str = "terminal_scrollback";
+/// Setting key: `"block"` | `"bar"` | `"underline"`.
+pub const TERMINAL_CURSOR: &str = "terminal_cursor";
+/// Setting key: `"0"` stops the cursor from blinking (default on).
+pub const TERMINAL_CURSOR_BLINK: &str = "terminal_cursor_blink";
+/// Setting key: absolute shell path for local terminals; empty = `$SHELL`.
+pub const LOCAL_SHELL: &str = "local_shell";
+/// Setting keys: what "Neuer Host" starts with.
+pub const NEW_HOST_USER: &str = "new_host_user";
+pub const NEW_HOST_PORT: &str = "new_host_port";
+pub const NEW_HOST_KEEPALIVE: &str = "new_host_keepalive_s";
+pub const NEW_HOST_TIMEOUT: &str = "new_host_timeout_s";
 /// Setting key: `"true"` once the first-run dialog was completed.
 pub const FIRST_RUN_DONE: &str = "first_run_done";
 

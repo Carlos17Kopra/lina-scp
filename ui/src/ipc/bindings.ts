@@ -509,6 +509,16 @@ export type Settings = {
 	compatRendering: boolean,
 	/**  Command for editing files; `None` = the system's text editor. */
 	editorCommand: string | null,
+	terminalScrollback: number,
+	terminalCursor: TerminalCursor,
+	terminalCursorBlink: boolean,
+	/**  Shell of local terminals; `None` = `$SHELL`. */
+	localShell: string | null,
+	/**  What "Neuer Host" starts with. */
+	newHostUser: string | null,
+	newHostPort: number,
+	newHostKeepaliveS: number,
+	newHostTimeoutS: number,
 };
 
 export type SftpConnected = {
@@ -562,6 +572,8 @@ export type SyncItem = {
 	expected: FileStamp | null,
 	tree: TreeEntry[] | null,
 };
+
+export type TerminalCursor = "block" | "bar" | "underline";
 
 export type TerminalRenderer = "auto" | "webgl" | "dom";
 

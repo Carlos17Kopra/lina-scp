@@ -93,6 +93,43 @@ pub struct Settings {
     pub compat_rendering: bool,
     /// Command for editing files; `None` = the system's text editor.
     pub editor_command: Option<String>,
+    pub terminal_scrollback: u32,
+    pub terminal_cursor: TerminalCursor,
+    pub terminal_cursor_blink: bool,
+    /// Shell of local terminals; `None` = `$SHELL`.
+    pub local_shell: Option<String>,
+    /// What "Neuer Host" starts with.
+    pub new_host_user: Option<String>,
+    pub new_host_port: u16,
+    pub new_host_keepalive_s: u32,
+    pub new_host_timeout_s: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub enum TerminalCursor {
+    Block,
+    Bar,
+    Underline,
+}
+
+impl TerminalCursor {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TerminalCursor::Block => "block",
+            TerminalCursor::Bar => "bar",
+            TerminalCursor::Underline => "underline",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "block" => Some(TerminalCursor::Block),
+            "bar" => Some(TerminalCursor::Bar),
+            "underline" => Some(TerminalCursor::Underline),
+            _ => None,
+        }
+    }
 }
 
 impl Default for Settings {
@@ -108,6 +145,14 @@ impl Default for Settings {
             first_run_done: false,
             compat_rendering: false,
             editor_command: None,
+            terminal_scrollback: 10_000,
+            terminal_cursor: TerminalCursor::Block,
+            terminal_cursor_blink: true,
+            local_shell: None,
+            new_host_user: None,
+            new_host_port: 22,
+            new_host_keepalive_s: 30,
+            new_host_timeout_s: 15,
         }
     }
 }
@@ -164,6 +209,9 @@ mod tests {
         for r in [TerminalRenderer::Auto, TerminalRenderer::Webgl, TerminalRenderer::Dom] {
             assert_eq!(TerminalRenderer::parse(r.as_str()), Some(r));
         }
+        for c in [TerminalCursor::Block, TerminalCursor::Bar, TerminalCursor::Underline] {
+            assert_eq!(TerminalCursor::parse(c.as_str()), Some(c));
+        }
         assert_eq!(Theme::parse("blue"), None);
     }
 
@@ -175,7 +223,10 @@ mod tests {
             serde_json::json!({
                 "theme": "dark", "sshMode": "integrate", "terminalRenderer": "auto",
                 "terminalFontSize": 14, "terminalScheme": "auto", "terminalSidebarOpen": false,
-                "autoReconnect": true, "firstRunDone": false, "compatRendering": false, "editorCommand": null
+                "autoReconnect": true, "firstRunDone": false, "compatRendering": false, "editorCommand": null,
+                "terminalScrollback": 10000, "terminalCursor": "block", "terminalCursorBlink": true,
+                "localShell": null, "newHostUser": null, "newHostPort": 22, "newHostKeepaliveS": 30,
+                "newHostTimeoutS": 15
             })
         );
     }

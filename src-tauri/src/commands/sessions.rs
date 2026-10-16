@@ -122,8 +122,13 @@ pub(crate) fn open_local(
 ) -> Result<SessionId> {
     let id = Uuid::new_v4();
     let sink = make_sink(pump.clone(), send_event, cleanup_fn(state, id));
-    let session = match &state.local_shell {
-        Some(shell) => LocalPtySession::spawn_shell(shell, cols, rows, sink)?,
+    // Tests pin their shell; otherwise the setting, else `$SHELL`.
+    let configured = state
+        .local_shell
+        .clone()
+        .or_else(|| super::settings::load_settings(&state.store).ok().and_then(|s| s.local_shell));
+    let session = match configured {
+        Some(shell) => LocalPtySession::spawn_shell(&shell, cols, rows, sink)?,
         None => LocalPtySession::spawn(cols, rows, sink)?,
     };
     register(state, id, Arc::new(session), pump.clone());
@@ -379,6 +384,33 @@ mod tests {
         assert!(matches!(resize(&state, id, 80, 24).await, Err(CoreError::Internal { .. })));
         ack(&state, id, 10);
         close(&state, id).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn local_terminals_use_the_shell_from_the_settings() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = AppState::for_tests(dir.path());
+        state.local_shell = None;
+        let shell = dir.path().join("myshell");
+        std::fs::write(&shell, "#!/bin/sh\necho shell-from-settings\nexec /bin/sh\n").unwrap();
+        std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+        state.store.set_setting(linascp_core::store::LOCAL_SHELL, &shell.display().to_string()).unwrap();
+        let (pump, bytes) = collecting_pump();
+        pump.start_ticker();
+        let (send, _events) = collecting_events();
+
+        let id = open_local(&state, 80, 24, pump, send).unwrap();
+        let mut found = false;
+        for _ in 0..200 {
+            if String::from_utf8_lossy(&bytes.lock().unwrap()).contains("shell-from-settings") {
+                found = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        close(&state, id).await.unwrap();
+        assert!(found, "the configured shell ran");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
