@@ -13,6 +13,14 @@ export const DEFAULT_SETTINGS: Settings = {
   firstRunDone: false,
   compatRendering: false,
   editorCommand: null,
+  terminalScrollback: 10000,
+  terminalCursor: "block",
+  terminalCursorBlink: true,
+  localShell: null,
+  newHostUser: null,
+  newHostPort: 22,
+  newHostKeepaliveS: 30,
+  newHostTimeoutS: 15,
 };
 
 export interface SettingsState {

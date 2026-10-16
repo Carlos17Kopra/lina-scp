@@ -75,7 +75,6 @@ describe("AppShell", () => {
     const cases: Array<[ModalState, string]> = [
       [{ type: "editor", target: { kind: "host" } }, "Neuer Host"],
       [{ type: "editor", target: { kind: "profile", id: "p1" } }, "Neues Login-Profil"],
-      [{ type: "settings" }, "Einstellungen"],
       [{ type: "firstRun" }, "Willkommen bei LinaSCP"],
       [{ type: "export" }, "Exportieren"],
       [{ type: "import" }, "Importieren"],

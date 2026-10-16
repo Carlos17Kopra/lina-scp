@@ -119,6 +119,7 @@ export type {
   Snippet,
   SshMode,
   Step,
+  TerminalCursor,
   TerminalRenderer,
   Theme,
 } from "./bindings";

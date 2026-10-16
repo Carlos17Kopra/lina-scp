@@ -73,7 +73,7 @@ describe("useGlobalShortcuts", () => {
   it("Ctrl+, opens the settings", () => {
     render(<Harness />);
     fireEvent.keyDown(screen.getByLabelText("Suche"), { key: ",", ctrlKey: true });
-    expect(useUiStore.getState().modal).toEqual({ type: "settings" });
+    expect(useUiStore.getState().view).toBe("settings");
   });
 
   it("leaves Ctrl+K and Ctrl+N to the terminal but handles Ctrl+Shift+T there", () => {

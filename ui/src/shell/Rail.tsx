@@ -34,7 +34,6 @@ const ICON_PROPS = { size: 20, strokeWidth: 1.8, "aria-hidden": true } as const;
 export function Rail() {
   const view = useUiStore((state) => state.view);
   const setView = useUiStore((state) => state.setView);
-  const openModal = useUiStore((state) => state.openModal);
   const theme = useUiStore((state) => state.theme);
   const setTheme = useUiStore((state) => state.setTheme);
   const saveSettings = useSettingsStore((state) => state.save);
@@ -84,10 +83,11 @@ export function Rail() {
       <div className={styles.spacer} />
       <button
         type="button"
-        className={styles.item}
+        className={cx(styles.item, view === "settings" && styles.active)}
         aria-label={t.rail.settings}
         title={t.rail.settings}
-        onClick={() => openModal({ type: "settings" })}
+        aria-current={view === "settings" ? "page" : undefined}
+        onClick={() => setView("settings")}
       >
         <Settings {...ICON_PROPS} />
       </button>

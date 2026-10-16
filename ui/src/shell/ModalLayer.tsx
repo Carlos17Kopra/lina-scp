@@ -3,7 +3,6 @@ import { EditorModal } from "../screens/editor/EditorModal";
 import { ExportDialog } from "../screens/settings/ExportDialog";
 import { FirstRunDialog } from "../screens/settings/FirstRunDialog";
 import { ImportDialog } from "../screens/settings/ImportDialog";
-import { SettingsDialog } from "../screens/settings/SettingsDialog";
 import { SnippetEditor } from "../screens/snippets/SnippetEditor";
 import { useUiStore } from "../stores/ui";
 
@@ -14,8 +13,6 @@ export function ModalLayer() {
   switch (modal.type) {
     case "editor":
       return <EditorModal key={`${modal.target.kind}:${modal.target.id ?? "new"}`} target={modal.target} />;
-    case "settings":
-      return <SettingsDialog />;
     case "firstRun":
       return <FirstRunDialog />;
     case "export":

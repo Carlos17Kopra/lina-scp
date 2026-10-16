@@ -5,6 +5,7 @@ import { errorDetails } from "../ipc/errors";
 import { HostsScreen } from "../screens/hosts/HostsScreen";
 import { SftpScreen } from "../screens/sftp/SftpScreen";
 import { KeychainScreen } from "../screens/keychain/KeychainScreen";
+import { SettingsScreen } from "../screens/settings/SettingsScreen";
 import { SnippetsScreen } from "../screens/snippets/SnippetsScreen";
 import { TerminalScreen } from "../screens/terminal/TerminalScreen";
 import { useHostsStore } from "../stores/hosts";
@@ -67,6 +68,9 @@ export function AppShell() {
         </section>
         <section className={styles.view} hidden={view !== "snippets"}>
           <SnippetsScreen />
+        </section>
+        <section className={styles.view} hidden={view !== "settings"}>
+          {view === "settings" ? <SettingsScreen /> : null}
         </section>
         <section className={styles.view} hidden={view !== "keychain"}>
           {view === "keychain" ? <KeychainScreen /> : null}

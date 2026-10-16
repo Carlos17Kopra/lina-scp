@@ -1,8 +1,8 @@
 import { Download, Upload } from "lucide-react";
 import { useId, useState } from "react";
-import { Button, Checkbox, Dialog, Segmented, Select, TextField, useToast } from "../../components";
+import { Button, Checkbox, Segmented, Select, TextField, useToast } from "../../components";
 import { t } from "../../i18n/de";
-import type { Settings, SshMode, TerminalRenderer, Theme } from "../../ipc/api";
+import type { Settings, SshMode, TerminalCursor, TerminalRenderer, Theme } from "../../ipc/api";
 import { errorDetails } from "../../ipc/errors";
 import { useSettingsStore } from "../../stores/settings";
 import { useUiStore } from "../../stores/ui";
@@ -28,17 +28,79 @@ const FONT_OPTIONS = Array.from({ length: FONT_SIZE_MAX - FONT_SIZE_MIN + 1 }, (
 });
 
 const SCHEME_OPTIONS = SCHEME_CHOICES.map((choice) => ({ value: choice.id, label: choice.label }));
+// Same list as core `TERMINAL_SCROLLBACKS`.
+const SCROLLBACK_OPTIONS = [1000, 5000, 10000, 50000, 100000].map((lines) => ({
+  value: String(lines),
+  label: t.settings.scrollbackOption(lines),
+}));
+const CURSOR_OPTIONS: ReadonlyArray<{ value: TerminalCursor; label: string }> = [
+  { value: "block", label: t.settings.cursors.block },
+  { value: "bar", label: t.settings.cursors.bar },
+  { value: "underline", label: t.settings.cursors.underline },
+];
 
-/** Minimal TP1 settings; every change is saved immediately (mirror changes after confirmation). */
-export function SettingsDialog() {
+/** A text field that saves on blur; `parse` returns `undefined` for input that must not be saved (it is reset). */
+function BlurField<T>({
+  label,
+  value,
+  format,
+  parse,
+  onSave,
+  ...rest
+}: {
+  label: string;
+  value: T;
+  format: (value: T) => string;
+  parse: (text: string) => T | undefined;
+  onSave: (value: T) => void;
+  placeholder?: string;
+  hint?: string;
+  mono?: boolean;
+}) {
+  const [text, setText] = useState(format(value));
+  return (
+    <TextField
+      {...rest}
+      label={label}
+      spellCheck={false}
+      value={text}
+      onChange={setText}
+      onBlur={() => {
+        const next = parse(text);
+        if (next === undefined) setText(format(value));
+        else if (next !== value) onSave(next);
+      }}
+    />
+  );
+}
+
+const optionalText = (text: string) => text.trim() || null;
+const showOptional = (value: string | null) => value ?? "";
+/** Whole numbers in `0..=max`; anything else is not saved. */
+const wholeNumber = (min: number, max: number) => (text: string) => {
+  const trimmed = text.trim();
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  const value = Number(trimmed);
+  return value >= min && value <= max ? value : undefined;
+};
+
+/** Rail screen "Einstellungen"; every change is saved immediately (mirror changes after confirmation, text on blur). */
+export function SettingsScreen() {
   const settings = useSettingsStore((state) => state.settings);
   const save = useSettingsStore((state) => state.save);
-  const closeModal = useUiStore((state) => state.closeModal);
   const openModal = useUiStore((state) => state.openModal);
   const toast = useToast();
   const [pendingMode, setPendingMode] = useState<SshMode | null>(null);
   const [editor, setEditor] = useState(settings.editorCommand ?? "");
-  const ids = { appearance: useId(), ssh: useId(), terminal: useId(), data: useId() };
+  const ids = {
+    appearance: useId(),
+    ssh: useId(),
+    terminal: useId(),
+    local: useId(),
+    newHosts: useId(),
+    files: useId(),
+    data: useId(),
+  };
 
   const persist = (patch: Partial<Settings>) => {
     save(patch).catch((error: unknown) =>
@@ -52,17 +114,8 @@ export function SettingsDialog() {
   };
 
   return (
-    <Dialog
-      open
-      size="md"
-      title={t.settings.title}
-      onClose={closeModal}
-      footer={
-        <Button variant="primary" onClick={closeModal}>
-          {t.settings.done}
-        </Button>
-      }
-    >
+    <div className={styles.screen}>
+      <h1 className={styles.title}>{t.settings.title}</h1>
       <div className={styles.sections}>
         <section className={styles.section} aria-labelledby={ids.appearance}>
           <h3 id={ids.appearance} className={styles.heading}>
@@ -124,7 +177,27 @@ export function SettingsDialog() {
               options={SCHEME_OPTIONS}
               onChange={(terminalScheme) => persist({ terminalScheme })}
             />
+            <Select
+              label={t.settings.scrollback}
+              value={String(settings.terminalScrollback)}
+              options={SCROLLBACK_OPTIONS}
+              onChange={(lines) => persist({ terminalScrollback: Number(lines) })}
+            />
           </div>
+          <div className={styles.row}>
+            <span className={styles.rowLabel}>{t.settings.cursor}</span>
+            <Segmented
+              label={t.settings.cursor}
+              value={settings.terminalCursor}
+              options={CURSOR_OPTIONS}
+              onChange={(terminalCursor) => persist({ terminalCursor })}
+            />
+          </div>
+          <Checkbox
+            label={t.settings.cursorBlink}
+            checked={settings.terminalCursorBlink}
+            onChange={(terminalCursorBlink) => persist({ terminalCursorBlink })}
+          />
           <Checkbox
             label={t.settings.compat}
             hint={t.settings.compatHint}
@@ -136,6 +209,69 @@ export function SettingsDialog() {
             checked={settings.autoReconnect}
             onChange={(autoReconnect) => persist({ autoReconnect })}
           />
+        </section>
+        <section className={styles.section} aria-labelledby={ids.local}>
+          <h3 id={ids.local} className={styles.heading}>
+            {t.settings.local}
+          </h3>
+          <BlurField
+            label={t.settings.shell}
+            hint={t.settings.shellHint}
+            placeholder={t.settings.shellPlaceholder}
+            mono
+            value={settings.localShell}
+            format={showOptional}
+            parse={optionalText}
+            onSave={(localShell) => persist({ localShell })}
+          />
+        </section>
+        <section className={styles.section} aria-labelledby={ids.newHosts}>
+          <h3 id={ids.newHosts} className={styles.heading}>
+            {t.settings.newHosts}
+          </h3>
+          <p className={styles.hint}>{t.settings.newHostsHint}</p>
+          <div className={styles.grid}>
+            <BlurField
+              label={t.settings.newHostUser}
+              placeholder={t.settings.newHostUserPlaceholder}
+              mono
+              value={settings.newHostUser}
+              format={showOptional}
+              parse={optionalText}
+              onSave={(newHostUser) => persist({ newHostUser })}
+            />
+            <BlurField
+              label={t.settings.newHostPort}
+              mono
+              value={settings.newHostPort}
+              format={String}
+              parse={wholeNumber(1, 65535)}
+              onSave={(newHostPort) => persist({ newHostPort })}
+            />
+            <BlurField
+              label={t.settings.newHostKeepalive}
+              hint={t.settings.newHostZeroHint}
+              mono
+              value={settings.newHostKeepaliveS}
+              format={String}
+              parse={wholeNumber(0, 3600)}
+              onSave={(newHostKeepaliveS) => persist({ newHostKeepaliveS })}
+            />
+            <BlurField
+              label={t.settings.newHostTimeout}
+              hint={t.settings.newHostZeroHint}
+              mono
+              value={settings.newHostTimeoutS}
+              format={String}
+              parse={wholeNumber(0, 600)}
+              onSave={(newHostTimeoutS) => persist({ newHostTimeoutS })}
+            />
+          </div>
+        </section>
+        <section className={styles.section} aria-labelledby={ids.files}>
+          <h3 id={ids.files} className={styles.heading}>
+            {t.settings.files}
+          </h3>
           <TextField
             label={t.settings.editor}
             hint={t.settings.editorHint}
@@ -165,6 +301,6 @@ export function SettingsDialog() {
           </div>
         </section>
       </div>
-    </Dialog>
+    </div>
   );
 }

@@ -164,6 +164,17 @@ afterEach(() => {
 });
 
 describe("TerminalView", () => {
+  it("takes scrollback and cursor from the settings, also while open", () => {
+    useSettingsStore.setState({ settings: { ...DEFAULT_SETTINGS, terminalScrollback: 50000, terminalCursor: "bar", terminalCursorBlink: false } });
+    render(<TerminalView tab={tab} visible />);
+    expect(term().options).toMatchObject({ scrollback: 50000, cursorStyle: "bar", cursorBlink: false });
+    act(() =>
+      useSettingsStore.setState({ settings: { ...DEFAULT_SETTINGS, terminalScrollback: 1000, terminalCursor: "underline" } }),
+    );
+    expect(term().options).toMatchObject({ scrollback: 1000, cursorStyle: "underline", cursorBlink: true });
+    expect(fakes.FakeTerminal.instances).toHaveLength(1);
+  });
+
   it("creates an opaque xterm attached to the session output with flow-control acks", () => {
     const { container } = render(<TerminalView tab={tab} visible />);
     expect(container.querySelector("[data-terminal]")).not.toBeNull();
