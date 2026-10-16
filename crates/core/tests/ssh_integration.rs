@@ -671,8 +671,11 @@ mod transfers {
         std::fs::write(tree.join("sub/key"), b"secret").unwrap();
         std::fs::set_permissions(tree.join("sub/key"), std::fs::Permissions::from_mode(0o600)).unwrap();
         let (events, emit) = recorder();
-        let queue =
-            TransferQueue::new(Arc::new(LocalSide), TransferOptions { parallel: 2, upload_mode: Some(0o644) }, emit);
+        let queue = TransferQueue::new(
+            Arc::new(LocalSide),
+            TransferOptions { parallel: 2, upload_mode: Some(0o644), bandwidth: None },
+            emit,
+        );
         queue.set_remote(Some(session.clone()));
         queue.enqueue(Direction::Upload, vec![tree.to_str().unwrap().into()], home.path.clone()).await.unwrap();
         wait_batch_done(&events, 1, 60).await;
@@ -715,7 +718,11 @@ mod transfers {
         let local = tempfile::tempdir().unwrap();
         std::fs::write(local.path().join("f"), b"first").unwrap();
         let (events, emit) = recorder();
-        let queue = TransferQueue::new(Arc::new(LocalSide), TransferOptions { parallel: 1, upload_mode: None }, emit);
+        let queue = TransferQueue::new(
+            Arc::new(LocalSide),
+            TransferOptions { parallel: 1, upload_mode: None, bandwidth: None },
+            emit,
+        );
         queue.set_remote(Some(session.clone()));
         let src = vec![local.path().join("f").to_str().unwrap().to_string()];
         queue.enqueue(Direction::Upload, src.clone(), home.path.clone()).await.unwrap();
@@ -770,7 +777,11 @@ mod transfers {
                 record(e)
             })
         };
-        let queue = TransferQueue::new(Arc::new(LocalSide), TransferOptions { parallel: 1, upload_mode: None }, emit);
+        let queue = TransferQueue::new(
+            Arc::new(LocalSide),
+            TransferOptions { parallel: 1, upload_mode: None, bandwidth: None },
+            emit,
+        );
         let statuses: Arc<Mutex<Vec<ConnStatus>>> = Arc::default();
         let connector: ConnConnector<SftpSession> = {
             let (env, h) = (env.clone(), h.clone());
@@ -864,8 +875,11 @@ mod transfers {
         session.set_mode(&path, 0o640).await.unwrap();
 
         let (_, emit) = recorder();
-        let queue =
-            TransferQueue::new(Arc::new(LocalSide), TransferOptions { parallel: 2, upload_mode: Some(0o600) }, emit);
+        let queue = TransferQueue::new(
+            Arc::new(LocalSide),
+            TransferOptions { parallel: 2, upload_mode: Some(0o600), bandwidth: None },
+            emit,
+        );
         queue.set_remote(Some(session.clone()));
         let cache = tempfile::tempdir().unwrap();
         let launcher = Arc::new(Remember(Mutex::new(None)));

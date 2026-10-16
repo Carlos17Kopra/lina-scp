@@ -1,7 +1,11 @@
 //! Pipelined copy of one file: up to `IN_FLIGHT` read+write pairs run at once.
 
+use std::sync::Mutex;
+use std::time::Duration;
+
 use futures::{StreamExt, stream};
 use tokio::sync::Semaphore;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use super::side::{Reader, Writer};
@@ -14,6 +18,41 @@ pub(crate) const CHUNK: usize = 64 * 1024;
 /// even on a slow upstream.
 pub(crate) const IN_FLIGHT: usize = 32;
 
+/// Paces bytes to `rate` per second on one timeline shared by every file of a session.
+pub(crate) struct Pacer {
+    rate: u64,
+    next: Mutex<Instant>,
+}
+
+impl Pacer {
+    pub(crate) fn new(rate: u64) -> Self {
+        Self { rate: rate.max(1), next: Mutex::new(Instant::now()) }
+    }
+
+    /// Reserves `len` bytes and waits for their slot. Idle time is not banked: no burst after a pause.
+    pub(crate) async fn take(&self, len: usize) {
+        let start = {
+            let mut next = self.next.lock().unwrap_or_else(|e| e.into_inner());
+            let start = (*next).max(Instant::now());
+            *next = start + Duration::from_secs_f64(len as f64 / self.rate as f64);
+            start
+        };
+        tokio::time::sleep_until(start).await;
+    }
+}
+
+/// What every copy of a session shares: requests in flight and the optional bandwidth limit.
+pub(crate) struct Limits {
+    in_flight: Semaphore,
+    pacer: Option<Pacer>,
+}
+
+impl Limits {
+    pub(crate) fn new(in_flight: usize, bandwidth: Option<u64>) -> Self {
+        Self { in_flight: Semaphore::new(in_flight), pacer: bandwidth.map(Pacer::new) }
+    }
+}
+
 /// Copies `[from, size)` and returns the end offset. `progress` sees the contiguous prefix that is
 /// confirmed written; on error that prefix comes back with the error (resume point).
 pub(crate) async fn copy_range(
@@ -21,7 +60,7 @@ pub(crate) async fn copy_range(
     writer: &dyn Writer,
     from: u64,
     size: u64,
-    limit: &Semaphore,
+    limits: &Limits,
     cancel: &CancellationToken,
     progress: &mut (dyn FnMut(u64) + Send),
 ) -> std::result::Result<u64, (CoreError, u64)> {
@@ -33,8 +72,11 @@ pub(crate) async fn copy_range(
     // the contiguous prefix.
     let mut pairs = stream::iter((from..size).step_by(CHUNK))
         .map(|offset| async move {
-            let _permit = limit.acquire().await.map_err(|_| CoreError::Cancelled)?;
+            let _permit = limits.in_flight.acquire().await.map_err(|_| CoreError::Cancelled)?;
             let len = (size - offset).min(CHUNK as u64) as usize;
+            if let Some(pacer) = &limits.pacer {
+                pacer.take(len).await;
+            }
             let data = reader.read_at(offset, len).await?;
             let read = data.len();
             if read > 0 {
@@ -71,7 +113,6 @@ mod tests {
     use crate::transfer::{LocalSide, Side};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use tokio::sync::Semaphore;
 
     fn p(path: &std::path::Path) -> String {
         path.to_str().unwrap().to_string()
@@ -90,7 +131,7 @@ mod tests {
             &*w,
             from,
             data.len() as u64,
-            &Semaphore::new(IN_FLIGHT),
+            &Limits::new(IN_FLIGHT, None),
             &CancellationToken::new(),
             &mut |d| seen.push(d),
         )
@@ -142,7 +183,7 @@ mod tests {
             &*w,
             CHUNK as u64,
             data.len() as u64,
-            &Semaphore::new(IN_FLIGHT),
+            &Limits::new(IN_FLIGHT, None),
             &CancellationToken::new(),
             &mut |_| {},
         )
@@ -166,7 +207,7 @@ mod tests {
             &*w,
             0,
             (CHUNK * 4) as u64,
-            &Semaphore::new(IN_FLIGHT),
+            &Limits::new(IN_FLIGHT, None),
             &CancellationToken::new(),
             &mut |_| {},
         )
@@ -184,7 +225,7 @@ mod tests {
         let w = side.open_write(&dst, false).await.unwrap();
         let cancel = CancellationToken::new();
         cancel.cancel();
-        let err = copy_range(&*r, &*w, 0, (CHUNK * 8) as u64, &Semaphore::new(IN_FLIGHT), &cancel, &mut |_| {})
+        let err = copy_range(&*r, &*w, 0, (CHUNK * 8) as u64, &Limits::new(IN_FLIGHT, None), &cancel, &mut |_| {})
             .await
             .unwrap_err();
         assert_eq!(err, (CoreError::Cancelled, 0));
@@ -210,7 +251,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let data: Vec<u8> = (0..(CHUNK * 10)).map(|i| (i % 7) as u8).collect();
         let side = LocalSide;
-        let limit = Semaphore::new(3);
+        let limit = Limits::new(3, None);
         let counts = Arc::new((AtomicU64::new(0), AtomicU64::new(0)));
         let mut copies = Vec::new();
         for name in ["a", "b"] {
@@ -232,5 +273,36 @@ mod tests {
             w.close().await.unwrap();
             assert!(std::fs::read(dst).unwrap() == data);
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_pacer_spaces_reservations_at_the_rate_without_banking_idle_time() {
+        let pacer = Pacer::new(1000);
+        let start = tokio::time::Instant::now();
+        for _ in 0..3 {
+            pacer.take(1000).await;
+        }
+        // The first block goes at once, each further one a second later.
+        assert_eq!(start.elapsed().as_millis(), 2000);
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        let idle = tokio::time::Instant::now();
+        pacer.take(1000).await;
+        pacer.take(1000).await;
+        assert_eq!(idle.elapsed().as_millis(), 1000);
+    }
+
+    #[tokio::test]
+    async fn a_bandwidth_limit_slows_the_copy_down() {
+        let d = tempfile::tempdir().unwrap();
+        let (src, dst) = (p(&d.path().join("s")), p(&d.path().join("d")));
+        std::fs::write(&src, vec![3u8; CHUNK * 4]).unwrap();
+        let side = LocalSide;
+        let r = side.open_read(&src).await.unwrap();
+        let w = side.open_write(&dst, false).await.unwrap();
+        let limits = Limits::new(IN_FLIGHT, Some((CHUNK * 10) as u64));
+        let start = std::time::Instant::now();
+        let done = copy_range(&*r, &*w, 0, (CHUNK * 4) as u64, &limits, &CancellationToken::new(), &mut |_| {}).await;
+        assert_eq!(done.unwrap(), (CHUNK * 4) as u64);
+        assert!(start.elapsed() >= std::time::Duration::from_millis(300), "{:?}", start.elapsed());
     }
 }
