@@ -18,6 +18,7 @@ non-commercial open-source release later. Target platform is Linux only: Debian 
   - `known_hosts`, `sshconfig` (import/mirror), export/import (age), validation.
   - `connect/`: russh pipeline (jump host, auth, prompts, timeouts).
   - `session/`: local PTY and SSH sessions.
+  - `keys.rs`: the user's SSH key files (TP5b): list, generate; `connect::copy_public_key` is ssh-copy-id.
   - `tunnel.rs`: port forwards L/R/D (TP5a) over a terminal session's connection, kept across reconnects.
   - `transfer/`: transfer queue (TP3b) over the `Side` trait (local fs, `SftpSession`), bandwidth pacer, `chmod`
     (TP4a), `compare` and sync helpers (TP4b), `keep` (TP4c: polls the local tree, uploads what changed).
@@ -49,8 +50,9 @@ non-commercial open-source release later. Target platform is Linux only: Debian 
 - `docs/superpowers/specs/2026-10-16-linascp-tp4c-keep-up-to-date-design.md`: TP4c spec (keep a remote folder up to
   date).
 - `docs/superpowers/specs/2026-10-16-linascp-tp5a-tunnels-design.md`: TP5a spec (tunnels) and the TP5 split.
+- `docs/superpowers/specs/2026-10-17-linascp-tp5b-keychain-design.md`: TP5b spec (keychain, keygen, ssh-copy-id).
 - `docs/acceptance-tp1.md`: manual acceptance checklist (`docs/acceptance-tp2a.md` … `docs/acceptance-tp2d.md` for
-  TP2a–TP2d, `docs/acceptance-tp3a.md` for TP3a, `docs/acceptance-tp3b.md` for TP3b, `docs/acceptance-tp3c.md` for TP3c, `docs/acceptance-tp4a.md` for TP4a, `docs/acceptance-tp4b.md` for TP4b, `docs/acceptance-tp4c.md` for TP4c, `docs/acceptance-tp5a.md` for TP5a).
+  TP2a–TP2d, `docs/acceptance-tp3a.md` for TP3a, `docs/acceptance-tp3b.md` for TP3b, `docs/acceptance-tp3c.md` for TP3c, `docs/acceptance-tp4a.md` for TP4a, `docs/acceptance-tp4b.md` for TP4b, `docs/acceptance-tp4c.md` for TP4c, `docs/acceptance-tp5a.md` for TP5a, `docs/acceptance-tp5b.md` for TP5b).
 - `docs/backlog-after-tp1.md`: deferred review findings. Start TP2 planning there.
 
 ## Commands (run from the repo root)
@@ -99,6 +101,8 @@ bun run tauri build               # .deb + .AppImage in target/release/bundle/
 - **Tunnels (TP5a):** a `forwarded-tcpip` channel is accepted only for a forward this connection requested; without
   an address, local listeners bind to loopback only; the SOCKS proxy does `CONNECT` only and never asks for
   credentials; tunnels never prompt and never outlive their session.
+- **Keys (TP5b):** generated private keys are written 0600 and never overwrite a file; ssh-copy-id sends only the
+  checked public key, over stdin.
 
 ## Workflow
 
@@ -121,5 +125,5 @@ bun run tauri build               # .deb + .AppImage in target/release/bundle/
 - TP2: complete the terminal, and work off the backlog in `docs/backlog-after-tp1.md`.
 - TP3: SFTP (3a browse, 3b transfers, 3c bookmarks + edit: done).
 - TP4: advanced SFTP (4a permissions, bandwidth, server command; 4b compare + sync; 4c keep up to date: done).
-- TP5: 5a tunnels (done); 5b keychain, keygen, ssh-copy-id; 5c full settings.
+- TP5: 5a tunnels, 5b keychain, keygen, ssh-copy-id (done); 5c full settings.
 - No sync between devices. Moving data to another device goes through export/import (`.linascp` files).
