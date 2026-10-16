@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../../components";
@@ -143,5 +143,21 @@ describe("SettingsScreen", () => {
     await userEvent.type(screen.getByRole("textbox", { name: "Shell" }), "/nope");
     await userEvent.tab();
     expect(await screen.findByText(/Speichern fehlgeschlagen/)).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Shell" })).toHaveValue("");
+  });
+
+  it("shows values that change while it is open, such as after an import", async () => {
+    renderDialog();
+    act(() =>
+      useSettingsStore.setState({
+        settings: { ...useSettingsStore.getState().settings, newHostPort: 2222, editorCommand: "code -w" },
+      }),
+    );
+    const port = screen.getByRole("textbox", { name: "Port" });
+    expect(port).toHaveValue("2222");
+    expect(screen.getByLabelText("Editor")).toHaveValue("code -w");
+    await userEvent.click(port);
+    await userEvent.tab();
+    expect(api.settingsSet).not.toHaveBeenCalled();
   });
 });

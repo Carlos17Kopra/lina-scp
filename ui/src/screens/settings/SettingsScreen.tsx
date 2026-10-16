@@ -39,7 +39,10 @@ const CURSOR_OPTIONS: ReadonlyArray<{ value: TerminalCursor; label: string }> = 
   { value: "underline", label: t.settings.cursors.underline },
 ];
 
-/** A text field that saves on blur; `parse` returns `undefined` for input that must not be saved (it is reset). */
+/**
+ * A text field that saves on blur; `parse` returns `undefined` for input that must not be saved (it is reset).
+ * It follows `value` (an import changes it under the open screen) and goes back to it when a save fails.
+ */
 function BlurField<T>({
   label,
   value,
@@ -52,12 +55,17 @@ function BlurField<T>({
   value: T;
   format: (value: T) => string;
   parse: (text: string) => T | undefined;
-  onSave: (value: T) => void;
+  onSave: (value: T) => Promise<boolean>;
   placeholder?: string;
   hint?: string;
   mono?: boolean;
 }) {
   const [text, setText] = useState(format(value));
+  const [shown, setShown] = useState(value);
+  if (value !== shown) {
+    setShown(value);
+    setText(format(value));
+  }
   return (
     <TextField
       {...rest}
@@ -68,7 +76,7 @@ function BlurField<T>({
       onBlur={() => {
         const next = parse(text);
         if (next === undefined) setText(format(value));
-        else if (next !== value) onSave(next);
+        else if (next !== value) void onSave(next).then((saved) => saved || setText(format(value)));
       }}
     />
   );
@@ -91,7 +99,6 @@ export function SettingsScreen() {
   const openModal = useUiStore((state) => state.openModal);
   const toast = useToast();
   const [pendingMode, setPendingMode] = useState<SshMode | null>(null);
-  const [editor, setEditor] = useState(settings.editorCommand ?? "");
   const ids = {
     appearance: useId(),
     ssh: useId(),
@@ -102,14 +109,17 @@ export function SettingsScreen() {
     data: useId(),
   };
 
-  const persist = (patch: Partial<Settings>) => {
-    save(patch).catch((error: unknown) =>
-      toast.show({ tone: "red", message: t.shell.saveFailed, details: errorDetails(error) }),
+  const persist = (patch: Partial<Settings>) =>
+    save(patch).then(
+      () => true,
+      (error: unknown) => {
+        toast.show({ tone: "red", message: t.shell.saveFailed, details: errorDetails(error) });
+        return false;
+      },
     );
-  };
 
   const confirmMode = () => {
-    if (pendingMode) persist({ sshMode: pendingMode });
+    if (pendingMode) void persist({ sshMode: pendingMode });
     setPendingMode(null);
   };
 
@@ -272,18 +282,15 @@ export function SettingsScreen() {
           <h3 id={ids.files} className={styles.heading}>
             {t.settings.files}
           </h3>
-          <TextField
+          <BlurField
             label={t.settings.editor}
             hint={t.settings.editorHint}
             placeholder={t.settings.editorPlaceholder}
             mono
-            spellCheck={false}
-            value={editor}
-            onChange={setEditor}
-            onBlur={() => {
-              const editorCommand = editor.trim() || null;
-              if (editorCommand !== settings.editorCommand) persist({ editorCommand });
-            }}
+            value={settings.editorCommand}
+            format={showOptional}
+            parse={optionalText}
+            onSave={(editorCommand) => persist({ editorCommand })}
           />
         </section>
         <section className={styles.section} aria-labelledby={ids.data}>
