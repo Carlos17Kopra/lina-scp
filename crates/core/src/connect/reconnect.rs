@@ -624,6 +624,22 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn reconnect_now_during_an_attempt_does_not_skip_the_next_wait() {
+        let h = harness(vec![]);
+        let gate = Arc::new(Notify::new());
+        *h.gate.lock().unwrap() = Some(gate.clone());
+        h.emit(0, SessionEvent::Lost(net()));
+        advance(1).await;
+        assert_eq!(h.attempts(), 1);
+        h.session.reconnect_now();
+        gate.notify_one();
+        advance(0).await;
+        assert_eq!(h.attempts(), 1, "the 2 s wait before the second attempt still runs");
+        advance(2).await;
+        assert_eq!(h.attempts(), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn stop_during_an_attempt_discards_a_late_success() {
         let h = harness(vec![Ok(())]);
         let gate = Arc::new(Notify::new());
