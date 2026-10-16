@@ -12,8 +12,8 @@ use tokio_util::sync::CancellationToken;
 use super::copy::{IN_FLIGHT, copy_range};
 use super::side::{Node, NodeKind, Side};
 use super::{
-    BatchId, CancelTarget, Decision, Direction, FileStamp, Job, JobId, JobKind, JobNote, JobState, TransferEvent,
-    TransferOptions,
+    BatchId, CancelTarget, Decision, Direction, EnqueueOptions, FileStamp, Job, JobId, JobKind, JobNote, JobState,
+    TransferEvent, TransferOptions,
 };
 use crate::connect::network_error;
 use crate::error::{CoreError, FsKind, NetworkKind, Result};
@@ -45,6 +45,7 @@ struct Batch {
     target_dir: String,
     /// "Für alle weiteren Konflikte übernehmen".
     default: Option<Decision>,
+    file_mode: Option<u32>,
     done_sent: bool,
 }
 
@@ -64,6 +65,8 @@ struct Inner {
     emit: TransferEmit,
     /// Signalled whenever a worker finishes (`close` waits for running workers).
     idle: Notify,
+    /// Signalled when a batch may have become final, and on close (`wait_batch`).
+    settled: Notify,
     /// Chunk requests in flight across all files of the session.
     in_flight: Semaphore,
 }
@@ -160,6 +163,7 @@ impl TransferQueue {
                 options,
                 emit,
                 idle: Notify::new(),
+                settled: Notify::new(),
                 in_flight: Semaphore::new(IN_FLIGHT),
             }),
         }
@@ -179,7 +183,40 @@ impl TransferQueue {
         }
     }
 
+    /// The current connection; `None` while disconnected.
+    pub fn remote(&self) -> Option<Arc<dyn Side>> {
+        self.inner.lock().remote.clone()
+    }
+
     pub async fn enqueue(&self, direction: Direction, sources: Vec<String>, target_dir: String) -> Result<BatchId> {
+        self.enqueue_with(direction, sources, target_dir, EnqueueOptions::default()).await
+    }
+
+    /// Waits until every job of the batch is final (or the queue is closed) and returns them.
+    /// An unknown or cleared batch returns at once with what is left of it.
+    pub async fn wait_batch(&self, id: BatchId) -> Vec<Job> {
+        loop {
+            let settled = self.inner.settled.notified();
+            tokio::pin!(settled);
+            settled.as_mut().enable();
+            {
+                let st = self.inner.lock();
+                let jobs: Vec<Job> = st.jobs.iter().filter(|e| e.job.batch_id == id).map(|e| e.job.clone()).collect();
+                if st.closed || !st.batches.contains_key(&id) || jobs.iter().all(|j| j.state.is_final()) {
+                    return jobs;
+                }
+            }
+            settled.await;
+        }
+    }
+
+    pub async fn enqueue_with(
+        &self,
+        direction: Direction,
+        sources: Vec<String>,
+        target_dir: String,
+        options: EnqueueOptions,
+    ) -> Result<BatchId> {
         if self.inner.lock().closed {
             return Err(CoreError::internal("transfer queue is closed"));
         }
@@ -205,8 +242,16 @@ impl TransferQueue {
         let mut st = self.inner.lock();
         let batch_id = st.next_id;
         st.next_id += 1;
-        st.batches
-            .insert(batch_id, Batch { direction, target_dir: target_dir.clone(), default: None, done_sent: false });
+        st.batches.insert(
+            batch_id,
+            Batch {
+                direction,
+                target_dir: target_dir.clone(),
+                default: options.decision,
+                file_mode: options.file_mode.map(|m| m & 0o7777),
+                done_sent: false,
+            },
+        );
         let mut jobs = Vec::new();
         for ((source, name), node) in sources.into_iter().zip(names).zip(nodes) {
             let target = join(&target_dir, &name);
@@ -321,6 +366,7 @@ impl TransferQueue {
             st.closed = true;
             self.inner.cancel_where(&mut st, |_| true)
         };
+        self.inner.settled.notify_waiters();
         self.inner.remove_parts(parts).await;
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
@@ -453,6 +499,9 @@ impl Inner {
     /// Sends `BatchDone` once all jobs of the batch are final.
     fn check_batch(&self, st: &mut State, batch_id: BatchId) {
         let all_final = st.jobs.iter().filter(|e| e.job.batch_id == batch_id).all(|e| e.job.state.is_final());
+        if all_final {
+            self.settled.notify_waiters();
+        }
         let Some(batch) = st.batches.get_mut(&batch_id) else { return };
         if all_final && !batch.done_sent {
             batch.done_sent = true;
@@ -637,19 +686,20 @@ struct Snapshot {
     resume_at: u64,
     stamp: Option<FileStamp>,
     decision: Option<Decision>,
+    file_mode: Option<u32>,
 }
 
 async fn run_job(inner: Arc<Inner>, id: JobId, remote: Arc<dyn Side>, cancel: CancellationToken) {
     let snapshot = {
         let mut st = inner.lock();
-        let default = |st: &State, batch: BatchId| st.batches.get(&batch).and_then(|b| b.default);
         let Some(entry) = st.jobs.iter().find(|e| e.job.id == id) else { return };
-        let batch_default = default(&st, entry.job.batch_id);
+        let batch = st.batches.get(&entry.job.batch_id);
         let snap = Snapshot {
             job: entry.job.clone(),
             resume_at: entry.resume_at,
             stamp: entry.stamp,
-            decision: entry.decided.or(batch_default),
+            decision: entry.decided.or(batch.and_then(|b| b.default)),
+            file_mode: batch.and_then(|b| b.file_mode),
         };
         if let Some(entry) = Inner::entry(&mut st, id) {
             entry.decided = None;
@@ -785,7 +835,8 @@ async fn run_file(
         let closed = writer.close().await;
         let done = copied?;
         closed.map_err(|e| (e, done))?;
-        dst.set_mode(&part, inner.options.file_mode(job.direction, node.mode)).await.map_err(|e| (e, done))?;
+        let mode = snap.file_mode.unwrap_or_else(|| inner.options.file_mode(job.direction, node.mode));
+        dst.set_mode(&part, mode).await.map_err(|e| (e, done))?;
         if let Some(mtime) = node.mtime {
             dst.set_mtime(&part, mtime).await.map_err(|e| (e, done))?;
         }
@@ -1371,5 +1422,79 @@ mod tests {
         e.queue.set_remote(Some(FaultySide::new()));
         e.rec.wait_all_final().await;
         assert!(std::fs::read(e.remote.join("f")).unwrap() == data, "content differs");
+    }
+
+    mod edit_hooks {
+        use super::*;
+        use crate::transfer::EnqueueOptions;
+
+        #[tokio::test]
+        async fn enqueue_with_overwrite_never_asks() {
+            let e = env(opts());
+            std::fs::write(e.local.join("a"), b"new").unwrap();
+            std::fs::write(e.remote.join("a"), b"old").unwrap();
+            let options = EnqueueOptions { decision: Some(Decision::Overwrite), file_mode: None };
+            let batch = e
+                .queue
+                .enqueue_with(Direction::Upload, vec![p(&e.local.join("a"))], p(&e.remote), options)
+                .await
+                .unwrap();
+            let jobs = e.queue.wait_batch(batch).await;
+            assert_eq!(jobs.iter().map(|j| j.state).collect::<Vec<_>>(), [JobState::Done]);
+            assert!(!e.rec.events().iter().any(|ev| matches!(ev, TransferEvent::Conflict { .. })));
+            assert_eq!(std::fs::read(e.remote.join("a")).unwrap(), b"new");
+        }
+
+        #[tokio::test]
+        async fn enqueue_with_file_mode_sets_exactly_that_mode() {
+            let e = env(TransferOptions { parallel: 4, upload_mode: Some(0o600) });
+            std::fs::write(e.local.join("a"), b"x").unwrap();
+            let options = EnqueueOptions { decision: None, file_mode: Some(0o640) };
+            let batch = e
+                .queue
+                .enqueue_with(Direction::Upload, vec![p(&e.local.join("a"))], p(&e.remote), options)
+                .await
+                .unwrap();
+            e.queue.wait_batch(batch).await;
+            assert_eq!(std::fs::metadata(e.remote.join("a")).unwrap().permissions().mode() & 0o777, 0o640);
+        }
+
+        #[tokio::test]
+        async fn wait_batch_returns_final_jobs() {
+            let e = env(opts());
+            std::fs::write(e.remote.join("a"), b"x").unwrap();
+            let batch = e.queue.enqueue(Direction::Download, vec![p(&e.remote.join("a"))], p(&e.local)).await.unwrap();
+            let jobs = e.queue.wait_batch(batch).await;
+            assert_eq!(jobs.len(), 1);
+            assert_eq!((jobs[0].state, jobs[0].batch_id), (JobState::Done, batch));
+        }
+
+        #[tokio::test]
+        async fn wait_batch_of_unknown_batch_is_empty() {
+            let e = env(opts());
+            assert!(e.queue.wait_batch(99).await.is_empty());
+        }
+
+        #[tokio::test]
+        async fn wait_batch_returns_on_close() {
+            let e = env(opts());
+            e.queue.set_remote(None);
+            std::fs::write(e.local.join("a"), b"x").unwrap();
+            let batch = e.queue.enqueue(Direction::Upload, vec![p(&e.local.join("a"))], p(&e.remote)).await.unwrap();
+            let queue = e.queue.clone();
+            let waiter = tokio::spawn(async move { queue.wait_batch(batch).await });
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            e.queue.close().await;
+            let jobs = tokio::time::timeout(Duration::from_secs(2), waiter).await.unwrap().unwrap();
+            assert_eq!(jobs[0].state, JobState::Cancelled);
+        }
+
+        #[tokio::test]
+        async fn remote_reports_the_current_connection() {
+            let e = env(opts());
+            assert!(e.queue.remote().is_some());
+            e.queue.set_remote(None);
+            assert!(e.queue.remote().is_none());
+        }
     }
 }

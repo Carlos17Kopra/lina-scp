@@ -47,6 +47,8 @@ pub trait Side: Send + Sync {
     /// Atomically replaces `to` if it exists.
     async fn rename_over(&self, from: &str, to: &str) -> Result<()>;
     async fn remove(&self, path: &str) -> Result<()>;
+    /// Canonical absolute path with every symlink resolved; fails when nothing exists there.
+    async fn realpath(&self, path: &str) -> Result<String>;
 }
 
 #[async_trait]

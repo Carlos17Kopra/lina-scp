@@ -191,4 +191,7 @@ impl Side for FaultySide {
     async fn remove(&self, path: &str) -> Result<()> {
         LocalSide.remove(path).await
     }
+    async fn realpath(&self, path: &str) -> Result<String> {
+        LocalSide.realpath(path).await
+    }
 }

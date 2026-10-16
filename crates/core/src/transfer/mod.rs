@@ -120,6 +120,15 @@ pub enum TransferEvent {
     BatchDone { batch_id: BatchId, target_dir: String, direction: Direction },
 }
 
+/// Per-batch overrides (used by editing: always overwrite, keep the remote file's mode).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EnqueueOptions {
+    /// Answer to every conflict of the batch, as if chosen with "Für alle übernehmen".
+    pub decision: Option<Decision>,
+    /// Mode of transferred files instead of `TransferOptions::file_mode`.
+    pub file_mode: Option<u32>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransferOptions {
     /// Files transferred at the same time (directories do not count).

@@ -452,6 +452,10 @@ impl Side for SftpSession {
     async fn remove(&self, path: &str) -> Result<()> {
         self.check(self.raw.remove(path).await, path).map(|_| ())
     }
+
+    async fn realpath(&self, path: &str) -> Result<String> {
+        self.canonical(path).await
+    }
 }
 
 /// SFTP status -> `Fs`; transport problems (timeout, closed channel) -> `Network`.
