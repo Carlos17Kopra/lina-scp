@@ -139,3 +139,19 @@
   border-radius: 50%;
   background: var(--amber);
 }
+
+.appList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+
+.appChoice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}

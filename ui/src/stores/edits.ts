@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { t } from "../i18n/de";
-import { type EditEvent, type EditFile, editOpen, editReopen, editResolve, editStop, localEdit } from "../ipc/api";
+import { type EditEvent, type EditFile, type OpenApp, editOpen, editReopen, editResolve, editStop, localEdit } from "../ipc/api";
 import { errorDetails } from "../ipc/errors";
 import { pushNotice } from "./notices";
 import { type Side, useSftpStore } from "./sftp";
@@ -11,7 +11,7 @@ export interface EditsState {
   byTab: Record<string, EditFile[]>;
   onEvent(tabId: string, event: EditEvent): void;
   /** Remote: download, watch and open; local: open in place. Failures become notices. */
-  open(tabId: string, side: Side, path: string): Promise<void>;
+  open(tabId: string, side: Side, path: string, how: OpenApp): Promise<void>;
   resolve(tabId: string, id: number, overwrite: boolean): Promise<void>;
   reopen(tabId: string, id: number): Promise<void>;
   stop(tabId: string, id: number): Promise<void>;
@@ -47,10 +47,10 @@ export const useEditsStore = create<EditsState>()((set) => {
         return { byTab: { ...s.byTab, [tabId]: next } };
       }),
 
-    open: async (tabId, side, path) => {
+    open: async (tabId, side, path, how) => {
       try {
         if (side === "local") {
-          await localEdit(path);
+          await localEdit(path, how);
           return;
         }
         const sessionId = sessionOf(tabId);
@@ -58,7 +58,7 @@ export const useEditsStore = create<EditsState>()((set) => {
         const transfers = useTransfersStore.getState();
         transfers.setView(tabId, "edits");
         if (transfers.byTab[tabId]?.collapsed) transfers.toggleCollapsed(tabId);
-        await editOpen(sessionId, path);
+        await editOpen(sessionId, path, how);
       } catch (error) {
         noticeFailed(error);
       }

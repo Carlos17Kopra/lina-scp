@@ -177,6 +177,19 @@ Nicht enthalten:
 - Hinweise (Notices) für: Editor nicht startbar, behaltene lokale Kopie mit Pfad.
 - Alle Texte in `ui/src/i18n/de.ts` unter `t.sftp.bookmarks` und `t.sftp.edit`.
 
+## 2b. Öffnen mit und neue Datei (Nachtrag)
+
+- **„Öffnen mit …“** (Kontextmenü, beide Panels) zeigt die Apps für den Dateityp (`gio`: Typ aus dem Namen
+  geraten, `AppInfo::all_for_type`) plus die Texteditoren. Die gewählte App öffnet die Datei; Remote-Dateien laufen
+  wie beim Bearbeiten über die private Kopie mit Upload. `reopen` nutzt die zuletzt gewählte App.
+- Der Schalter „Immer für <Typ> verwenden“ merkt die App pro MIME-Typ in den LinaSCP-Einstellungen
+  (`open_with.<mime>` = Desktop-ID), **nie** in der System-`mimeapps.list`. Abwählen bei der gemerkten App vergisst sie.
+- Doppelklick und `Enter` nutzen die gemerkte App, sonst den Editor. `F4`/„Bearbeiten“ nutzt immer den Editor.
+- Gestartet wird nur eine installierte App, über ihre Desktop-ID (`*.desktop`, geprüft) nachgeschlagen; die ID wird
+  nie als Befehl ausgeführt. Kopien bleiben nicht ausführbar.
+- **„Neue Datei“** (Kontextmenü, Toolbar, `Shift+F4`) legt eine leere Datei exklusiv an (lokal `create_new`, remote
+  `CREATE|EXCLUDE`, Modus 0644): ein vorhandener Name wird nie angefasst. Danach steht der Cursor auf ihr.
+
 ## 3. Invarianten
 
 - Secrets und Host-Keys: unverändert.

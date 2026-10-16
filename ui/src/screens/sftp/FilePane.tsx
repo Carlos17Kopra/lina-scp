@@ -10,7 +10,7 @@ import { crumbs, formatMode, formatMtime, formatSize, isDirLike, isFileLike, joi
 import styles from "./FilePane.module.css";
 import { moveCursor, rangeBetween, targets, typeAhead } from "./paneKeys";
 
-export type PaneCommand = "newFolder" | "rename" | "delete" | "deletePermanent";
+export type PaneCommand = "newFolder" | "newFile" | "rename" | "delete" | "deletePermanent";
 
 const COLUMNS: SortKey[] = ["name", "size", "mtime", "mode", "owner"];
 const PAGE = 15;
@@ -34,7 +34,8 @@ export function FilePane({ tabId, side, disabled = false, onCommand, onTransfer,
   /** `dropRow`: the row of the other pane a drag ended on; `null` for its background, F5 and the menu. */
   onTransfer: (names: string[], toSide: Side, dropRow: string | null) => void;
   /** Edit a file of this pane (F4, Enter, double click, menu). */
-  onEdit?: (name: string) => void;
+  /** `default` = Enter/double click, `choose` = "Öffnen mit …". */
+  onEdit?: (name: string, how: "editor" | "default" | "choose") => void;
 }) {
   const tab = useSftpStore((s) => s.tabs.find((x) => x.id === tabId));
   const store = useSftpStore.getState;
@@ -65,11 +66,11 @@ export function FilePane({ tabId, side, disabled = false, onCommand, onTransfer,
     const entry = p.entries.find((e) => e.name === name);
     if (!entry || entry.nameLossy) return;
     if (isDirLike(entry)) void store().navigate(tabId, side, joinPath(p.path, name));
-    else if (isFileLike(entry)) onEdit?.(name);
+    else if (isFileLike(entry)) onEdit?.(name, "default");
   };
-  const edit = () => {
+  const edit = (how: "editor" | "choose" = "editor") => {
     const entry = p.entries.find((e) => e.name === p.cursor);
-    if (entry && isFileLike(entry) && !entry.nameLossy) onEdit?.(entry.name);
+    if (entry && isFileLike(entry) && !entry.nameLossy) onEdit?.(entry.name, how);
   };
   const setCursor = (cursor: string | null, extend: boolean) => {
     if (cursor === null) return;
@@ -87,7 +88,7 @@ export function FilePane({ tabId, side, disabled = false, onCommand, onTransfer,
   };
   const command = (c: PaneCommand) => {
     const chosen = targets(p);
-    if (c === "newFolder") onCommand(c, []);
+    if (c === "newFolder" || c === "newFile") onCommand(c, []);
     else if (c === "rename" ? chosen.length === 1 : chosen.length > 0) onCommand(c, chosen);
   };
 
@@ -119,7 +120,7 @@ export function FilePane({ tabId, side, disabled = false, onCommand, onTransfer,
       Backspace: () => open(".."),
       " ": () => p.cursor && toggle(p.cursor),
       F2: () => command("rename"),
-      F4: edit,
+      F4: () => (shiftKey ? command("newFile") : edit()),
       F5: () => {
         const chosen = targets(p);
         if (chosen.length) onTransfer(chosen, other, null);
@@ -291,7 +292,8 @@ export function FilePane({ tabId, side, disabled = false, onCommand, onTransfer,
           onKeyDown={(e) => e.key === "Escape" && setMenu(null)}
         >
           {menuItem(t.sftp.open, () => p.cursor && open(p.cursor))}
-          {menuItem(t.sftp.edit.button, edit)}
+          {menuItem(t.sftp.edit.button, () => edit())}
+          {menuItem(t.sftp.openWith.menu, () => edit("choose"))}
           {menuItem(side === "local" ? t.sftp.upload : t.sftp.download, () => {
             const chosen = targets(p);
             if (chosen.length) onTransfer(chosen, other, null);
@@ -299,6 +301,7 @@ export function FilePane({ tabId, side, disabled = false, onCommand, onTransfer,
           {menuItem(t.sftp.rename, () => command("rename"))}
           {menuItem(t.sftp.delete, () => command("delete"))}
           {menuItem(t.sftp.newFolder, () => command("newFolder"))}
+          {menuItem(t.sftp.newFile, () => command("newFile"))}
           {menuItem(t.sftp.reload, () => void store().reload(tabId, side))}
         </div>
       ) : null}

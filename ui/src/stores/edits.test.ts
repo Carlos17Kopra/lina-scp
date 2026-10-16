@@ -41,18 +41,18 @@ describe("edits store", () => {
   it("opens remote files through the session and local files in place", async () => {
     vi.mocked(api.editOpen).mockResolvedValue(1);
     vi.mocked(api.localEdit).mockResolvedValue();
-    await useEditsStore.getState().open("t", "remote", "/srv/a.txt");
-    expect(api.editOpen).toHaveBeenCalledWith("s1", "/srv/a.txt");
+    await useEditsStore.getState().open("t", "remote", "/srv/a.txt", { kind: "default" });
+    expect(api.editOpen).toHaveBeenCalledWith("s1", "/srv/a.txt", { kind: "default" });
     expect(useTransfersStore.getState().byTab.t?.view).toBe("edits");
-    await useEditsStore.getState().open("t", "local", "/l/a.txt");
-    expect(api.localEdit).toHaveBeenCalledWith("/l/a.txt");
+    await useEditsStore.getState().open("t", "local", "/l/a.txt", { kind: "editor" });
+    expect(api.localEdit).toHaveBeenCalledWith("/l/a.txt", { kind: "editor" });
   });
 
   it("explains a missing editor and other failures as notices", async () => {
     vi.mocked(api.editOpen).mockRejectedValueOnce({ type: "config", message: "no text editor found" });
-    await useEditsStore.getState().open("t", "remote", "/srv/a.txt");
+    await useEditsStore.getState().open("t", "remote", "/srv/a.txt", { kind: "editor" });
     vi.mocked(api.localEdit).mockRejectedValueOnce({ type: "fs", kind: "notFound", path: "/l/x", message: "gone" });
-    await useEditsStore.getState().open("t", "local", "/l/x");
+    await useEditsStore.getState().open("t", "local", "/l/x", { kind: "editor" });
     expect(useNoticeStore.getState().notices.map((n) => n.message)).toEqual([
       "Kein Editor gefunden. In den Einstellungen festlegen.",
       "Datei konnte nicht geöffnet werden",

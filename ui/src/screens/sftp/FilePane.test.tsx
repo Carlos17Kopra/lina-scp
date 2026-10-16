@@ -225,9 +225,9 @@ describe("FilePane", () => {
     expect(pane().cursor).toBe("b.txt");
     await userEvent.keyboard("{F4}");
     await userEvent.keyboard("{Enter}");
-    expect(onEdit.mock.calls).toEqual([["b.txt"], ["b.txt"]]);
+    expect(onEdit.mock.calls).toEqual([["b.txt", "editor"], ["b.txt", "default"]]);
     await userEvent.dblClick(screen.getByText("link-f"));
-    expect(onEdit).toHaveBeenLastCalledWith("link-f");
+    expect(onEdit).toHaveBeenLastCalledWith("link-f", "default");
     await userEvent.dblClick(screen.getByText("bad?"));
     expect(onEdit).toHaveBeenCalledTimes(3);
     await userEvent.dblClick(screen.getByText("link-d"));
@@ -240,6 +240,20 @@ describe("FilePane", () => {
     render(<FilePane tabId="t1" side="remote" onCommand={onCommand} onTransfer={onTransfer} onEdit={onEdit} />);
     fireEvent.contextMenu(screen.getByText("b.txt"));
     await userEvent.click(screen.getByRole("menuitem", { name: "Bearbeiten" }));
-    expect(onEdit).toHaveBeenCalledWith("b.txt");
+    expect(onEdit).toHaveBeenCalledWith("b.txt", "editor");
+    fireEvent.contextMenu(screen.getByText("b.txt"));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Öffnen mit …" }));
+    expect(onEdit).toHaveBeenLastCalledWith("b.txt", "choose");
+  });
+
+  it("creates a new file with Shift+F4 and from the menu", async () => {
+    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} onTransfer={onTransfer} />);
+    screen.getByRole("grid").focus();
+    await userEvent.keyboard("{Shift>}{F4}{/Shift}");
+    expect(onCommand).toHaveBeenLastCalledWith("newFile", []);
+    onCommand.mockClear();
+    fireEvent.contextMenu(screen.getByText("b.txt"));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Neue Datei" }));
+    expect(onCommand).toHaveBeenLastCalledWith("newFile", []);
   });
 });

@@ -20,6 +20,8 @@ import type {
   ImportReport,
   Listing,
   LoginProfile,
+  OpenApp,
+  OpenWithApps,
   ProfileWithUsage,
   PromptAnswer,
   Resolution,
@@ -33,6 +35,9 @@ import type {
 } from "./bindings";
 
 export type {
+  AppChoice,
+  OpenApp,
+  OpenWithApps,
   Bookmark,
   EditEvent,
   EditFile,
@@ -255,11 +260,17 @@ export function sftpDelete(sessionId: SessionId, dir: string, names: string[]): 
 export function sftpClose(sessionId: SessionId): Promise<string[]> {
   return unwrap(commands.sftpClose(sessionId));
 }
-export function editOpen(sessionId: SessionId, path: string): Promise<number> {
-  return unwrap(commands.editOpen(sessionId, path));
+export function sftpCreateFile(sessionId: SessionId, dir: string, name: string): Promise<void> {
+  return unwrapVoid(commands.sftpCreateFile(sessionId, dir, name));
 }
-export function localEdit(path: string): Promise<void> {
-  return unwrapVoid(commands.localEdit(path));
+export function editOpen(sessionId: SessionId, path: string, how: OpenApp): Promise<number> {
+  return unwrap(commands.editOpen(sessionId, path, how));
+}
+export function localEdit(path: string, how: OpenApp): Promise<void> {
+  return unwrapVoid(commands.localEdit(path, how));
+}
+export function openWithApps(name: string): Promise<OpenWithApps> {
+  return unwrap(commands.openWithApps(name));
 }
 export function editResolve(sessionId: SessionId, editId: number, overwrite: boolean): Promise<void> {
   return unwrapVoid(commands.editResolve(sessionId, editId, overwrite));
@@ -279,6 +290,9 @@ export function localHome(hostId: Id | null): Promise<string> {
 }
 export function localMkdir(dir: string, name: string): Promise<void> {
   return unwrapVoid(commands.localMkdir(dir, name));
+}
+export function localCreateFile(dir: string, name: string): Promise<void> {
+  return unwrapVoid(commands.localCreateFile(dir, name));
 }
 export function localRename(dir: string, from: string, to: string): Promise<void> {
   return unwrapVoid(commands.localRename(dir, from, to));

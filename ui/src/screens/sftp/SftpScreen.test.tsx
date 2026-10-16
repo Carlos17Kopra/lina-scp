@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../ipc/api";
@@ -162,9 +162,47 @@ describe("SftpScreen", () => {
     await vi.waitFor(() => expect(useSftpStore.getState().tabs[0]!.panes.local.entries).toHaveLength(1));
     render(<SftpScreen />);
     await userEvent.dblClick(within(screen.getByRole("grid", { name: "Remote" })).getByText("a.txt"));
-    expect(api.editOpen).toHaveBeenCalledWith("s1", "/srv/a.txt");
+    expect(api.editOpen).toHaveBeenCalledWith("s1", "/srv/a.txt", { kind: "default" });
     await userEvent.dblClick(within(screen.getByRole("grid", { name: "Lokal" })).getByText("a.txt"));
-    expect(api.localEdit).toHaveBeenCalledWith("/l/a.txt");
+    expect(api.localEdit).toHaveBeenCalledWith("/l/a.txt", { kind: "default" });
+  });
+
+  it("opens a file with a chosen app and can remember it for the type", async () => {
+    vi.mocked(api.editOpen).mockResolvedValue(1);
+    vi.mocked(api.openWithApps).mockResolvedValue({
+      typeName: "PNG-Bild", remembered: "viewer.desktop",
+      apps: [{ id: "viewer.desktop", name: "Bildbetrachter" }, { id: "gimp.desktop", name: "GIMP" }],
+    });
+    useSftpStore.getState().openTab("t1", "h1", {
+      sessionId: "s1", info: makeSessionInfo(), version: 3,
+      listing: { path: "/srv", entries: [{ name: "a.png", kind: { type: "file" }, size: 1, mtime: 0, mode: 0o100644, owner: "u", nameLossy: false }] },
+    });
+    render(<SftpScreen />);
+    fireEvent.contextMenu(within(screen.getByRole("grid", { name: "Remote" })).getByText("a.png"));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Öffnen mit …" }));
+    const dialog = await screen.findByRole("dialog", { name: "a.png öffnen mit" });
+    expect(api.openWithApps).toHaveBeenCalledWith("a.png");
+    expect(within(dialog).getByRole("radio", { name: "Bildbetrachter" })).toBeChecked();
+    const remember = within(dialog).getByRole("checkbox", { name: "Immer für PNG-Bild verwenden" });
+    expect(remember).toBeChecked();
+    await userEvent.click(within(dialog).getByRole("radio", { name: "GIMP" }));
+    expect(remember).not.toBeChecked();
+    await userEvent.click(remember);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Öffnen" }));
+    expect(api.editOpen).toHaveBeenCalledWith("s1", "/srv/a.png", { kind: "app", id: "gimp.desktop", remember: true });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("creates a new file from the toolbar", async () => {
+    openTab();
+    vi.mocked(api.sftpCreateFile).mockResolvedValue();
+    vi.mocked(api.sftpList).mockResolvedValue({ path: "/srv", entries: [] });
+    render(<SftpScreen />);
+    await userEvent.click(screen.getByRole("button", { name: "Neue Datei" }));
+    expect(screen.getByRole("dialog", { name: "Neue Datei" })).toBeInTheDocument();
+    await userEvent.type(screen.getByRole("textbox", { name: "Name" }), "neu.txt{Enter}");
+    expect(api.sftpCreateFile).toHaveBeenCalledWith("s1", "/srv", "neu.txt");
+    expect(api.sftpList).toHaveBeenCalledWith("s1", "/srv");
   });
 
   it("the toolbar edit button is off on the remote side while not connected", () => {

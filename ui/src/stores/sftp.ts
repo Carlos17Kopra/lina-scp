@@ -3,6 +3,7 @@ import {
   type CoreError,
   type Entry,
   type Id,
+  localCreateFile,
   localDelete,
   localHome,
   localList,
@@ -14,6 +15,7 @@ import {
   type SftpConnected,
   type SftpEvent,
   sftpClose,
+  sftpCreateFile,
   sftpDelete,
   sftpList,
   sftpMkdir,
@@ -76,6 +78,7 @@ export interface SftpState {
   setEditingPath(tabId: string, side: Side, on: boolean): void;
   select(tabId: string, side: Side, patch: Pick<PaneState, "selection" | "cursor" | "anchor">): void;
   mkdir(tabId: string, side: Side, name: string): Promise<void>;
+  createFile(tabId: string, side: Side, name: string): Promise<void>;
   rename(tabId: string, side: Side, from: string, to: string): Promise<void>;
   remove(tabId: string, side: Side, names: string[], mode: "trash" | "permanent"): Promise<void>;
 }
@@ -258,6 +261,14 @@ export const useSftpStore = create<SftpState>()((set, get) => {
       if (!tab) return;
       const dir = tab.panes[side].path;
       await (side === "remote" ? sftpMkdir(tab.sessionId, dir, name) : localMkdir(dir, name));
+      await get().reload(tabId, side, name);
+    },
+
+    createFile: async (tabId, side, name) => {
+      const tab = findTab(tabId);
+      if (!tab) return;
+      const dir = tab.panes[side].path;
+      await (side === "remote" ? sftpCreateFile(tab.sessionId, dir, name) : localCreateFile(dir, name));
       await get().reload(tabId, side, name);
     },
 

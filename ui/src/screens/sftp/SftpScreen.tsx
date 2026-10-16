@@ -1,4 +1,4 @@
-import { Download, Eye, FilePen, FolderPlus, Pencil, RefreshCw, SquareTerminal, Trash2, Upload, X } from "lucide-react";
+import { Download, Eye, FilePen, FilePlus, FolderPlus, Pencil, RefreshCw, SquareTerminal, Trash2, Upload, X } from "lucide-react";
 import { useState } from "react";
 import { Button, cx, IconButton } from "../../components";
 import { t } from "../../i18n/de";
@@ -18,6 +18,7 @@ import { DeleteDialog } from "./DeleteDialog";
 import { isDirLike, isFileLike, joinPath } from "./entries";
 import { FilePane, type PaneCommand } from "./FilePane";
 import { NameDialog } from "./NameDialog";
+import { OpenWithDialog } from "./OpenWithDialog";
 import filePaneStyles from "./FilePane.module.css";
 import { targets } from "./paneKeys";
 import styles from "./SftpScreen.module.css";
@@ -26,7 +27,8 @@ import { TransferPanel } from "./TransferPanel";
 import { useExternalDrop } from "./useExternalDrop";
 
 type DialogState =
-  | { type: "new"; side: Side }
+  | { type: "new" | "newFile"; side: Side }
+  | { type: "openWith"; side: Side; name: string }
   | { type: "rename"; side: Side; name: string }
   | { type: "delete"; side: Side; names: string[]; mode: "trash" | "permanent"; folder: boolean };
 
@@ -94,8 +96,8 @@ export function SftpScreen() {
 
   const onCommand = (s: Side) => (command: PaneCommand, names: string[]) => {
     if (sideDisabled(s)) return;
-    if (command === "newFolder") {
-      setDialog({ type: "new", side: s });
+    if (command === "newFolder" || command === "newFile") {
+      setDialog({ type: command === "newFolder" ? "new" : "newFile", side: s });
       return;
     }
     if (command === "rename") {
@@ -107,12 +109,14 @@ export function SftpScreen() {
     const mode = s === "local" && command === "delete" ? "trash" : "permanent";
     setDialog({ type: "delete", side: s, names, mode, folder });
   };
-  const onEdit = (s: Side) => (name: string) => {
-    if (!sideDisabled(s)) void useEditsStore.getState().open(tab.id, s, joinPath(tab.panes[s].path, name));
+  const onEdit = (s: Side) => (name: string, how: "editor" | "default" | "choose") => {
+    if (sideDisabled(s)) return;
+    if (how === "choose") setDialog({ type: "openWith", side: s, name });
+    else void useEditsStore.getState().open(tab.id, s, joinPath(tab.panes[s].path, name), { kind: how });
   };
   const editCursor = () => {
     const entry = pane.entries.find((e) => e.name === pane.cursor);
-    if (entry && isFileLike(entry) && !entry.nameLossy) onEdit(side)(entry.name);
+    if (entry && isFileLike(entry) && !entry.nameLossy) onEdit(side)(entry.name, "editor");
   };
   const requestClose = (tabId: string) => {
     const count = openCount(useTransfersStore.getState().byTab[tabId]) + dirtyCount(useEditsStore.getState().byTab[tabId]);
@@ -154,6 +158,7 @@ export function SftpScreen() {
           {side === "local" ? t.sftp.upload : t.sftp.download}
         </Button>
         <Button icon={FolderPlus} disabled={sideDisabled(side)} onClick={() => toolbar("newFolder")}>{t.sftp.newFolder}</Button>
+        <Button icon={FilePlus} disabled={sideDisabled(side)} onClick={() => toolbar("newFile")}>{t.sftp.newFile}</Button>
         <Button icon={Pencil} disabled={sideDisabled(side)} onClick={() => toolbar("rename")}>{t.sftp.rename}</Button>
         <Button icon={FilePen} disabled={sideDisabled(side)} onClick={editCursor}>{t.sftp.edit.button}</Button>
         <Button icon={Trash2} disabled={sideDisabled(side)} onClick={() => toolbar("delete")}>{t.sftp.delete}</Button>
@@ -186,6 +191,13 @@ export function SftpScreen() {
       </footer>
       {dialog?.type === "new" ? (
         <NameDialog mode="new" onSubmit={(name) => store().mkdir(tab.id, dialog.side, name)} onClose={() => setDialog(null)} />
+      ) : null}
+      {dialog?.type === "newFile" ? (
+        <NameDialog mode="newFile" onSubmit={(name) => store().createFile(tab.id, dialog.side, name)} onClose={() => setDialog(null)} />
+      ) : null}
+      {dialog?.type === "openWith" ? (
+        <OpenWithDialog name={dialog.name} onClose={() => setDialog(null)}
+          onOpen={(how) => void useEditsStore.getState().open(tab.id, dialog.side, joinPath(tab.panes[dialog.side].path, dialog.name), how)} />
       ) : null}
       {dialog?.type === "rename" ? (
         <NameDialog mode="rename" initial={dialog.name} onSubmit={(name) => store().rename(tab.id, dialog.side, dialog.name, name)} onClose={() => setDialog(null)} />

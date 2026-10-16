@@ -28,3 +28,15 @@ eine Textdatei mit Rechten `0640`, ein Symlink auf eine Konfigurationsdatei und 
 - [ ] Ohne Texteditor-Zuordnung bzw. mit einem nicht existierenden Befehl: Hinweis statt Absturz.
 - [ ] Lokale Datei bearbeiten (`F4` im lokalen Panel) öffnet die Datei direkt, ohne Kopie.
 - [ ] Ohne Verbindung sind Bearbeiten-Auslöser im Remote-Panel aus.
+
+## Öffnen mit
+- [ ] Kontextmenü „Öffnen mit …“ auf `bild.png`: der Dialog listet Bildprogramme und die Texteditoren.
+- [ ] App wählen, „Öffnen“: die Datei öffnet sich darin; Speichern lädt wie beim Bearbeiten hoch.
+- [ ] Mit „Immer für PNG-Bild verwenden“: Doppelklick und `Enter` öffnen PNGs danach in dieser App, `F4`/„Bearbeiten“ weiter im Texteditor.
+- [ ] Den Schalter bei der gemerkten App abwählen und öffnen: Doppelklick nutzt wieder den Texteditor.
+- [ ] Die System-Zuordnung (`xdg-mime query default image/png`) bleibt unverändert.
+- [ ] „Im Editor öffnen“ unter „Bearbeitet“ nutzt die zuletzt gewählte App.
+
+## Neue Datei
+- [ ] Kontextmenü, Toolbar oder `Shift+F4` „Neue Datei“: Name eingeben, die leere Datei entsteht und hat den Cursor.
+- [ ] Ein vorhandener Name zeigt „Dieser Name existiert bereits.“, die vorhandene Datei bleibt unverändert.

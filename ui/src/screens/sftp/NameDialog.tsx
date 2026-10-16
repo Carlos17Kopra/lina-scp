@@ -13,7 +13,7 @@ export function validateName(name: string): string | null {
 }
 
 export function NameDialog({ mode, initial = "", onSubmit, onClose }: {
-  mode: "new" | "rename";
+  mode: "new" | "newFile" | "rename";
   initial?: string;
   onSubmit: (name: string) => Promise<void>;
   onClose: () => void;
@@ -60,14 +60,14 @@ export function NameDialog({ mode, initial = "", onSubmit, onClose }: {
     <Dialog
       open
       size="sm"
-      title={mode === "new" ? texts.newTitle : texts.renameTitle}
+      title={mode === "new" ? texts.newTitle : mode === "newFile" ? texts.newFileTitle : texts.renameTitle}
       onClose={onClose}
       initialFocusRef={ref}
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>{t.common.cancel}</Button>
           <Button variant="primary" disabled={busy} onClick={() => void submit()}>
-            {mode === "new" ? texts.create : texts.save}
+            {mode === "rename" ? texts.save : texts.create}
           </Button>
         </>
       }

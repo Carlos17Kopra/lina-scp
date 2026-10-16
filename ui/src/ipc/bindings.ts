@@ -14,8 +14,10 @@ export const commands = {
 	profileSave: (profile: LoginProfile) => typedError<LoginProfile, CoreError>(__TAURI_INVOKE("profile_save", { profile })),
 	profileDelete: (id: string) => typedError<null, CoreError>(__TAURI_INVOKE("profile_delete", { id })),
 	/**  Downloads a remote file, opens it in the editor and uploads every save. */
-	editOpen: (sessionId: string, path: string) => typedError<number, CoreError>(__TAURI_INVOKE("edit_open", { sessionId, path })),
-	localEdit: (path: string) => typedError<null, CoreError>(__TAURI_INVOKE("local_edit", { path })),
+	editOpen: (sessionId: string, path: string, how: OpenApp) => typedError<number, CoreError>(__TAURI_INVOKE("edit_open", { sessionId, path, how })),
+	localEdit: (path: string, how: OpenApp) => typedError<null, CoreError>(__TAURI_INVOKE("local_edit", { path, how })),
+	/**  The apps offered by "Öffnen mit" for a file name. */
+	openWithApps: (name: string) => typedError<OpenWithApps, CoreError>(__TAURI_INVOKE("open_with_apps", { name })),
 	editResolve: (sessionId: string, editId: number, overwrite: boolean) => typedError<null, CoreError>(__TAURI_INVOKE("edit_resolve", { sessionId, editId, overwrite })),
 	editReopen: (sessionId: string, editId: number) => typedError<null, CoreError>(__TAURI_INVOKE("edit_reopen", { sessionId, editId })),
 	/**  Returns the path of a copy that was kept because it holds changes the server does not have. */
@@ -40,6 +42,7 @@ export const commands = {
 	connectSftp: (connectId: string, hostId: string, sessionId: string | null, events: Channel<ConnectEvent>, sftpEvents: Channel<SftpEvent>) => typedError<SftpConnected, CoreError>(__TAURI_INVOKE("connect_sftp", { connectId, hostId, sessionId, events, sftpEvents })),
 	sftpList: (sessionId: string, path: string) => typedError<Listing, CoreError>(__TAURI_INVOKE("sftp_list", { sessionId, path })),
 	sftpMkdir: (sessionId: string, dir: string, name: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_mkdir", { sessionId, dir, name })),
+	sftpCreateFile: (sessionId: string, dir: string, name: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_create_file", { sessionId, dir, name })),
 	sftpRename: (sessionId: string, dir: string, from: string, to: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_rename", { sessionId, dir, from, to })),
 	sftpDelete: (sessionId: string, dir: string, names: string[]) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_delete", { sessionId, dir, names })),
 	/**
@@ -50,6 +53,7 @@ export const commands = {
 	localList: (path: string) => typedError<Listing, CoreError>(__TAURI_INVOKE("local_list", { path })),
 	localHome: (hostId: string | null) => typedError<string, CoreError>(__TAURI_INVOKE("local_home", { hostId })),
 	localMkdir: (dir: string, name: string) => typedError<null, CoreError>(__TAURI_INVOKE("local_mkdir", { dir, name })),
+	localCreateFile: (dir: string, name: string) => typedError<null, CoreError>(__TAURI_INVOKE("local_create_file", { dir, name })),
 	localRename: (dir: string, from: string, to: string) => typedError<null, CoreError>(__TAURI_INVOKE("local_rename", { dir, from, to })),
 	localDelete: (dir: string, names: string[]) => typedError<null, CoreError>(__TAURI_INVOKE("local_delete", { dir, names })),
 	localTrash: (dir: string, names: string[]) => typedError<null, CoreError>(__TAURI_INVOKE("local_trash", { dir, names })),
@@ -75,6 +79,11 @@ export const commands = {
 };
 
 /* Types */
+export type AppChoice = {
+	id: string,
+	name: string,
+};
+
 export type AuthConfig = {
 	method: AuthMethod,
 	keyPath: string | null,
@@ -318,6 +327,22 @@ export type LoginProfile = {
 
 /**  Classification of network failures, used by the UI to pick the error screen. */
 export type NetworkKind = "timeout" | "refused" | "dns" | "other";
+
+/**  Which program opens a file from the SFTP panes. */
+export type OpenApp = 
+/**  "Bearbeiten": the editor setting, else the `text/plain` default. */
+{ kind: "editor" } | 
+/**  "Öffnen": the app remembered for the file type, else the editor. */
+{ kind: "default" } | 
+/**  "Öffnen mit": a desktop id; `remember` makes it the default for the type (in LinaSCP only). */
+{ kind: "app"; id: string; remember: boolean };
+
+export type OpenWithApps = {
+	/**  Readable name of the file type, e.g. "PNG-Bild". */
+	typeName: string,
+	apps: AppChoice[],
+	remembered: string | null,
+};
 
 export type PortForward = {
 	id: string,
