@@ -106,6 +106,10 @@ fn base_name(path: &str) -> Result<String> {
     Ok(name)
 }
 
+fn unknown(what: &str, id: u64) -> CoreError {
+    CoreError::internal(format!("unknown {what} {id}"))
+}
+
 fn stamp(node: &Node) -> FileStamp {
     FileStamp { size: node.size, mtime: node.mtime }
 }
@@ -165,6 +169,9 @@ impl TransferQueue {
     }
 
     pub async fn enqueue(&self, direction: Direction, sources: Vec<String>, target_dir: String) -> Result<BatchId> {
+        if self.inner.lock().closed {
+            return Err(CoreError::internal("transfer queue is closed"));
+        }
         if sources.is_empty() {
             return Err(CoreError::config("nothing to transfer"));
         }
@@ -193,6 +200,121 @@ impl TransferQueue {
         self.inner.check_batch(&mut st, batch_id);
         self.inner.kick(&mut st);
         Ok(batch_id)
+    }
+    pub fn resolve(&self, id: JobId, decision: Decision, apply_to_all: bool) -> Result<()> {
+        let mut st = self.inner.lock();
+        let entry = Inner::entry(&mut st, id).ok_or_else(|| unknown("job", id))?;
+        if entry.job.state != JobState::WaitingDecision {
+            return Err(CoreError::internal(format!("job {id} is not waiting for a decision")));
+        }
+        let batch_id = entry.job.batch_id;
+        if st.conflict_open == Some(id) {
+            st.conflict_open = None;
+        }
+        if decision == Decision::CancelBatch {
+            let parts = self.inner.cancel_where(&mut st, |job| job.batch_id == batch_id);
+            self.inner.after_change(&mut st, batch_id, parts);
+            return Ok(());
+        }
+        let ids: Vec<JobId> = if apply_to_all {
+            if let Some(batch) = st.batches.get_mut(&batch_id) {
+                batch.default = Some(decision);
+            }
+            st.jobs
+                .iter()
+                .filter(|e| e.job.batch_id == batch_id && e.job.state == JobState::WaitingDecision)
+                .map(|e| e.job.id)
+                .collect()
+        } else {
+            vec![id]
+        };
+        for job_id in ids {
+            if st.conflict_open == Some(job_id) {
+                st.conflict_open = None;
+            }
+            let Some(entry) = Inner::entry(&mut st, job_id) else { continue };
+            entry.conflict = None;
+            if decision == Decision::Skip {
+                entry.job.state = JobState::Skipped;
+            } else {
+                // `Newer` is checked by the worker against the target as it is now, not as it was
+                // when the dialog opened.
+                entry.decided = Some(decision);
+                entry.job.state = JobState::Queued;
+            }
+            (self.inner.emit)(TransferEvent::Job { job: entry.job.clone() });
+        }
+        self.inner.after_change(&mut st, batch_id, Vec::new());
+        Ok(())
+    }
+
+    pub fn cancel(&self, target: CancelTarget) -> Result<()> {
+        let mut st = self.inner.lock();
+        let (batch_id, parts) = match target {
+            CancelTarget::Job { id } => {
+                let batch_id = st.jobs.iter().find(|e| e.job.id == id).ok_or_else(|| unknown("job", id))?.job.batch_id;
+                (batch_id, self.inner.cancel_where(&mut st, |job| job.id == id))
+            }
+            CancelTarget::Batch { id } => {
+                if !st.batches.contains_key(&id) {
+                    return Err(unknown("batch", id));
+                }
+                (id, self.inner.cancel_where(&mut st, |job| job.batch_id == id))
+            }
+        };
+        self.inner.after_change(&mut st, batch_id, parts);
+        Ok(())
+    }
+
+    pub fn retry(&self, id: JobId) -> Result<()> {
+        let mut st = self.inner.lock();
+        let index = st.jobs.iter().position(|e| e.job.id == id).ok_or_else(|| unknown("job", id))?;
+        if st.jobs[index].job.state != JobState::Failed {
+            return Err(CoreError::internal(format!("job {id} has not failed")));
+        }
+        let mut entry = st.jobs.remove(index);
+        entry.job.state = JobState::Queued;
+        entry.job.error = None;
+        entry.job.done = 0;
+        entry.resume_at = 0;
+        let batch_id = entry.job.batch_id;
+        (self.inner.emit)(TransferEvent::Job { job: entry.job.clone() });
+        st.jobs.push(entry);
+        if let Some(batch) = st.batches.get_mut(&batch_id) {
+            batch.done_sent = false;
+        }
+        self.inner.kick(&mut st);
+        Ok(())
+    }
+
+    /// Forgets done, skipped and cancelled jobs (the UI clears its list itself).
+    pub fn clear(&self) {
+        let mut st = self.inner.lock();
+        st.jobs.retain(|e| !matches!(e.job.state, JobState::Done | JobState::Skipped | JobState::Cancelled));
+        let alive: std::collections::HashSet<BatchId> = st.jobs.iter().map(|e| e.job.batch_id).collect();
+        st.batches.retain(|id, _| alive.contains(id));
+    }
+
+    /// Cancels everything, removes the parts and waits (up to 5 s) for running workers. No event
+    /// after this; later calls fail.
+    pub async fn close(&self) {
+        let parts = {
+            let mut st = self.inner.lock();
+            st.closed = true;
+            self.inner.cancel_where(&mut st, |_| true)
+        };
+        self.inner.remove_parts(parts).await;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let idle = self.inner.idle.notified();
+            // Cancelled workers keep their token until `finish`: wait for them to remove their parts.
+            if !self.inner.lock().jobs.iter().any(|e| e.cancel.is_some()) {
+                break;
+            }
+            if tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), idle).await.is_err() {
+                break;
+            }
+        }
     }
 }
 
@@ -430,6 +552,57 @@ impl Inner {
         drop(st);
         self.idle.notify_waiters();
     }
+
+    /// Marks matching unfinished jobs `Cancelled` and stops running ones (their worker removes its
+    /// part). Returns the parts of paused jobs, which no worker owns.
+    fn cancel_where(&self, st: &mut State, matches: impl Fn(&Job) -> bool) -> Vec<(Direction, String)> {
+        let closed = st.closed;
+        let mut parts = Vec::new();
+        let mut reopen = false;
+        for entry in st.jobs.iter_mut().filter(|e| !e.job.state.is_final() && matches(&e.job)) {
+            if entry.job.state == JobState::Paused && entry.resume_at > 0 {
+                parts.push((entry.job.direction, format!("{}.filepart", entry.job.target)));
+            }
+            if let Some(token) = &entry.cancel {
+                token.cancel();
+            }
+            reopen |= st.conflict_open == Some(entry.job.id);
+            entry.job.state = JobState::Cancelled;
+            entry.conflict = None;
+            if !closed {
+                (self.emit)(TransferEvent::Job { job: entry.job.clone() });
+            }
+        }
+        if reopen {
+            st.conflict_open = None;
+        }
+        parts
+    }
+
+    /// Bookkeeping after a resolve or cancel: next conflict, batch end, free slots, orphan parts.
+    fn after_change(self: &Arc<Self>, st: &mut State, batch_id: BatchId, parts: Vec<(Direction, String)>) {
+        self.open_next_conflict(st);
+        self.check_batch(st, batch_id);
+        self.kick(st);
+        if !parts.is_empty() {
+            let inner = self.clone();
+            tokio::spawn(async move { inner.remove_parts(parts).await });
+        }
+    }
+
+    /// Best effort: a remote part stays when there is no connection.
+    async fn remove_parts(&self, parts: Vec<(Direction, String)>) {
+        let remote = self.lock().remote.clone();
+        for (direction, part) in parts {
+            let side = match direction {
+                Direction::Upload => remote.clone(),
+                Direction::Download => Some(self.local.clone()),
+            };
+            if let Some(side) = side {
+                let _ = side.remove(&part).await;
+            }
+        }
+    }
 }
 
 /// Reads what a worker needs from its entry.
@@ -463,7 +636,7 @@ async fn run_job(inner: Arc<Inner>, id: JobId, remote: Arc<dyn Side>, cancel: Ca
         JobKind::File => run_file(&inner, &snapshot, &*src, &*dst, &cancel).await,
     };
     let outcome = match outcome {
-        Outcome::Failed(error) if matches!(error, CoreError::Network { .. }) => {
+        Outcome::Failed(CoreError::Network { .. }) => {
             Outcome::Paused { resume_at: snapshot.resume_at, stamp: snapshot.stamp, used: remote }
         }
         Outcome::Interrupted { resume_at, stamp } => Outcome::Paused { resume_at, stamp, used: remote },
@@ -814,5 +987,199 @@ mod tests {
             })
             .collect();
         assert_eq!(states, vec![JobState::Queued, JobState::Running, JobState::Running, JobState::Done]);
+    }
+    fn conflicts(rec: &Recorder) -> Vec<JobId> {
+        rec.events()
+            .into_iter()
+            .filter_map(|e| match e {
+                TransferEvent::Conflict { job_id, .. } => Some(job_id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// One file at a time, so `a` reaches its conflict before `b` (with more workers, conflicts
+    /// open in the order the workers find them).
+    fn serial() -> TransferOptions {
+        TransferOptions { parallel: 1, upload_mode: None }
+    }
+
+    /// Two local files `a`, `b` that both exist on the remote with older content.
+    async fn two_conflicts(e: &Env) {
+        for name in ["a", "b"] {
+            std::fs::write(e.remote.join(name), b"old").unwrap();
+            std::fs::write(e.local.join(name), b"new!").unwrap();
+        }
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000);
+        for name in ["a", "b"] {
+            std::fs::File::options().write(true).open(e.remote.join(name)).unwrap().set_modified(old).unwrap();
+        }
+        e.queue
+            .enqueue(Direction::Upload, vec![p(&e.local.join("a")), p(&e.local.join("b"))], p(&e.remote))
+            .await
+            .unwrap();
+        e.rec
+            .wait("both waiting", |r| r.jobs().values().filter(|j| j.state == JobState::WaitingDecision).count() == 2)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn conflicts_open_one_at_a_time_and_others_keep_running() {
+        let e = env(serial());
+        two_conflicts(&e).await;
+        std::fs::write(e.local.join("c"), b"c").unwrap();
+        e.queue.enqueue(Direction::Upload, vec![p(&e.local.join("c"))], p(&e.remote)).await.unwrap();
+        e.rec.wait("c done", |r| r.job_by_rel("c").state == JobState::Done).await;
+        assert_eq!(conflicts(&e.rec).len(), 1);
+        let a = e.rec.job_by_rel("a");
+        assert_eq!(conflicts(&e.rec), vec![a.id]);
+        let TransferEvent::Conflict { source, target, .. } =
+            e.rec.events().into_iter().find(|ev| matches!(ev, TransferEvent::Conflict { .. })).unwrap()
+        else {
+            unreachable!()
+        };
+        assert_eq!((source.size, target.size, target.mtime), (4, 3, Some(1_000)));
+        e.queue.resolve(a.id, Decision::Skip, false).unwrap();
+        e.rec.wait("second conflict", |r| conflicts(r).len() == 2).await;
+        assert_eq!(e.rec.job_by_rel("a").state, JobState::Skipped);
+        assert_eq!(std::fs::read(e.remote.join("a")).unwrap(), b"old");
+    }
+
+    #[tokio::test]
+    async fn overwrite_and_apply_to_all_resolve_the_waiting_ones_too() {
+        let e = env(serial());
+        two_conflicts(&e).await;
+        let a = e.rec.job_by_rel("a");
+        e.queue.resolve(a.id, Decision::Overwrite, true).unwrap();
+        e.rec.wait_all_final().await;
+        assert_eq!(std::fs::read(e.remote.join("a")).unwrap(), b"new!");
+        assert_eq!(std::fs::read(e.remote.join("b")).unwrap(), b"new!");
+        assert_eq!(conflicts(&e.rec).len(), 1, "b never asked");
+    }
+
+    #[tokio::test]
+    async fn newer_overwrites_only_older_targets() {
+        let e = env(serial());
+        two_conflicts(&e).await;
+        // b on the remote becomes newer than the local file.
+        let future = std::time::SystemTime::now() + std::time::Duration::from_secs(3_600);
+        std::fs::File::options().write(true).open(e.remote.join("b")).unwrap().set_modified(future).unwrap();
+        let (a, b) = (e.rec.job_by_rel("a"), e.rec.job_by_rel("b"));
+        e.queue.resolve(a.id, Decision::Newer, false).unwrap();
+        e.rec.wait("b open", |r| conflicts(r).len() == 2).await;
+        e.queue.resolve(b.id, Decision::Newer, false).unwrap();
+        e.rec.wait_all_final().await;
+        assert_eq!(std::fs::read(e.remote.join("a")).unwrap(), b"new!");
+        assert_eq!(std::fs::read(e.remote.join("b")).unwrap(), b"old");
+        assert_eq!(e.rec.job_by_rel("b").state, JobState::Skipped);
+    }
+
+    #[tokio::test]
+    async fn cancel_batch_from_the_dialog_cancels_every_open_job_of_the_batch() {
+        let e = env(serial());
+        two_conflicts(&e).await;
+        let a = e.rec.job_by_rel("a");
+        e.queue.resolve(a.id, Decision::CancelBatch, false).unwrap();
+        e.rec.wait_all_final().await;
+        assert_eq!(e.rec.job_by_rel("a").state, JobState::Cancelled);
+        assert_eq!(e.rec.job_by_rel("b").state, JobState::Cancelled);
+        assert_eq!(conflicts(&e.rec).len(), 1);
+        assert!(e.rec.events().iter().any(|ev| matches!(ev, TransferEvent::BatchDone { .. })));
+    }
+
+    #[tokio::test]
+    async fn cancelling_the_open_conflict_opens_the_next() {
+        let e = env(serial());
+        two_conflicts(&e).await;
+        let a = e.rec.job_by_rel("a");
+        e.queue.cancel(CancelTarget::Job { id: a.id }).unwrap();
+        e.rec.wait("b asked", |r| conflicts(r).len() == 2).await;
+        assert_eq!(e.rec.job_by_rel("a").state, JobState::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn a_file_against_a_directory_fails() {
+        let e = env(opts());
+        std::fs::create_dir(e.remote.join("x")).unwrap();
+        std::fs::write(e.local.join("x"), b"1").unwrap();
+        e.queue.enqueue(Direction::Upload, vec![p(&e.local.join("x"))], p(&e.remote)).await.unwrap();
+        e.rec.wait_all_final().await;
+        let x = e.rec.job_by_rel("x");
+        assert_eq!(x.state, JobState::Failed);
+        assert!(matches!(x.error, Some(CoreError::Fs { kind: FsKind::AlreadyExists, .. })));
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_running_job_removes_its_part_and_keeps_finished_files() {
+        let e = env(TransferOptions { parallel: 1, upload_mode: None });
+        std::fs::write(e.local.join("small"), b"s").unwrap();
+        std::fs::write(e.local.join("big"), vec![0u8; 64 * 1024 * 1024]).unwrap();
+        e.queue
+            .enqueue(Direction::Upload, vec![p(&e.local.join("small")), p(&e.local.join("big"))], p(&e.remote))
+            .await
+            .unwrap();
+        e.rec.wait("big running", |r| r.jobs().values().any(|j| j.rel == "big" && j.state == JobState::Running)).await;
+        let big = e.rec.job_by_rel("big");
+        e.queue.cancel(CancelTarget::Batch { id: big.batch_id }).unwrap();
+        e.rec.wait_all_final().await;
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert_eq!(e.rec.job_by_rel("big").state, JobState::Cancelled);
+        assert!(!e.remote.join("big.filepart").exists());
+        assert!(!e.remote.join("big").exists());
+        assert_eq!(std::fs::read(e.remote.join("small")).unwrap(), b"s");
+    }
+
+    #[tokio::test]
+    async fn retry_requeues_a_failed_job_at_the_end() {
+        let e = env(opts());
+        e.queue.enqueue(Direction::Upload, vec![p(&e.local.join("late"))], p(&e.remote)).await.unwrap();
+        e.rec.wait_all_final().await;
+        let late = e.rec.job_by_rel("late");
+        assert_eq!(late.state, JobState::Failed);
+        std::fs::write(e.local.join("late"), b"now").unwrap();
+        e.queue.retry(late.id).unwrap();
+        e.rec.wait("retried", |r| r.job_by_rel("late").state == JobState::Done).await;
+        assert_eq!(std::fs::read(e.remote.join("late")).unwrap(), b"now");
+        assert!(matches!(e.queue.retry(late.id), Err(CoreError::Internal { .. })), "only failed jobs");
+        let done = e.rec.events().iter().filter(|ev| matches!(ev, TransferEvent::BatchDone { .. })).count();
+        assert_eq!(done, 2, "the batch completes again after the retry");
+    }
+
+    #[tokio::test]
+    async fn unknown_ids_are_errors() {
+        let e = env(opts());
+        assert!(e.queue.resolve(99, Decision::Skip, false).is_err());
+        assert!(e.queue.cancel(CancelTarget::Job { id: 99 }).is_err());
+        assert!(e.queue.cancel(CancelTarget::Batch { id: 99 }).is_err());
+        assert!(e.queue.retry(99).is_err());
+    }
+
+    #[tokio::test]
+    async fn clear_forgets_finished_jobs_only() {
+        let e = env(serial());
+        two_conflicts(&e).await;
+        std::fs::write(e.local.join("c"), b"c").unwrap();
+        e.queue.enqueue(Direction::Upload, vec![p(&e.local.join("c"))], p(&e.remote)).await.unwrap();
+        e.rec.wait("c done", |r| r.job_by_rel("c").state == JobState::Done).await;
+        e.queue.clear();
+        let c = e.rec.job_by_rel("c");
+        assert!(e.queue.retry(c.id).is_err(), "c is gone");
+        let a = e.rec.job_by_rel("a");
+        e.queue.resolve(a.id, Decision::Skip, false).unwrap();
+    }
+
+    #[tokio::test]
+    async fn close_cancels_and_removes_parts_without_events() {
+        let e = env(TransferOptions { parallel: 1, upload_mode: None });
+        std::fs::write(e.local.join("big"), vec![0u8; 64 * 1024 * 1024]).unwrap();
+        e.queue.enqueue(Direction::Upload, vec![p(&e.local.join("big"))], p(&e.remote)).await.unwrap();
+        e.rec.wait("running", |r| r.job_by_rel("big").state == JobState::Running).await;
+        let before = e.rec.events().len();
+        e.queue.close().await;
+        assert!(!e.remote.join("big.filepart").exists());
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert_eq!(e.rec.events().len(), before, "no event after close");
+        std::fs::write(e.local.join("x"), b"1").unwrap();
+        assert!(e.queue.enqueue(Direction::Upload, vec![p(&e.local.join("x"))], p(&e.remote)).await.is_err());
     }
 }
