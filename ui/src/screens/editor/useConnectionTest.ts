@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { Channel } from "@tauri-apps/api/core";
 import {
   type ConnectEvent,
   type CoreError,
@@ -21,6 +22,8 @@ export interface TestState {
   progress: StepProgress;
   prompt?: { promptId: number; prompt: Prompt };
   error?: CoreError;
+  /** What the command resolved with (e.g. `keyCopyId`: added or not). */
+  result?: unknown;
 }
 
 const IDLE: TestState = { status: "idle", progress: EMPTY_PROGRESS };
@@ -49,7 +52,13 @@ export function useConnectionTest() {
     [],
   );
 
-  const run = useCallback(async (host: Host, auth: AuthDraft | null) => {
+  /** `invoke` runs another pipeline command with the same prompts (e.g. `keyCopyId`); default: `connectTest`. */
+  const run = useCallback(
+    async (
+      host: Host,
+      auth: AuthDraft | null,
+      invoke: (connectId: string, events: Channel<ConnectEvent>) => Promise<unknown> = (id, events) => connectTest(id, host, events),
+    ) => {
     const connectId = newId();
     running.current = connectId;
     passphraseAnswered.current = false;
@@ -73,8 +82,8 @@ export function useConnectionTest() {
       setState((current) => ({ ...current, progress: applyConnectEvent(current.progress, event) }));
     });
     try {
-      await connectTest(connectId, host, events);
-      if (running.current === connectId) setState((current) => ({ ...current, status: "ok", prompt: undefined }));
+      const result = await invoke(connectId, events);
+      if (running.current === connectId) setState((current) => ({ ...current, status: "ok", prompt: undefined, result }));
     } catch (error) {
       if (running.current === connectId) {
         setState((current) => ({ ...current, status: "failed", error: asCoreError(error), prompt: undefined }));
@@ -82,7 +91,9 @@ export function useConnectionTest() {
     } finally {
       if (running.current === connectId) running.current = null;
     }
-  }, []);
+    },
+    [],
+  );
 
   const answer = useCallback((promptId: number, value: PromptAnswer) => {
     setState((current) => ({ ...current, prompt: undefined }));

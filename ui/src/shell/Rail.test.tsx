@@ -40,13 +40,17 @@ describe("Rail", () => {
 
   it("shows later features as disabled with a tooltip", async () => {
     renderRail();
-    for (const name of ["Schlüsselbund", "Port-Forwarding"]) {
-      const item = screen.getByRole("button", { name });
-      expect(item).toHaveAttribute("aria-disabled", "true");
-      expect(item).toHaveAttribute("title", `${name} – Folgt in einer späteren Version`);
-      await userEvent.click(item);
-    }
+    const item = screen.getByRole("button", { name: "Port-Forwarding" });
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    expect(item).toHaveAttribute("title", "Port-Forwarding – Folgt in einer späteren Version");
+    await userEvent.click(item);
     expect(useUiStore.getState()).toMatchObject({ view: "hosts", modal: null });
+  });
+
+  it("opens the keychain", async () => {
+    renderRail();
+    await userEvent.click(screen.getByRole("button", { name: "Schlüsselbund" }));
+    expect(useUiStore.getState().view).toBe("keychain");
   });
 
   it("opens the settings dialog", async () => {

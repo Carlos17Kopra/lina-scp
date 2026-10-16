@@ -24,6 +24,9 @@ import type {
   Host,
   ImportPreview,
   ImportReport,
+  KeyDefaults,
+  KeyInfo,
+  KeyKind,
   Listing,
   LoginProfile,
   ModeChange,
@@ -42,6 +45,9 @@ import type {
 
 export type {
   KeepEvent,
+  KeyDefaults,
+  KeyInfo,
+  KeyKind,
   TunnelEvent,
   TunnelState,
   ChosenApp,
@@ -434,6 +440,22 @@ export function tunnelStart(sessionId: SessionId, ruleId: Id): Promise<void> {
 }
 export function tunnelStop(sessionId: SessionId, ruleId: Id): Promise<void> {
   return unwrapVoid(commands.tunnelStop(sessionId, ruleId));
+}
+
+// Keychain (TP5b)
+export function keysList(): Promise<KeyInfo[]> {
+  return unwrap(commands.keysList());
+}
+export function keyDefaults(kind: KeyKind): Promise<KeyDefaults> {
+  return unwrap(commands.keyDefaultsGet(kind));
+}
+/** Writes `~/.ssh/<name>` (0600) and `<name>.pub`; never overwrites. */
+export function keyGenerate(kind: KeyKind, name: string, comment: string, passphrase: string | null): Promise<KeyInfo> {
+  return unwrap(commands.keyGenerate(kind, name, comment, passphrase));
+}
+/** ssh-copy-id: `true` = added, `false` = it was there already. Prompts arrive on `events`. */
+export function keyCopyId(connectId: string, hostId: Id, publicKey: string, events: Channel<ConnectEvent>): Promise<boolean> {
+  return unwrap(commands.keyCopyId(connectId, hostId, publicKey, events));
 }
 
 // Export / import / ssh-config
