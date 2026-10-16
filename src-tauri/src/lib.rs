@@ -56,6 +56,8 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             sftp_sync::sync_cancel,
             sftp_sync::sync_enqueue,
             sftp_sync::sync_delete,
+            sftp_sync::keep_start,
+            sftp_sync::keep_stop,
             sftp::sftp_rename,
             sftp::sftp_delete,
             sftp::sftp_close,
@@ -145,5 +147,6 @@ mod tests {
             "exportFile: (path: string, includeSecrets: boolean, includeKeyFiles: boolean, passphrase: string | null)"
         ));
         assert!(ts.contains("sshConfigReload: () =>"));
+        assert!(ts.contains("keepStart: (sessionId: string, localDir: string, remoteDir: string, exclude: string[])"));
     }
 }

@@ -1,12 +1,14 @@
 //! Compare and synchronize the two panes of an SFTP tab (TP4b).
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use linascp_core::error::Result;
 use linascp_core::session::SessionId;
 use linascp_core::sftp::local;
 use linascp_core::transfer::{
     BatchId, Difference, Direction, LocalSide, SyncDeleteReport, SyncItem, compare, delete_unchanged, enqueue_sync,
+    keep_up_to_date,
 };
 use serde::Deserialize;
 use tauri::State;
@@ -105,6 +107,45 @@ pub async fn sync_delete(
     }
 }
 
+/// How often a kept-up-to-date local directory is read.
+const KEEP_POLL: Duration = Duration::from_secs(2);
+
+pub(crate) async fn keep_start_inner(
+    state: &AppState,
+    session_id: SessionId,
+    local_dir: String,
+    remote_dir: String,
+    exclude: Vec<String>,
+) -> Result<()> {
+    let entry = lookup(state, session_id)?;
+    lock(&entry.keep).take();
+    let handle =
+        keep_up_to_date(entry.queue.clone(), local_dir, remote_dir, exclude, KEEP_POLL, entry.keep_emit.clone())
+            .await?;
+    *lock(&entry.keep) = Some(handle);
+    Ok(())
+}
+
+/// Uploads every local change from now on (TP4c); one per tab, a new one replaces the running one.
+#[tauri::command]
+#[specta::specta]
+pub async fn keep_start(
+    state: State<'_, AppState>,
+    session_id: SessionId,
+    local_dir: String,
+    remote_dir: String,
+    exclude: Vec<String>,
+) -> Result<()> {
+    keep_start_inner(&state, session_id, local_dir, remote_dir, exclude).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn keep_stop(state: State<'_, AppState>, session_id: SessionId) -> Result<()> {
+    lock(&lookup(&state, session_id)?.keep).take();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,5 +172,13 @@ mod tests {
             delete_local_inner(trash.clone(), base.to_string_lossy().into_owned(), items, Vec::new()).await.unwrap();
         assert_eq!((report.deleted, report.skipped, report.failed), (1, 1, 0));
         assert!(trash.join("files/old").exists() && base.join("edited").exists());
+    }
+
+    #[tokio::test]
+    async fn keep_start_needs_a_known_session() {
+        let d = tempfile::tempdir().unwrap();
+        let state = AppState::for_tests(d.path());
+        let result = keep_start_inner(&state, uuid::Uuid::new_v4(), "/l".into(), "/r".into(), vec![]).await;
+        assert!(matches!(result, Err(linascp_core::error::CoreError::Internal { .. })));
     }
 }

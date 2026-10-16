@@ -53,6 +53,9 @@ export const commands = {
 	syncEnqueue: (sessionId: string, direction: Direction, localDir: string, remoteDir: string, items: SyncItem[], exclude: string[]) => typedError<number[], CoreError>(__TAURI_INVOKE("sync_enqueue", { sessionId, direction, localDir, remoteDir, items, exclude })),
 	/**  Remote deletes are permanent; the preview announced them in red. */
 	syncDelete: (sessionId: string, side: PaneSide, baseDir: string, items: SyncItem[], exclude: string[]) => typedError<SyncDeleteReport, CoreError>(__TAURI_INVOKE("sync_delete", { sessionId, side, baseDir, items, exclude })),
+	/**  Uploads every local change from now on (TP4c); one per tab, a new one replaces the running one. */
+	keepStart: (sessionId: string, localDir: string, remoteDir: string, exclude: string[]) => typedError<null, CoreError>(__TAURI_INVOKE("keep_start", { sessionId, localDir, remoteDir, exclude })),
+	keepStop: (sessionId: string) => typedError<null, CoreError>(__TAURI_INVOKE("keep_stop", { sessionId })),
 	sftpRename: (sessionId: string, dir: string, from: string, to: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_rename", { sessionId, dir, from, to })),
 	sftpDelete: (sessionId: string, dir: string, names: string[]) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_delete", { sessionId, dir, names })),
 	/**
@@ -352,6 +355,10 @@ export type KbdPrompt = {
 	echo: boolean,
 };
 
+export type KeepEvent = 
+/**  On start and on every change. */
+{ kind: "state"; localDir: string; remoteDir: string; uploaded: number; error: CoreError | null };
+
 /**  What a symlink points to; `None` in `EntryKind::Symlink` = dangling or unreadable. */
 export type LinkTarget = "file" | "dir" | "other";
 
@@ -479,7 +486,7 @@ export type SftpConnected = {
 
 export type SftpEvent = { kind: "reconnecting"; attempt: number; maxAttempts: number; retryInMs: number; reason: CoreError } | { kind: "reconnected"; info: SessionInfo } | 
 /**  Reconnecting gave up (or is off); `connect_sftp` with this session id re-attaches. */
-{ kind: "lost"; error: CoreError } | { kind: "transfer"; event: TransferEvent } | { kind: "edit"; event: EditEvent };
+{ kind: "lost"; error: CoreError } | { kind: "transfer"; event: TransferEvent } | { kind: "edit"; event: EditEvent } | { kind: "keep"; event: KeepEvent };
 
 export type SftpSettings = {
 	remoteStart: string | null,
