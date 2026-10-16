@@ -1,6 +1,6 @@
 use std::ops::Deref;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use linascp_core::connect::{
@@ -11,6 +11,7 @@ use linascp_core::error::{CoreError, Result};
 use linascp_core::known_hosts::KnownHosts;
 use linascp_core::model::{Host, HostAuth, Id};
 use linascp_core::session::Session;
+use linascp_core::tunnel::Tunnels;
 use tauri::State;
 use tauri::ipc::Channel;
 use tokio_util::sync::CancellationToken;
@@ -148,16 +149,23 @@ pub(crate) fn connect_deps_in(env: &ConnectEnv) -> ConnectDeps {
 
 /// Reconnect attempts: request rebuilt from the current store/keyring, pipeline without prompts.
 /// A refused prompt becomes `CoreError::InputRequired` (fail closed, nothing reaches the UI).
-fn reconnect_connector(env: ConnectEnv, host_id: Id) -> Connector {
+/// The session's tunnels move over to each new connection.
+fn reconnect_connector(env: ConnectEnv, host_id: Id, tunnels: Weak<Tunnels>) -> Connector {
     Arc::new(move |cols, rows, sink, cancel| {
         let env = env.clone();
+        let tunnels = tunnels.clone();
         Box::pin(async move {
             let host = find_host_in(&env, host_id)?;
             let request = build_request_in(&env, host, cols, rows)?;
             let broker = Arc::new(PromptBroker::non_interactive());
             let quiet: EmitFn = Arc::new(|_| {});
-            match run_pipeline(request, connect_deps_in(&env), broker.clone(), quiet, sink, cancel).await {
+            let mut deps = connect_deps_in(&env);
+            deps.forwarded = tunnels.upgrade().map(|t| t.routes());
+            match run_pipeline(request, deps, broker.clone(), quiet, sink, cancel).await {
                 Ok(session) => {
+                    if let Some(tunnels) = tunnels.upgrade() {
+                        tunnels.attach(session.link()).await;
+                    }
                     let info = session.info().clone();
                     Ok((Arc::new(session) as Arc<dyn Session>, info))
                 }
@@ -227,26 +235,29 @@ async fn connect_ssh_registered(
 
     let session_id = Uuid::new_v4();
     let pump = OutputPump::for_channel(output);
-    let sink = make_sink(pump.clone(), channel_event_sender(session_events), cleanup_fn(state, session_id));
+    let send_event = channel_event_sender(session_events);
+    let forwards = request.target.host.forwards.clone();
+    let tunnel_events = send_event.clone();
+    let tunnels = Arc::new(Tunnels::new(
+        forwards.clone(),
+        Arc::new(move |event| tunnel_events(SessionEventDto::Tunnel { event })),
+    ));
+    let sink = make_sink(pump.clone(), send_event, cleanup_fn(state, session_id));
     let store = state.store.clone();
     let enabled: Enabled = Arc::new(move || auto_reconnect_enabled(&store));
     let reconnecting = Arc::new(ReconnectingSession::new(
         sink,
         cols,
         rows,
-        reconnect_connector(state.connect_env(), host_id),
+        reconnect_connector(state.connect_env(), host_id, Arc::downgrade(&tunnels)),
         enabled,
     ));
     let cancel = guard.token();
-    let result = run_pipeline(
-        request,
-        connect_deps(state),
-        state.broker.clone(),
-        emit.clone(),
-        reconnecting.first_sink(),
-        cancel.clone(),
-    )
-    .await;
+    let mut deps = connect_deps(state);
+    deps.forwarded = Some(tunnels.routes());
+    let result =
+        run_pipeline(request, deps, state.broker.clone(), emit.clone(), reconnecting.first_sink(), cancel.clone())
+            .await;
     drop(guard);
 
     match result {
@@ -260,12 +271,16 @@ async fn connect_ssh_registered(
         }
         Ok(session) => {
             let info = session.info().clone();
+            let link = session.link();
             reconnecting.attach(Arc::new(session));
+            lock(&state.tunnels).insert(session_id, tunnels.clone());
             register(state, session_id, reconnecting, pump.clone());
             heal_if_already_exited(state, session_id, &pump);
             // core emits `Failed` on errors; the success event is ours (exactly one terminal event).
             emit(ConnectEvent::Connected { session_id });
-            Ok(ConnectedSession { session_id, info })
+            // Autostart after `Connected`: its events belong to a tab that exists by then.
+            tokio::spawn(async move { tunnels.attach(link).await });
+            Ok(ConnectedSession { session_id, info, forwards })
         }
         Err(error) => {
             pump.close();
@@ -355,7 +370,7 @@ mod tests {
     #[tokio::test]
     async fn reconnect_connector_reports_a_deleted_host_as_config_error() {
         let (_dir, state) = setup();
-        let connector = reconnect_connector(state.connect_env(), Uuid::new_v4());
+        let connector = reconnect_connector(state.connect_env(), Uuid::new_v4(), Weak::new());
         let sink: linascp_core::session::OutputSink = Arc::new(|_| {});
         let result = connector(80, 24, sink, CancellationToken::new()).await;
         assert!(matches!(result, Err(CoreError::Config { .. })));

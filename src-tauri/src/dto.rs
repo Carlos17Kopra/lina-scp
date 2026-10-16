@@ -145,6 +145,8 @@ pub struct ProfileWithUsage {
 pub struct ConnectedSession {
     pub session_id: linascp_core::session::SessionId,
     pub info: linascp_core::connect::SessionInfo,
+    /// The host's port-forward rules as they were at connect time (the tunnels run these).
+    pub forwards: Vec<linascp_core::model::PortForward>,
 }
 
 #[cfg(test)]

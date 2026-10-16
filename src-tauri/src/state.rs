@@ -12,6 +12,7 @@ use linascp_core::secrets::{KeyringSecretStore, SecretStore};
 use linascp_core::session::{SessionId, SessionManager};
 use linascp_core::sshconfig::{import_ssh_config, merge_hosts};
 use linascp_core::store::Store;
+use linascp_core::tunnel::Tunnels;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -35,6 +36,8 @@ pub struct AppState {
     /// Output pumps of open sessions (needed by `session_ack` / `session_close`). `Arc`-wrapped
     /// for the same self-cleanup reason as `sessions`.
     pub outputs: Arc<Mutex<HashMap<SessionId, Arc<OutputPump>>>>,
+    /// Port forwards of terminal SSH sessions (TP5a); removed together with the session.
+    pub tunnels: Arc<Mutex<HashMap<SessionId, Arc<Tunnels>>>>,
     /// Open SFTP sessions; separate from terminal sessions.
     pub sftp: Arc<Mutex<HashMap<SessionId, Arc<crate::commands::sftp::SftpEntry>>>>,
     /// Shell of local terminals instead of `$SHELL`; set by tests so the developer's rc files never run.
@@ -53,6 +56,7 @@ impl AppState {
             early_cancels: Mutex::new(HashMap::new()),
             outputs: Arc::new(Mutex::new(HashMap::new())),
             sftp: Arc::new(Mutex::new(HashMap::new())),
+            tunnels: Arc::new(Mutex::new(HashMap::new())),
             local_shell: None,
         }
     }

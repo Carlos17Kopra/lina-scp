@@ -56,6 +56,8 @@ export const commands = {
 	/**  Uploads every local change from now on (TP4c); one per tab, a new one replaces the running one. */
 	keepStart: (sessionId: string, localDir: string, remoteDir: string, exclude: string[]) => typedError<null, CoreError>(__TAURI_INVOKE("keep_start", { sessionId, localDir, remoteDir, exclude })),
 	keepStop: (sessionId: string) => typedError<null, CoreError>(__TAURI_INVOKE("keep_stop", { sessionId })),
+	tunnelStart: (sessionId: string, ruleId: string) => typedError<null, CoreError>(__TAURI_INVOKE("tunnel_start", { sessionId, ruleId })),
+	tunnelStop: (sessionId: string, ruleId: string) => typedError<null, CoreError>(__TAURI_INVOKE("tunnel_stop", { sessionId, ruleId })),
 	sftpRename: (sessionId: string, dir: string, from: string, to: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_rename", { sessionId, dir, from, to })),
 	sftpDelete: (sessionId: string, dir: string, names: string[]) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_delete", { sessionId, dir, names })),
 	/**
@@ -134,6 +136,8 @@ export type ConnectEvent = { kind: "steps"; steps: Step[] } | { kind: "stepStart
 export type ConnectedSession = {
 	sessionId: string,
 	info: SessionInfo,
+	/**  The host's port-forward rules as they were at connect time (the tunnels run these). */
+	forwards: PortForward[],
 };
 
 /**
@@ -445,7 +449,7 @@ export type SecretKind = "password" | "passphrase";
 export type SecretOwner = { kind: "host"; id: string } | { kind: "profile"; id: string };
 
 /**  Non-output session events, sent on the `session_events` channel. */
-export type SessionEventDto = { kind: "exit"; code: number | null } | { kind: "error"; error: CoreError } | { kind: "reconnecting"; attempt: number; maxAttempts: number; retryInMs: number; reason: CoreError } | { kind: "reconnected"; info: SessionInfo } | { kind: "lost"; reason: CoreError };
+export type SessionEventDto = { kind: "exit"; code: number | null } | { kind: "error"; error: CoreError } | { kind: "reconnecting"; attempt: number; maxAttempts: number; retryInMs: number; reason: CoreError } | { kind: "reconnected"; info: SessionInfo } | { kind: "lost"; reason: CoreError } | { kind: "tunnel"; event: TunnelEvent };
 
 /**
  *  What was negotiated for an established connection; shown in the terminal sidebar.
@@ -550,6 +554,15 @@ export type TreeEntry = {
 	size: number,
 	mtime: number | null,
 };
+
+export type TunnelEvent = {
+	ruleId: string,
+	state: TunnelState,
+};
+
+export type TunnelState = { kind: "off" } | { kind: "starting" } | 
+/**  `port` is the listening port (for a remote forward with port 0: the one the server picked). */
+{ kind: "active"; port: number } | { kind: "failed"; error: CoreError };
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {
