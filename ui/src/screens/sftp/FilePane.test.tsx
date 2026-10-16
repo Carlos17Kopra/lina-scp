@@ -207,4 +207,39 @@ describe("FilePane", () => {
     await userEvent.keyboard("{Control>}b{/Control}");
     expect(api.bookmarkAdd).toHaveBeenLastCalledWith(null, "/l");
   });
+
+  it("edits files with F4, Enter, double click and the menu; folders still open", async () => {
+    const onEdit = vi.fn();
+    useSftpStore.setState(useSftpStore.getInitialState(), true);
+    useSftpStore.getState().openTab("t1", "h1", {
+      sessionId: "s1", info: makeSessionInfo(), version: 3,
+      listing: { path: "/srv", entries: [
+        f("b.txt"), f("dir", "dir"), f("bad?", "file", { nameLossy: true }),
+        f("link-f", "file", { kind: { type: "symlink", target: "file" } }), f("link-d", "file", { kind: { type: "symlink", target: "dir" } }),
+      ] },
+    });
+    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} onTransfer={onTransfer} onEdit={onEdit} />);
+    const grid = screen.getByRole("grid");
+    grid.focus();
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}");
+    expect(pane().cursor).toBe("b.txt");
+    await userEvent.keyboard("{F4}");
+    await userEvent.keyboard("{Enter}");
+    expect(onEdit.mock.calls).toEqual([["b.txt"], ["b.txt"]]);
+    await userEvent.dblClick(screen.getByText("link-f"));
+    expect(onEdit).toHaveBeenLastCalledWith("link-f");
+    await userEvent.dblClick(screen.getByText("bad?"));
+    expect(onEdit).toHaveBeenCalledTimes(3);
+    await userEvent.dblClick(screen.getByText("link-d"));
+    expect(api.sftpList).toHaveBeenLastCalledWith("s1", "/srv/link-d");
+    expect(onEdit).toHaveBeenCalledTimes(3);
+  });
+
+  it("offers Bearbeiten in the context menu", async () => {
+    const onEdit = vi.fn();
+    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} onTransfer={onTransfer} onEdit={onEdit} />);
+    fireEvent.contextMenu(screen.getByText("b.txt"));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Bearbeiten" }));
+    expect(onEdit).toHaveBeenCalledWith("b.txt");
+  });
 });

@@ -6,7 +6,7 @@ import type { Entry } from "../../ipc/api";
 import { useBookmarksStore } from "../../stores/bookmarks";
 import { type Side, useSftpStore } from "../../stores/sftp";
 import { BookmarkMenu } from "./BookmarkMenu";
-import { crumbs, formatMode, formatMtime, formatSize, isDirLike, joinPath, parentPath, type SortKey, visibleEntries } from "./entries";
+import { crumbs, formatMode, formatMtime, formatSize, isDirLike, isFileLike, joinPath, parentPath, type SortKey, visibleEntries } from "./entries";
 import styles from "./FilePane.module.css";
 import { moveCursor, rangeBetween, targets, typeAhead } from "./paneKeys";
 
@@ -26,13 +26,15 @@ function icon(entry: Entry) {
   return isDirLike(entry) ? Folder : File;
 }
 
-export function FilePane({ tabId, side, disabled = false, onCommand, onTransfer }: {
+export function FilePane({ tabId, side, disabled = false, onCommand, onTransfer, onEdit }: {
   tabId: string;
   side: Side;
   disabled?: boolean;
   onCommand: (command: PaneCommand, names: string[]) => void;
   /** `dropRow`: the row of the other pane a drag ended on; `null` for its background, F5 and the menu. */
   onTransfer: (names: string[], toSide: Side, dropRow: string | null) => void;
+  /** Edit a file of this pane (F4, Enter, double click, menu). */
+  onEdit?: (name: string) => void;
 }) {
   const tab = useSftpStore((s) => s.tabs.find((x) => x.id === tabId));
   const store = useSftpStore.getState;
@@ -61,7 +63,13 @@ export function FilePane({ tabId, side, disabled = false, onCommand, onTransfer 
       return;
     }
     const entry = p.entries.find((e) => e.name === name);
-    if (entry && isDirLike(entry) && !entry.nameLossy) void store().navigate(tabId, side, joinPath(p.path, name));
+    if (!entry || entry.nameLossy) return;
+    if (isDirLike(entry)) void store().navigate(tabId, side, joinPath(p.path, name));
+    else if (isFileLike(entry)) onEdit?.(name);
+  };
+  const edit = () => {
+    const entry = p.entries.find((e) => e.name === p.cursor);
+    if (entry && isFileLike(entry) && !entry.nameLossy) onEdit?.(entry.name);
   };
   const setCursor = (cursor: string | null, extend: boolean) => {
     if (cursor === null) return;
@@ -111,6 +119,7 @@ export function FilePane({ tabId, side, disabled = false, onCommand, onTransfer 
       Backspace: () => open(".."),
       " ": () => p.cursor && toggle(p.cursor),
       F2: () => command("rename"),
+      F4: edit,
       F5: () => {
         const chosen = targets(p);
         if (chosen.length) onTransfer(chosen, other, null);
@@ -282,6 +291,7 @@ export function FilePane({ tabId, side, disabled = false, onCommand, onTransfer 
           onKeyDown={(e) => e.key === "Escape" && setMenu(null)}
         >
           {menuItem(t.sftp.open, () => p.cursor && open(p.cursor))}
+          {menuItem(t.sftp.edit.button, edit)}
           {menuItem(side === "local" ? t.sftp.upload : t.sftp.download, () => {
             const chosen = targets(p);
             if (chosen.length) onTransfer(chosen, other, null);

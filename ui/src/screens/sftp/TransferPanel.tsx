@@ -1,12 +1,13 @@
-import { ChevronDown, ChevronUp, RotateCcw, X } from "lucide-react";
+import { ChevronDown, ChevronUp, ExternalLink, RotateCcw, Square, X } from "lucide-react";
 import { Button, cx, IconButton, ProgressBar } from "../../components";
 import { t } from "../../i18n/de";
-import type { CoreError, Job } from "../../ipc/api";
-import { openCount, speedOf, type TransferView, useTransfersStore, viewOf } from "../../stores/transfers";
+import type { CoreError, EditFile, Job } from "../../ipc/api";
+import { useEditsStore } from "../../stores/edits";
+import { openCount, speedOf, type TabTransfers, type TransferView, useTransfersStore, viewOf } from "../../stores/transfers";
 import { formatSize } from "./entries";
 import styles from "./TransferPanel.module.css";
 
-const VIEWS: TransferView[] = ["queue", "done", "failed"];
+const VIEWS: TransferView[] = ["queue", "done", "failed", "edits"];
 
 function errorText(error: CoreError): string {
   const texts = t.sftp.transfers;
@@ -26,12 +27,32 @@ function stateText(job: Job): string {
 
 const parentDir = (path: string) => path.slice(0, path.lastIndexOf("/")) || "/";
 
+function editStateText(file: EditFile): string {
+  if (file.state === "failed" && file.error) return errorText(file.error);
+  return t.sftp.edit.states[file.state];
+}
+
+function EditRows({ tabId, files }: { tabId: string; files: EditFile[] }) {
+  const store = useEditsStore.getState;
+  return files.map((file) => (
+    <div key={file.id} className={styles.editRow}>
+      <span className={styles.name} title={file.remotePath}>{file.name}</span>
+      <span className={cx(styles.target, "mono")}>{parentDir(file.remotePath)}</span>
+      <span className={styles.state}>{editStateText(file)}</span>
+      <IconButton size="sm" icon={ExternalLink} label={t.sftp.edit.reopen(file.name)} onClick={() => void store().reopen(tabId, file.id)} />
+      <IconButton size="sm" icon={Square} label={t.sftp.edit.stop(file.name)} onClick={() => void store().stop(tabId, file.id)} />
+    </div>
+  ));
+}
+
 export function TransferPanel({ tabId }: { tabId: string }) {
-  const tab = useTransfersStore((s) => s.byTab[tabId]);
+  const stored = useTransfersStore((s) => s.byTab[tabId]);
+  const files = useEditsStore((s) => s.byTab[tabId]) ?? [];
   const store = useTransfersStore.getState;
-  if (!tab || tab.order.length === 0) return null;
+  if ((stored?.order.length ?? 0) === 0 && files.length === 0) return null;
+  const tab: TabTransfers = stored ?? { order: [], jobs: {}, samples: {}, conflicts: [], view: "edits", collapsed: false };
   const texts = t.sftp.transfers;
-  const counts = { queue: 0, done: 0, failed: 0 };
+  const counts = { queue: 0, done: 0, failed: 0, edits: files.length };
   for (const id of tab.order) counts[viewOf(tab.jobs[id]!.state)]++;
   const now = Date.now();
   const rows = tab.order.map((id) => tab.jobs[id]!).filter((j) => viewOf(j.state) === tab.view);
@@ -61,7 +82,8 @@ export function TransferPanel({ tabId }: { tabId: string }) {
       </header>
       {tab.collapsed ? null : (
         <div className={styles.list}>
-          {rows.length === 0 ? <p className={styles.empty}>{texts.empty}</p> : null}
+          {tab.view === "edits" ? <EditRows tabId={tabId} files={files} /> : null}
+          {tab.view !== "edits" && rows.length === 0 ? <p className={styles.empty}>{texts.empty}</p> : null}
           {rows.map((job) => {
             const speed = job.state === "running" ? speedOf(tab.samples[job.id] ?? [], now) : null;
             const percent = job.size > 0 ? Math.floor((job.done * 100) / job.size) : job.state === "done" ? 100 : 0;

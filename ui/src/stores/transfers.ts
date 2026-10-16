@@ -16,7 +16,7 @@ import {
 import { fireAndForget } from "./connectProgress";
 import { useSftpStore } from "./sftp";
 
-export type TransferView = "queue" | "done" | "failed";
+export type TransferView = "queue" | "done" | "failed" | "edits";
 export interface Sample { at: number; done: number }
 export interface ConflictInfo { jobId: number; source: FileStamp; target: FileStamp }
 export interface TabTransfers {

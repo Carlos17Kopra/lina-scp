@@ -12,6 +12,10 @@ export function isDirLike(entry: Entry): boolean {
   return entry.kind.type === "dir" || (entry.kind.type === "symlink" && entry.kind.target === "dir");
 }
 
+export function isFileLike(entry: Entry): boolean {
+  return entry.kind.type === "file" || (entry.kind.type === "symlink" && entry.kind.target === "file");
+}
+
 export function isHidden(entry: Entry): boolean {
   return entry.name.startsWith(".");
 }

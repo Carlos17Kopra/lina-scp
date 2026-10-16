@@ -1,9 +1,11 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../ipc/api";
 import { useConnectStore } from "../../stores/connect";
+import { useEditsStore } from "../../stores/edits";
 import { useHostsStore } from "../../stores/hosts";
+import { useNoticeStore } from "../../stores/notices";
 import { useSftpStore } from "../../stores/sftp";
 import { useTransfersStore } from "../../stores/transfers";
 import { makeHost, makeSessionInfo } from "../../test/fixtures";
@@ -21,6 +23,8 @@ beforeEach(() => {
   useConnectStore.setState({ ...useConnectStore.getInitialState(), start }, true);
   useSftpStore.setState(useSftpStore.getInitialState(), true);
   useTransfersStore.setState(useTransfersStore.getInitialState(), true);
+  useEditsStore.setState(useEditsStore.getInitialState(), true);
+  useNoticeStore.setState(useNoticeStore.getInitialState(), true);
   useHostsStore.setState({
     ...useHostsStore.getInitialState(),
     hosts: [
@@ -145,5 +149,48 @@ describe("SftpScreen", () => {
     render(<SftpScreen />);
     expect(screen.getByRole("tab", { name: /Wartet auf eine Entscheidung/ })).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "Datei existiert bereits" })).not.toBeInTheDocument();
+  });
+
+  it("edits remote files through the session and local files in place", async () => {
+    vi.mocked(api.localList).mockResolvedValue({ path: "/l", entries: [{ name: "a.txt", kind: { type: "file" }, size: 1, mtime: 0, mode: 0o100644, owner: "u", nameLossy: false }] });
+    vi.mocked(api.editOpen).mockResolvedValue(1);
+    vi.mocked(api.localEdit).mockResolvedValue();
+    useSftpStore.getState().openTab("t1", "h1", {
+      sessionId: "s1", info: makeSessionInfo(), version: 3,
+      listing: { path: "/srv", entries: [{ name: "a.txt", kind: { type: "file" }, size: 1, mtime: 0, mode: 0o100644, owner: "u", nameLossy: false }] },
+    });
+    await vi.waitFor(() => expect(useSftpStore.getState().tabs[0]!.panes.local.entries).toHaveLength(1));
+    render(<SftpScreen />);
+    await userEvent.dblClick(within(screen.getByRole("grid", { name: "Remote" })).getByText("a.txt"));
+    expect(api.editOpen).toHaveBeenCalledWith("s1", "/srv/a.txt");
+    await userEvent.dblClick(within(screen.getByRole("grid", { name: "Lokal" })).getByText("a.txt"));
+    expect(api.localEdit).toHaveBeenCalledWith("/l/a.txt");
+  });
+
+  it("the toolbar edit button is off on the remote side while not connected", () => {
+    openTab();
+    useSftpStore.getState().onEvent("t1", "s1", { kind: "lost", error: { type: "cancelled" } });
+    useSftpStore.getState().setActivePane("t1", "remote");
+    render(<SftpScreen />);
+    expect(screen.getByRole("button", { name: "Bearbeiten" })).toBeDisabled();
+  });
+
+  it("counts unsaved edits when closing and names kept copies afterwards", async () => {
+    openTab();
+    vi.mocked(api.sftpClose).mockResolvedValue(["/c/x/a.conf"]);
+    useEditsStore.getState().onEvent("t1", { kind: "file", file: { id: 1, name: "a.conf", remotePath: "/srv/a.conf", state: "changed", dirty: true, error: null } });
+    render(<SftpScreen />);
+    await userEvent.click(screen.getByRole("button", { name: "web schließen" }));
+    expect(screen.getByRole("alertdialog", { name: "Übertragungen offen" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Schließen" }));
+    await vi.waitFor(() => expect(useNoticeStore.getState().notices.map((n) => n.message)).toContain("Nicht hochgeladene Änderungen liegen unter /c/x/a.conf"));
+  });
+
+  it("marks another tab whose edit waits for a decision", () => {
+    openTwoTabs();
+    useEditsStore.getState().onEvent("t2", { kind: "file", file: { id: 1, name: "a.conf", remotePath: "/srv/a.conf", state: "conflict", dirty: true, error: null } });
+    render(<SftpScreen />);
+    expect(screen.getByRole("tab", { name: /Wartet auf eine Entscheidung/ })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Datei auf dem Server geändert" })).not.toBeInTheDocument();
   });
 });

@@ -1,9 +1,10 @@
-import { Download, Eye, FolderPlus, Pencil, RefreshCw, SquareTerminal, Trash2, Upload, X } from "lucide-react";
+import { Download, Eye, FilePen, FolderPlus, Pencil, RefreshCw, SquareTerminal, Trash2, Upload, X } from "lucide-react";
 import { useState } from "react";
 import { Button, cx, IconButton } from "../../components";
 import { t } from "../../i18n/de";
 import { sftpReconnectNow, sftpStopReconnect } from "../../ipc/api";
 import { useConnectStore } from "../../stores/connect";
+import { conflictOf, dirtyCount, useEditsStore } from "../../stores/edits";
 import { fireAndForget } from "../../stores/connectProgress";
 import { useHostsStore } from "../../stores/hosts";
 import { type Side, useSftpStore } from "../../stores/sftp";
@@ -11,9 +12,10 @@ import { openCount, useTransfersStore } from "../../stores/transfers";
 import { ReconnectBar } from "../terminal/ReconnectBar";
 import { CloseTabDialog } from "./CloseTabDialog";
 import { ConflictDialog } from "./ConflictDialog";
+import { EditConflictDialog } from "./EditConflictDialog";
 import { hostProfile } from "../../model/hostFormat";
 import { DeleteDialog } from "./DeleteDialog";
-import { isDirLike } from "./entries";
+import { isDirLike, isFileLike, joinPath } from "./entries";
 import { FilePane, type PaneCommand } from "./FilePane";
 import { NameDialog } from "./NameDialog";
 import filePaneStyles from "./FilePane.module.css";
@@ -69,6 +71,7 @@ export function SftpScreen() {
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [closing, setClosing] = useState<{ tabId: string; count: number } | null>(null);
   const byTab = useTransfersStore((s) => s.byTab);
+  const edits = useEditsStore((s) => s.byTab);
   const tab = tabs.find((x) => x.id === activeTabId) ?? null;
   const store = useSftpStore.getState;
   const externalOver = useExternalDrop(tab?.id ?? "");
@@ -104,8 +107,15 @@ export function SftpScreen() {
     const mode = s === "local" && command === "delete" ? "trash" : "permanent";
     setDialog({ type: "delete", side: s, names, mode, folder });
   };
+  const onEdit = (s: Side) => (name: string) => {
+    if (!sideDisabled(s)) void useEditsStore.getState().open(tab.id, s, joinPath(tab.panes[s].path, name));
+  };
+  const editCursor = () => {
+    const entry = pane.entries.find((e) => e.name === pane.cursor);
+    if (entry && isFileLike(entry) && !entry.nameLossy) onEdit(side)(entry.name);
+  };
   const requestClose = (tabId: string) => {
-    const count = openCount(useTransfersStore.getState().byTab[tabId]);
+    const count = openCount(useTransfersStore.getState().byTab[tabId]) + dirtyCount(useEditsStore.getState().byTab[tabId]);
     if (count > 0) setClosing({ tabId, count });
     else store().closeTab(tabId);
   };
@@ -116,7 +126,7 @@ export function SftpScreen() {
       <div role="tablist" aria-label={t.sftp.tabs} className={styles.tabs}>
         {tabs.map((x) => {
           // The conflict dialog shows only in the active tab; others get a dot.
-          const pending = x.id !== tab.id && (byTab[x.id]?.conflicts.length ?? 0) > 0;
+          const pending = x.id !== tab.id && ((byTab[x.id]?.conflicts.length ?? 0) > 0 || conflictOf(edits[x.id]) !== undefined);
           return (
             <div key={x.id} className={cx(styles.tab, x.id === tab.id && styles.activeTab)}>
               <button
@@ -145,13 +155,14 @@ export function SftpScreen() {
         </Button>
         <Button icon={FolderPlus} disabled={sideDisabled(side)} onClick={() => toolbar("newFolder")}>{t.sftp.newFolder}</Button>
         <Button icon={Pencil} disabled={sideDisabled(side)} onClick={() => toolbar("rename")}>{t.sftp.rename}</Button>
+        <Button icon={FilePen} disabled={sideDisabled(side)} onClick={editCursor}>{t.sftp.edit.button}</Button>
         <Button icon={Trash2} disabled={sideDisabled(side)} onClick={() => toolbar("delete")}>{t.sftp.delete}</Button>
         <Button icon={RefreshCw} disabled={sideDisabled(side)} onClick={() => void store().reload(tab.id, side)}>{t.sftp.reload}</Button>
         <Button icon={Eye} aria-pressed={pane.showHidden} onClick={() => store().toggleHidden(tab.id, side)}>{t.sftp.hidden}</Button>
         <Button icon={SquareTerminal} onClick={() => void start(tab.hostId, "ssh")}>{t.sftp.terminal}</Button>
       </div>
       <div className={styles.panes}>
-        <FilePane tabId={tab.id} side="local" onCommand={onCommand("local")} onTransfer={onTransfer("local")} />
+        <FilePane tabId={tab.id} side="local" onCommand={onCommand("local")} onTransfer={onTransfer("local")} onEdit={onEdit("local")} />
         <div className={cx(styles.remote, externalOver && filePaneStyles.dropTarget)}>
           {tab.status === "reconnecting" && tab.reconnect ? (
             <ReconnectBar
@@ -166,7 +177,7 @@ export function SftpScreen() {
               <Button variant="primary" onClick={() => store().reconnect(tab.id)}>{t.sftp.reconnect}</Button>
             </div>
           ) : null}
-          <FilePane tabId={tab.id} side="remote" disabled={tab.status !== "connected"} onCommand={onCommand("remote")} onTransfer={onTransfer("remote")} />
+          <FilePane tabId={tab.id} side="remote" disabled={tab.status !== "connected"} onCommand={onCommand("remote")} onTransfer={onTransfer("remote")} onEdit={onEdit("remote")} />
         </div>
       </div>
       <TransferPanel tabId={tab.id} />
@@ -187,6 +198,8 @@ export function SftpScreen() {
         <CloseTabDialog count={closing.count} onConfirm={() => store().closeTab(closing.tabId)} onClose={() => setClosing(null)} />
       ) : null}
       <ConflictDialog tabId={tab.id} />
+      {/* One dialog at a time: transfer conflicts first. */}
+      {(byTab[tab.id]?.conflicts.length ?? 0) === 0 ? <EditConflictDialog tabId={tab.id} /> : null}
     </div>
   );
 }
