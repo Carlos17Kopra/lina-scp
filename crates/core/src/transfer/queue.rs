@@ -48,6 +48,8 @@ struct Batch {
     file_mode: Option<u32>,
     retryable: bool,
     done_sent: bool,
+    /// Target path -> stamp a compare saw: overwritten without asking while it is still exactly that (sync).
+    expected: HashMap<String, FileStamp>,
 }
 
 struct State {
@@ -218,6 +220,29 @@ impl TransferQueue {
         target_dir: String,
         options: EnqueueOptions,
     ) -> Result<BatchId> {
+        self.enqueue_inner(direction, sources, target_dir, options, HashMap::new()).await
+    }
+
+    /// Sync: a target whose stamp is still the one in `expected` is overwritten without asking; any other existing
+    /// target (changed since the compare, or appeared since) opens the conflict dialog as usual.
+    pub async fn enqueue_expecting(
+        &self,
+        direction: Direction,
+        sources: Vec<String>,
+        target_dir: String,
+        expected: HashMap<String, FileStamp>,
+    ) -> Result<BatchId> {
+        self.enqueue_inner(direction, sources, target_dir, EnqueueOptions::default(), expected).await
+    }
+
+    async fn enqueue_inner(
+        &self,
+        direction: Direction,
+        sources: Vec<String>,
+        target_dir: String,
+        options: EnqueueOptions,
+        expected: HashMap<String, FileStamp>,
+    ) -> Result<BatchId> {
         if self.inner.lock().closed {
             return Err(CoreError::internal("transfer queue is closed"));
         }
@@ -252,6 +277,7 @@ impl TransferQueue {
                 file_mode: options.file_mode.map(|m| m & 0o7777),
                 retryable: options == EnqueueOptions::default(),
                 done_sent: false,
+                expected,
             },
         );
         let mut jobs = Vec::new();
@@ -693,6 +719,7 @@ struct Snapshot {
     stamp: Option<FileStamp>,
     decision: Option<Decision>,
     file_mode: Option<u32>,
+    expected: Option<FileStamp>,
 }
 
 async fn run_job(inner: Arc<Inner>, id: JobId, remote: Arc<dyn Side>, cancel: CancellationToken) {
@@ -706,6 +733,7 @@ async fn run_job(inner: Arc<Inner>, id: JobId, remote: Arc<dyn Side>, cancel: Ca
             stamp: entry.stamp,
             decision: entry.decided.or(batch.and_then(|b| b.default)),
             file_mode: batch.and_then(|b| b.file_mode),
+            expected: batch.and_then(|b| b.expected.get(&entry.job.target).copied()),
         };
         if let Some(entry) = Inner::entry(&mut st, id) {
             entry.decided = None;
@@ -815,6 +843,7 @@ async fn run_file(
             Ok(Some(t)) if matches!(t.kind, NodeKind::Dir | NodeKind::DirLink) => {
                 return Outcome::Failed(CoreError::fs(FsKind::AlreadyExists, &job.target, "a directory exists"));
             }
+            Ok(Some(t)) if snap.decision.is_none() && snap.expected == Some(stamp(&t)) => {}
             Ok(Some(t)) => match snap.decision {
                 None | Some(Decision::CancelBatch) => return Outcome::Conflict(now, stamp(&t)),
                 Some(Decision::Skip) => return Outcome::Skipped(None),
@@ -1114,6 +1143,33 @@ mod tests {
         e.rec
             .wait("both waiting", |r| r.jobs().values().filter(|j| j.state == JobState::WaitingDecision).count() == 2)
             .await;
+    }
+
+    #[tokio::test]
+    async fn expected_targets_are_overwritten_without_asking_and_changed_ones_ask() {
+        let e = env(serial());
+        for name in ["a", "b"] {
+            std::fs::write(e.remote.join(name), b"old").unwrap();
+            std::fs::write(e.local.join(name), b"new!").unwrap();
+        }
+        // The compare saw a and b like this; b changes afterwards; c appears on the target after the compare.
+        let seen = |name: &str| {
+            let meta = std::fs::metadata(e.remote.join(name)).unwrap();
+            FileStamp { size: meta.len(), mtime: Some(std::os::unix::fs::MetadataExt::mtime(&meta)) }
+        };
+        let expected: HashMap<String, FileStamp> = ["a", "b"].iter().map(|n| (p(&e.remote.join(n)), seen(n))).collect();
+        std::fs::write(e.remote.join("b"), b"changed on the server").unwrap();
+        std::fs::write(e.local.join("c"), b"c").unwrap();
+        std::fs::write(e.remote.join("c"), b"appeared").unwrap();
+        let sources = ["a", "b", "c"].iter().map(|n| p(&e.local.join(n))).collect();
+        e.queue.enqueue_expecting(Direction::Upload, sources, p(&e.remote), expected).await.unwrap();
+        e.rec
+            .wait("b and c ask", |r| r.jobs().values().filter(|j| j.state == JobState::WaitingDecision).count() == 2)
+            .await;
+        assert_eq!(e.rec.job_by_rel("a").state, JobState::Done);
+        assert_eq!(std::fs::read(e.remote.join("a")).unwrap(), b"new!");
+        assert_eq!(std::fs::read(e.remote.join("b")).unwrap(), b"changed on the server");
+        assert!(e.rec.job_by_rel("a").retryable, "sync batches can be retried");
     }
 
     #[tokio::test]

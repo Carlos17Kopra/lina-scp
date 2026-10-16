@@ -59,7 +59,7 @@ export type {
   ConnectEvent,
   CoreError,
   Entry,
-  ChmodFailure,
+  PathFailure,
   ChmodReport,
   EntryKind,
   EnvVar,

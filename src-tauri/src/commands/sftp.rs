@@ -13,7 +13,7 @@ use linascp_core::model::Id;
 use linascp_core::session::SessionId;
 use linascp_core::sftp::{Listing, local};
 use linascp_core::transfer::{
-    ChmodFailure, LocalSide, ModeChange, Side, TransferEvent, TransferOptions, TransferQueue, chmod,
+    LocalSide, ModeChange, PathFailure, Side, TransferEvent, TransferOptions, TransferQueue, chmod,
 };
 use serde::Serialize;
 use tauri::State;
@@ -230,7 +230,7 @@ pub(crate) async fn local_trash_inner(state: &AppState, dir: String, names: Vec<
 #[serde(rename_all = "camelCase")]
 pub struct ChmodReport {
     pub failed: u32,
-    pub first: Option<ChmodFailure>,
+    pub first: Option<PathFailure>,
 }
 
 pub(crate) async fn chmod_inner(

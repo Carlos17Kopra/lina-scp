@@ -29,7 +29,7 @@ impl ModeChange {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
-pub struct ChmodFailure {
+pub struct PathFailure {
     pub path: String,
     pub error: CoreError,
 }
@@ -37,12 +37,7 @@ pub struct ChmodFailure {
 /// Applies `change` to every path. Recursive: descends into directories without following symlinks, and
 /// every directory also gets x wherever r is set. Per-entry errors are collected; only a lost connection
 /// (`CoreError::Network`) aborts.
-pub async fn chmod(
-    side: &dyn Side,
-    paths: &[String],
-    change: ModeChange,
-    recursive: bool,
-) -> Result<Vec<ChmodFailure>> {
+pub async fn chmod(side: &dyn Side, paths: &[String], change: ModeChange, recursive: bool) -> Result<Vec<PathFailure>> {
     if (change.set | change.clear) & !0o777 != 0 {
         return Err(CoreError::config("ungültige Rechte"));
     }
@@ -53,15 +48,15 @@ pub async fn chmod(
     Ok(failures)
 }
 
-fn keep(error: CoreError, path: &str, failures: &mut Vec<ChmodFailure>) -> Result<()> {
+fn keep(error: CoreError, path: &str, failures: &mut Vec<PathFailure>) -> Result<()> {
     if matches!(error, CoreError::Network { .. }) {
         return Err(error);
     }
-    failures.push(ChmodFailure { path: path.to_string(), error });
+    failures.push(PathFailure { path: path.to_string(), error });
     Ok(())
 }
 
-async fn set_mode(side: &dyn Side, path: &str, mode: u32, failures: &mut Vec<ChmodFailure>) -> Result<()> {
+async fn set_mode(side: &dyn Side, path: &str, mode: u32, failures: &mut Vec<PathFailure>) -> Result<()> {
     match side.set_mode(path, mode).await {
         Ok(()) => Ok(()),
         Err(error) => keep(error, path, failures),
@@ -74,7 +69,7 @@ fn visit<'a>(
     change: ModeChange,
     recursive: bool,
     top: bool,
-    failures: &'a mut Vec<ChmodFailure>,
+    failures: &'a mut Vec<PathFailure>,
 ) -> BoxFuture<'a, Result<()>> {
     Box::pin(async move {
         let node = match side.stat(&path).await {
@@ -123,7 +118,7 @@ async fn descend(
     dir: &str,
     children: Vec<Child>,
     change: ModeChange,
-    failures: &mut Vec<ChmodFailure>,
+    failures: &mut Vec<PathFailure>,
 ) -> Result<()> {
     for child in children {
         // ponytail: lossy and hostile names are skipped silently, like the transfer engine does.
