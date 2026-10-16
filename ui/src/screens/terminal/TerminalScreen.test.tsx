@@ -74,7 +74,7 @@ describe("TerminalScreen", () => {
     const sidebar = screen.getByRole("complementary", { name: "Sitzungsdetails" });
     expect(toggle).toHaveAttribute("aria-pressed", "true");
     expect(within(sidebar).getByRole("tab", { name: "Sitzung" })).toHaveAttribute("aria-selected", "true");
-    expect(within(sidebar).getByRole("tab", { name: "Tunnel" })).toBeDisabled();
+    expect(within(sidebar).getByRole("tab", { name: "Tunnel" })).toBeEnabled();
     await userEvent.click(within(sidebar).getByRole("tab", { name: "Snippets" }));
     expect(within(sidebar).getByRole("searchbox", { name: "Snippets suchen" })).toBeInTheDocument();
     await userEvent.click(within(sidebar).getByRole("tab", { name: "Sitzung" }));

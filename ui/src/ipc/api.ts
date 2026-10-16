@@ -42,6 +42,8 @@ import type {
 
 export type {
   KeepEvent,
+  TunnelEvent,
+  TunnelState,
   ChosenApp,
   OpenApp,
   Bookmark,
@@ -424,6 +426,14 @@ export function sessionReconnectNow(sessionId: SessionId): Promise<void> {
 /** Stop reconnecting (the pane shows "Verbindung verloren"). */
 export function sessionReconnectStop(sessionId: SessionId): Promise<void> {
   return unwrapVoid(commands.sessionReconnectStop(sessionId));
+}
+
+/** Start a port-forward rule of the session's host (TP5a). */
+export function tunnelStart(sessionId: SessionId, ruleId: Id): Promise<void> {
+  return unwrapVoid(commands.tunnelStart(sessionId, ruleId));
+}
+export function tunnelStop(sessionId: SessionId, ruleId: Id): Promise<void> {
+  return unwrapVoid(commands.tunnelStop(sessionId, ruleId));
 }
 
 // Export / import / ssh-config

@@ -6,6 +6,7 @@ import {
   createOutputStream,
   type Id,
   newId,
+  type PortForward,
   type SessionEventDto,
   type SessionId,
   type SessionInfo,
@@ -61,6 +62,8 @@ export interface Tab {
   error?: CoreError;
   /** While status is "reconnecting". */
   reconnect?: ReconnectState;
+  /** Port-forward rules of the host as they were at connect time (sidebar "Tunnel"). */
+  forwards?: PortForward[];
   /** Negotiated algorithms etc. of an SSH session (sidebar "Sitzung"). */
   info?: SessionInfo;
   /** Client time (ms) when the session connected / the local terminal opened. */

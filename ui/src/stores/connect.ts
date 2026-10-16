@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { t } from "../i18n/de";
 import {
   type ConnectEvent,
+  type ConnectedSession,
   type CoreError,
   connectAnswer,
   connectCancel,
@@ -17,7 +18,6 @@ import {
   type PromptAnswer,
   type SecretOwner,
   type SessionEventDto,
-  type SessionInfo,
   secretSet,
   sessionClose,
   type SftpEvent,
@@ -200,11 +200,11 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
     scheduleAutoRetry();
   };
 
-  const onConnected = (flow: ConnectFlow, sessionId: string, info: SessionInfo, tabId: string, stream: OutputStream) => {
+  const onConnected = (flow: ConnectFlow, { sessionId, info, forwards }: ConnectedSession, tabId: string, stream: OutputStream) => {
     stream.bind(sessionId);
     registerStream(tabId, stream);
     const title = useHostsStore.getState().hosts.find((h) => h.id === flow.hostId)?.name ?? flow.hostId;
-    const session = { title, kind: "ssh", hostId: flow.hostId, sessionId, status: "connected", info, connectedAt: Date.now() } as const;
+    const session = { title, kind: "ssh", hostId: flow.hostId, sessionId, status: "connected", info, forwards, connectedAt: Date.now() } as const;
     const sessions = useSessionsStore.getState();
     if (!flow.paneId) sessions.addTab({ id: tabId, ...session });
     else if (!sessions.attachSession(flow.paneId, tabId, session)) {
@@ -250,13 +250,13 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
       const stream = createOutputStream();
       const events = createEventChannel<ConnectEvent>((event) => onEvent(connectId, event));
       const sessionEvents = createEventChannel<SessionEventDto>(sessionEventHandler(tabId));
-      const { sessionId, info } = await connectSsh(connectId, flow.hostId, flow.cols, flow.rows, events, stream.channel, sessionEvents);
+      const connected = await connectSsh(connectId, flow.hostId, flow.cols, flow.rows, events, stream.channel, sessionEvents);
       if (!isCurrent(connectId)) {
         discardEarlySessionEvent(tabId);
-        fireAndForget(() => sessionClose(sessionId));
+        fireAndForget(() => sessionClose(connected.sessionId));
         return;
       }
-      onConnected(flow, sessionId, info, tabId, stream);
+      onConnected(flow, connected, tabId, stream);
     } catch (error) {
       if (tabId !== null) discardEarlySessionEvent(tabId);
       onFailure(connectId, asCoreError(error));
