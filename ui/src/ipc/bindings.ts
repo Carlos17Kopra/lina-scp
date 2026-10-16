@@ -58,6 +58,15 @@ export const commands = {
 	keepStop: (sessionId: string) => typedError<null, CoreError>(__TAURI_INVOKE("keep_stop", { sessionId })),
 	tunnelStart: (sessionId: string, ruleId: string) => typedError<null, CoreError>(__TAURI_INVOKE("tunnel_start", { sessionId, ruleId })),
 	tunnelStop: (sessionId: string, ruleId: string) => typedError<null, CoreError>(__TAURI_INVOKE("tunnel_stop", { sessionId, ruleId })),
+	keysList: () => typedError<KeyInfo[], CoreError>(__TAURI_INVOKE("keys_list")),
+	keyDefaultsGet: (kind: KeyKind) => typedError<KeyDefaults, CoreError>(__TAURI_INVOKE("key_defaults_get", { kind })),
+	/**  Writes `~/.ssh/<name>` and `<name>.pub`; never overwrites. */
+	keyGenerate: (kind: KeyKind, name: string, comment: string, passphrase: string | null) => typedError<KeyInfo, CoreError>(__TAURI_INVOKE("key_generate", { kind, name, comment, passphrase })),
+	/**
+	 *  ssh-copy-id: `true` = added, `false` = it was there already. Prompts arrive on `events`; cancel with
+	 *  `connect_cancel(connect_id)`.
+	 */
+	keyCopyId: (connectId: string, hostId: string, publicKey: string, events: Channel<ConnectEvent>) => typedError<boolean, CoreError>(__TAURI_INVOKE("key_copy_id", { connectId, hostId, publicKey, events })),
 	sftpRename: (sessionId: string, dir: string, from: string, to: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_rename", { sessionId, dir, from, to })),
 	sftpDelete: (sessionId: string, dir: string, names: string[]) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_delete", { sessionId, dir, names })),
 	/**
@@ -362,6 +371,27 @@ export type KbdPrompt = {
 export type KeepEvent = 
 /**  On start and on every change. `run` tells the events of one start from those of an earlier one. */
 { kind: "state"; run: number; localDir: string; remoteDir: string; uploaded: number; error: CoreError | null };
+
+export type KeyDefaults = {
+	name: string,
+	comment: string,
+};
+
+export type KeyInfo = {
+	path: string,
+	name: string,
+	/**  E.g. `ssh-ed25519`, `ssh-rsa`. */
+	algorithm: string,
+	/**  `SHA256:…` */
+	fingerprint: string,
+	comment: string,
+	/**  The OpenSSH line of the public key (`.pub` contents). */
+	publicKey: string,
+	/**  `None` when the private file is not in the OpenSSH format (e.g. PEM). */
+	encrypted: boolean | null,
+};
+
+export type KeyKind = "ed25519" | "rsa4096";
 
 /**  What a symlink points to; `None` in `EntryKind::Symlink` = dangling or unreadable. */
 export type LinkTarget = "file" | "dir" | "other";

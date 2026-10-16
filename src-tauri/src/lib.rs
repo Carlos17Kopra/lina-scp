@@ -7,7 +7,7 @@ pub mod state;
 mod util;
 
 use commands::{
-    bookmarks, connect, hosts, profiles, secrets, sessions, settings, sftp, sftp_edit, sftp_sync, sftp_transfers,
+    bookmarks, connect, hosts, keys, profiles, secrets, sessions, settings, sftp, sftp_edit, sftp_sync, sftp_transfers,
     snippets, transfer,
 };
 
@@ -60,6 +60,10 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             sftp_sync::keep_stop,
             sessions::tunnel_start,
             sessions::tunnel_stop,
+            keys::keys_list,
+            keys::key_defaults_get,
+            keys::key_generate,
+            keys::key_copy_id,
             sftp::sftp_rename,
             sftp::sftp_delete,
             sftp::sftp_close,
@@ -151,5 +155,6 @@ mod tests {
         assert!(ts.contains("sshConfigReload: () =>"));
         assert!(ts.contains("keepStart: (sessionId: string, localDir: string, remoteDir: string, exclude: string[])"));
         assert!(ts.contains("tunnelStart: (sessionId: string, ruleId: string)"));
+        assert!(ts.contains("keyCopyId: (connectId: string, hostId: string, publicKey: string"));
     }
 }

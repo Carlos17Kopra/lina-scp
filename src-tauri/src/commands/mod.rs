@@ -1,6 +1,7 @@
 pub mod bookmarks;
 pub mod connect;
 pub mod hosts;
+pub mod keys;
 pub mod profiles;
 pub mod secrets;
 pub mod sessions;
