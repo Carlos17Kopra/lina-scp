@@ -29,7 +29,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             profiles::profile_delete,
             sftp_edit::edit_open,
             sftp_edit::local_edit,
-            sftp_edit::open_with_apps,
+            sftp_edit::open_with_choose,
             sftp_edit::edit_resolve,
             sftp_edit::edit_reopen,
             sftp_edit::edit_stop,

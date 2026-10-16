@@ -167,30 +167,24 @@ describe("SftpScreen", () => {
     expect(api.localEdit).toHaveBeenCalledWith("/l/a.txt", { kind: "default" });
   });
 
-  it("opens a file with a chosen app and can remember it for the type", async () => {
+  it("opens a file with the app picked in the system chooser", async () => {
     vi.mocked(api.editOpen).mockResolvedValue(1);
-    vi.mocked(api.openWithApps).mockResolvedValue({
-      typeName: "PNG-Bild", remembered: "viewer.desktop",
-      apps: [{ id: "viewer.desktop", name: "Bildbetrachter" }, { id: "gimp.desktop", name: "GIMP" }],
-    });
+    vi.mocked(api.openWithChoose).mockResolvedValueOnce(null).mockResolvedValueOnce({ id: "gimp.desktop", remember: true });
     useSftpStore.getState().openTab("t1", "h1", {
       sessionId: "s1", info: makeSessionInfo(), version: 3,
       listing: { path: "/srv", entries: [{ name: "a.png", kind: { type: "file" }, size: 1, mtime: 0, mode: 0o100644, owner: "u", nameLossy: false }] },
     });
     render(<SftpScreen />);
-    fireEvent.contextMenu(within(screen.getByRole("grid", { name: "Remote" })).getByText("a.png"));
-    await userEvent.click(screen.getByRole("menuitem", { name: "Öffnen mit …" }));
-    const dialog = await screen.findByRole("dialog", { name: "a.png öffnen mit" });
-    expect(api.openWithApps).toHaveBeenCalledWith("a.png");
-    expect(within(dialog).getByRole("radio", { name: "Bildbetrachter" })).toBeChecked();
-    const remember = within(dialog).getByRole("checkbox", { name: "Immer für PNG-Bild verwenden" });
-    expect(remember).toBeChecked();
-    await userEvent.click(within(dialog).getByRole("radio", { name: "GIMP" }));
-    expect(remember).not.toBeChecked();
-    await userEvent.click(remember);
-    await userEvent.click(within(dialog).getByRole("button", { name: "Öffnen" }));
-    expect(api.editOpen).toHaveBeenCalledWith("s1", "/srv/a.png", { kind: "app", id: "gimp.desktop", remember: true });
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const openWith = async () => {
+      fireEvent.contextMenu(within(screen.getByRole("grid", { name: "Remote" })).getByText("a.png"));
+      await userEvent.click(screen.getByRole("menuitem", { name: "Öffnen mit …" }));
+    };
+    await openWith();
+    expect(api.openWithChoose).toHaveBeenCalledWith("a.png", "Immer für diesen Dateityp verwenden");
+    expect(api.editOpen).not.toHaveBeenCalled();
+    await openWith();
+    await vi.waitFor(() =>
+      expect(api.editOpen).toHaveBeenCalledWith("s1", "/srv/a.png", { kind: "app", id: "gimp.desktop", remember: true }));
   });
 
   it("creates a new file from the toolbar", async () => {

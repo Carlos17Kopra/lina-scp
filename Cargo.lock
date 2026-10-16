@@ -2950,6 +2950,7 @@ name = "linascp"
 version = "0.1.0"
 dependencies = [
  "gio",
+ "gtk",
  "linascp-core",
  "secrecy",
  "serde",

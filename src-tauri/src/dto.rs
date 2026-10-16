@@ -124,20 +124,12 @@ pub enum OpenApp {
     App { id: String, remember: bool },
 }
 
+/// The app picked in the system's "Open with" dialog.
 #[derive(Debug, Clone, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
-pub struct AppChoice {
+pub struct ChosenApp {
     pub id: String,
-    pub name: String,
-}
-
-#[derive(Debug, Clone, Serialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct OpenWithApps {
-    /// Readable name of the file type, e.g. "PNG-Bild".
-    pub type_name: String,
-    pub apps: Vec<AppChoice>,
-    pub remembered: Option<String>,
+    pub remember: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]

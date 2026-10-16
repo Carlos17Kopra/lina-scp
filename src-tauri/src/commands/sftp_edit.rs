@@ -8,8 +8,8 @@ use linascp_core::session::SessionId;
 use tauri::State;
 
 use super::sftp_transfers::entry;
-use crate::dto::{OpenApp, OpenWithApps};
-use crate::editor::{SystemLauncher, apps_for, resolve_app};
+use crate::dto::{ChosenApp, OpenApp};
+use crate::editor::{SystemLauncher, choose_app, resolve_app};
 use crate::state::AppState;
 
 pub(crate) fn with_edits<T>(state: &AppState, id: SessionId, f: impl FnOnce(&EditManager) -> Result<T>) -> Result<T> {
@@ -62,11 +62,16 @@ pub async fn local_edit(state: State<'_, AppState>, path: String, how: OpenApp) 
     local_edit_inner(&state, path, how)
 }
 
-/// The apps offered by "Öffnen mit" for a file name.
+/// "Öffnen mit": the system's app chooser for a file name; `None` = cancelled.
 #[tauri::command]
 #[specta::specta]
-pub async fn open_with_apps(state: State<'_, AppState>, name: String) -> Result<OpenWithApps> {
-    apps_for(&state.store, &name)
+pub async fn open_with_choose(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    name: String,
+    remember_label: String,
+) -> Result<Option<ChosenApp>> {
+    choose_app(window, &state.store, &name, remember_label).await
 }
 
 #[tauri::command]

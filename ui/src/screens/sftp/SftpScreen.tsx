@@ -18,7 +18,6 @@ import { DeleteDialog } from "./DeleteDialog";
 import { isDirLike, isFileLike, joinPath } from "./entries";
 import { FilePane, type PaneCommand } from "./FilePane";
 import { NameDialog } from "./NameDialog";
-import { OpenWithDialog } from "./OpenWithDialog";
 import filePaneStyles from "./FilePane.module.css";
 import { targets } from "./paneKeys";
 import styles from "./SftpScreen.module.css";
@@ -28,7 +27,6 @@ import { useExternalDrop } from "./useExternalDrop";
 
 type DialogState =
   | { type: "new" | "newFile"; side: Side }
-  | { type: "openWith"; side: Side; name: string }
   | { type: "rename"; side: Side; name: string }
   | { type: "delete"; side: Side; names: string[]; mode: "trash" | "permanent"; folder: boolean };
 
@@ -111,8 +109,9 @@ export function SftpScreen() {
   };
   const onEdit = (s: Side) => (name: string, how: "editor" | "default" | "choose") => {
     if (sideDisabled(s)) return;
-    if (how === "choose") setDialog({ type: "openWith", side: s, name });
-    else void useEditsStore.getState().open(tab.id, s, joinPath(tab.panes[s].path, name), { kind: how });
+    const path = joinPath(tab.panes[s].path, name);
+    if (how === "choose") void useEditsStore.getState().openWith(tab.id, s, path);
+    else void useEditsStore.getState().open(tab.id, s, path, { kind: how });
   };
   const editCursor = () => {
     const entry = pane.entries.find((e) => e.name === pane.cursor);
@@ -194,10 +193,6 @@ export function SftpScreen() {
       ) : null}
       {dialog?.type === "newFile" ? (
         <NameDialog mode="newFile" onSubmit={(name) => store().createFile(tab.id, dialog.side, name)} onClose={() => setDialog(null)} />
-      ) : null}
-      {dialog?.type === "openWith" ? (
-        <OpenWithDialog name={dialog.name} onClose={() => setDialog(null)}
-          onOpen={(how) => void useEditsStore.getState().open(tab.id, dialog.side, joinPath(tab.panes[dialog.side].path, dialog.name), how)} />
       ) : null}
       {dialog?.type === "rename" ? (
         <NameDialog mode="rename" initial={dialog.name} onSubmit={(name) => store().rename(tab.id, dialog.side, dialog.name, name)} onClose={() => setDialog(null)} />

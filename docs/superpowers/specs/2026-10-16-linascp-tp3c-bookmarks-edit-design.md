@@ -179,10 +179,10 @@ Nicht enthalten:
 
 ## 2b. Öffnen mit und neue Datei (Nachtrag)
 
-- **„Öffnen mit …“** (Kontextmenü, beide Panels) zeigt die Apps für den Dateityp (`gio`: Typ aus dem Namen
-  geraten, `AppInfo::all_for_type`) plus die Texteditoren. Die gewählte App öffnet die Datei; Remote-Dateien laufen
+- **„Öffnen mit …“** (Kontextmenü, beide Panels) zeigt den nativen GTK-Dialog `GtkAppChooserDialog` für den
+  Dateityp (Typ per `gio` aus dem Namen geraten, „weitere Anwendungen“ eingeschlossen). Die gewählte App öffnet die Datei; Remote-Dateien laufen
   wie beim Bearbeiten über die private Kopie mit Upload. `reopen` nutzt die zuletzt gewählte App.
-- Der Schalter „Immer für <Typ> verwenden“ merkt die App pro MIME-Typ in den LinaSCP-Einstellungen
+- Das Häkchen „Immer für diesen Dateityp verwenden“ (in den GTK-Dialog eingefügt) merkt die App pro MIME-Typ in den LinaSCP-Einstellungen
   (`open_with.<mime>` = Desktop-ID), **nie** in der System-`mimeapps.list`. Abwählen bei der gemerkten App vergisst sie.
 - Doppelklick und `Enter` nutzen die gemerkte App, sonst den Editor. `F4`/„Bearbeiten“ nutzt immer den Editor.
 - Gestartet wird nur eine installierte App, über ihre Desktop-ID (`*.desktop`, geprüft) nachgeschlagen; die ID wird

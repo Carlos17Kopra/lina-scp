@@ -10,7 +10,7 @@ use linascp_core::edit::Launcher;
 use linascp_core::error::{CoreError, Result};
 use linascp_core::store::{EDITOR_COMMAND, Store};
 
-use crate::dto::{AppChoice, OpenApp, OpenWithApps};
+use crate::dto::{ChosenApp, OpenApp};
 
 /// Program and arguments for the "Editor" setting, with the file appended.
 // ponytail: split on whitespace, no quoting; enough for `code -w` or `kate`.
@@ -55,18 +55,56 @@ pub(crate) fn resolve_app(store: &Store, name: &str, how: &OpenApp) -> Result<Op
     }
 }
 
-/// Apps for the file's type plus the text editors, for "Öffnen mit".
-pub(crate) fn apps_for(store: &Store, name: &str) -> Result<OpenWithApps> {
+/// GTK's own app chooser (as in GNOME Files, "show other apps" included) for the file's type,
+/// with LinaSCP's "always use" switch added. Runs on the GTK main thread; `None` = cancelled.
+pub(crate) async fn choose_app(
+    window: tauri::WebviewWindow,
+    store: &Store,
+    name: &str,
+    remember_label: String,
+) -> Result<Option<ChosenApp>> {
+    use gtk::prelude::*;
     let mime = content_type(name);
-    let mut apps: Vec<AppChoice> = Vec::new();
-    for info in gio::AppInfo::all_for_type(&mime).into_iter().chain(gio::AppInfo::all_for_type("text/plain")) {
-        let Some(id) = info.id().map(|id| id.to_string()) else { continue };
-        if info.should_show() && validate_app_id(&id).is_ok() && !apps.iter().any(|a| a.id == id) {
-            apps.push(AppChoice { id, name: info.display_name().to_string() });
-        }
-    }
     let remembered = resolve_app(store, name, &OpenApp::Default)?;
-    Ok(OpenWithApps { type_name: gio::content_type_get_description(&mime).to_string(), apps, remembered })
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let main = window.clone();
+    main.run_on_main_thread(move || {
+        let parent = window.gtk_window().ok();
+        let dialog = gtk::AppChooserDialog::for_content_type(
+            parent.as_ref(),
+            gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
+            &mime,
+        );
+        let check = gtk::CheckButton::with_label(&remember_label);
+        check.set_margin_start(12);
+        check.set_margin_bottom(6);
+        dialog.content_area().pack_end(&check, false, false, 0);
+        check.show();
+        if let Ok(chooser) = dialog.widget().downcast::<gtk::AppChooserWidget>() {
+            chooser.set_show_other(true);
+            let (check, remembered) = (check.clone(), remembered.clone());
+            let sync = move |app: &gio::AppInfo| check.set_active(app.id().as_deref() == remembered.as_deref());
+            if let Some(app) = chooser.app_info() {
+                sync(&app);
+            }
+            chooser.connect_application_selected(move |_, app| sync(app));
+        }
+        let tx = std::cell::Cell::new(Some(tx));
+        dialog.connect_response(move |dialog, response| {
+            let chosen = (response == gtk::ResponseType::Ok)
+                .then(|| dialog.app_info())
+                .flatten()
+                .and_then(|app| app.id())
+                .map(|id| ChosenApp { id: id.to_string(), remember: check.is_active() });
+            dialog.close();
+            if let Some(tx) = tx.take() {
+                let _ = tx.send(chosen);
+            }
+        });
+        dialog.show();
+    })
+    .map_err(|e| CoreError::internal(format!("cannot show the app chooser: {e}")))?;
+    rx.await.map_err(|_| CoreError::internal("the app chooser closed without an answer"))
 }
 
 fn launch(app: &gio::AppInfo, path: &Path) -> Result<()> {

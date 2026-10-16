@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { t } from "../i18n/de";
-import { type EditEvent, type EditFile, type OpenApp, editOpen, editReopen, editResolve, editStop, localEdit } from "../ipc/api";
+import { type EditEvent, type EditFile, type OpenApp, editOpen, editReopen, editResolve, editStop, localEdit, openWithChoose } from "../ipc/api";
 import { errorDetails } from "../ipc/errors";
 import { pushNotice } from "./notices";
 import { type Side, useSftpStore } from "./sftp";
@@ -12,6 +12,8 @@ export interface EditsState {
   onEvent(tabId: string, event: EditEvent): void;
   /** Remote: download, watch and open; local: open in place. Failures become notices. */
   open(tabId: string, side: Side, path: string, how: OpenApp): Promise<void>;
+  /** "Öffnen mit": the system's app chooser, then `open` with the picked app. */
+  openWith(tabId: string, side: Side, path: string): Promise<void>;
   resolve(tabId: string, id: number, overwrite: boolean): Promise<void>;
   reopen(tabId: string, id: number): Promise<void>;
   stop(tabId: string, id: number): Promise<void>;
@@ -32,7 +34,7 @@ function noticeFailed(error: unknown) {
   pushNotice({ tone: "red", message: noEditor ? t.sftp.edit.noEditor : t.sftp.edit.failed, details: errorDetails(error) });
 }
 
-export const useEditsStore = create<EditsState>()((set) => {
+export const useEditsStore = create<EditsState>()((set, get) => {
   const patch = (tabId: string, id: number, change: Partial<EditFile>) =>
     set((s) => ({ byTab: { ...s.byTab, [tabId]: (s.byTab[tabId] ?? []).map((f) => (f.id === id ? { ...f, ...change } : f)) } }));
 
@@ -59,6 +61,15 @@ export const useEditsStore = create<EditsState>()((set) => {
         transfers.setView(tabId, "edits");
         if (transfers.byTab[tabId]?.collapsed) transfers.toggleCollapsed(tabId);
         await editOpen(sessionId, path, how);
+      } catch (error) {
+        noticeFailed(error);
+      }
+    },
+
+    openWith: async (tabId, side, path) => {
+      try {
+        const app = await openWithChoose(path.split("/").pop() ?? path, t.sftp.openWith.remember);
+        if (app) await get().open(tabId, side, path, { kind: "app", ...app });
       } catch (error) {
         noticeFailed(error);
       }

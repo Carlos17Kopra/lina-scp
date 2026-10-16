@@ -16,8 +16,11 @@ export const commands = {
 	/**  Downloads a remote file, opens it in the editor and uploads every save. */
 	editOpen: (sessionId: string, path: string, how: OpenApp) => typedError<number, CoreError>(__TAURI_INVOKE("edit_open", { sessionId, path, how })),
 	localEdit: (path: string, how: OpenApp) => typedError<null, CoreError>(__TAURI_INVOKE("local_edit", { path, how })),
-	/**  The apps offered by "Öffnen mit" for a file name. */
-	openWithApps: (name: string) => typedError<OpenWithApps, CoreError>(__TAURI_INVOKE("open_with_apps", { name })),
+	/**  "Öffnen mit": the system's app chooser for a file name; `None` = cancelled. */
+	openWithChoose: (name: string, rememberLabel: string) => typedError<{
+	id: string,
+	remember: boolean,
+} | null, CoreError>(__TAURI_INVOKE("open_with_choose", { name, rememberLabel })),
 	editResolve: (sessionId: string, editId: number, overwrite: boolean) => typedError<null, CoreError>(__TAURI_INVOKE("edit_resolve", { sessionId, editId, overwrite })),
 	editReopen: (sessionId: string, editId: number) => typedError<null, CoreError>(__TAURI_INVOKE("edit_reopen", { sessionId, editId })),
 	/**  Returns the path of a copy that was kept because it holds changes the server does not have. */
@@ -79,11 +82,6 @@ export const commands = {
 };
 
 /* Types */
-export type AppChoice = {
-	id: string,
-	name: string,
-};
-
 export type AuthConfig = {
 	method: AuthMethod,
 	keyPath: string | null,
@@ -102,6 +100,12 @@ export type Bookmark = {
 };
 
 export type CancelTarget = { type: "job"; id: number } | { type: "batch"; id: number };
+
+/**  The app picked in the system's "Open with" dialog. */
+export type ChosenApp = {
+	id: string,
+	remember: boolean,
+};
 
 export type Conflict = "sameId" | "sameName";
 
@@ -336,13 +340,6 @@ export type OpenApp =
 { kind: "default" } | 
 /**  "Öffnen mit": a desktop id; `remember` makes it the default for the type (in LinaSCP only). */
 { kind: "app"; id: string; remember: boolean };
-
-export type OpenWithApps = {
-	/**  Readable name of the file type, e.g. "PNG-Bild". */
-	typeName: string,
-	apps: AppChoice[],
-	remembered: string | null,
-};
 
 export type PortForward = {
 	id: string,

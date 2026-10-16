@@ -30,6 +30,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tauri-plugin-clipboard-manager = "2.5"
 # Same version Tauri pulls in (Cargo.lock): default text editor for SFTP editing.
 gio = "0.18"
+gtk = "0.18"
 
 [dev-dependencies]
 tempfile = "3"

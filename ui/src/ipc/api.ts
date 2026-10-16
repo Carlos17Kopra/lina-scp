@@ -7,6 +7,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { commands } from "./bindings";
 import type {
   Bookmark,
+  ChosenApp,
   CancelTarget,
   Decision,
   Direction,
@@ -21,7 +22,6 @@ import type {
   Listing,
   LoginProfile,
   OpenApp,
-  OpenWithApps,
   ProfileWithUsage,
   PromptAnswer,
   Resolution,
@@ -35,9 +35,8 @@ import type {
 } from "./bindings";
 
 export type {
-  AppChoice,
+  ChosenApp,
   OpenApp,
-  OpenWithApps,
   Bookmark,
   EditEvent,
   EditFile,
@@ -269,8 +268,9 @@ export function editOpen(sessionId: SessionId, path: string, how: OpenApp): Prom
 export function localEdit(path: string, how: OpenApp): Promise<void> {
   return unwrapVoid(commands.localEdit(path, how));
 }
-export function openWithApps(name: string): Promise<OpenWithApps> {
-  return unwrap(commands.openWithApps(name));
+/** The system's "Open with" dialog; resolves `null` when cancelled. */
+export function openWithChoose(name: string, rememberLabel: string): Promise<ChosenApp | null> {
+  return unwrap(commands.openWithChoose(name, rememberLabel));
 }
 export function editResolve(sessionId: SessionId, editId: number, overwrite: boolean): Promise<void> {
   return unwrapVoid(commands.editResolve(sessionId, editId, overwrite));

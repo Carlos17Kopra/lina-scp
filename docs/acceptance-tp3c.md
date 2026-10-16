@@ -30,9 +30,10 @@ eine Textdatei mit Rechten `0640`, ein Symlink auf eine Konfigurationsdatei und 
 - [ ] Ohne Verbindung sind Bearbeiten-Auslöser im Remote-Panel aus.
 
 ## Öffnen mit
-- [ ] Kontextmenü „Öffnen mit …“ auf `bild.png`: der Dialog listet Bildprogramme und die Texteditoren.
+- [ ] Kontextmenü „Öffnen mit …“ auf `bild.png`: der GNOME-Dialog „Anwendung wählen“ erscheint über dem Fenster, „Weitere Anwendungen anzeigen“ listet alle Programme.
+- [ ] „Abbrechen“ oder `Esc` öffnet nichts.
 - [ ] App wählen, „Öffnen“: die Datei öffnet sich darin; Speichern lädt wie beim Bearbeiten hoch.
-- [ ] Mit „Immer für PNG-Bild verwenden“: Doppelklick und `Enter` öffnen PNGs danach in dieser App, `F4`/„Bearbeiten“ weiter im Texteditor.
+- [ ] Mit „Immer für diesen Dateityp verwenden“: Doppelklick und `Enter` öffnen PNGs danach in dieser App, `F4`/„Bearbeiten“ weiter im Texteditor.
 - [ ] Den Schalter bei der gemerkten App abwählen und öffnen: Doppelklick nutzt wieder den Texteditor.
 - [ ] Die System-Zuordnung (`xdg-mime query default image/png`) bleibt unverändert.
 - [ ] „Im Editor öffnen“ unter „Bearbeitet“ nutzt die zuletzt gewählte App.
