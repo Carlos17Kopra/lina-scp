@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../ipc/api";
+import type { Settings } from "../ipc/api";
 import { useConnectStore } from "./connect";
 import { useHostsStore } from "./hosts";
 import { useSessionsStore } from "./sessions";
@@ -72,6 +73,27 @@ describe("settings store", () => {
     await pending;
     expect(api.settingsSet).toHaveBeenCalledWith({ ...DEFAULT_SETTINGS, sshMode: "mirror" });
     expect(useSettingsStore.getState().settings.terminalFontSize).toBe(15);
+  });
+
+  it("runs saves one after another, each on top of the last saved state", async () => {
+    useSettingsStore.setState({ loaded: true });
+    const calls: Array<{ settings: Settings; resolve: (s: Settings) => void; reject: (e: unknown) => void }> = [];
+    vi.mocked(api.settingsSet).mockImplementation(
+      (settings) => new Promise((resolve, reject) => calls.push({ settings, resolve, reject })),
+    );
+    const first = useSettingsStore.getState().save({ theme: "light" });
+    const second = useSettingsStore.getState().save({ terminalFontSize: 16 });
+    expect(useSettingsStore.getState().settings).toMatchObject({ theme: "light", terminalFontSize: 16 });
+    await Promise.resolve();
+    expect(calls).toHaveLength(1);
+    calls[0]?.reject({ type: "io", message: "denied" });
+    await expect(first).rejects.toBeDefined();
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[1]?.settings).toMatchObject({ theme: "dark", terminalFontSize: 16 });
+    expect(useSettingsStore.getState().settings).toMatchObject({ theme: "dark", terminalFontSize: 16 });
+    calls[1]?.resolve(calls[1].settings);
+    await second;
+    expect(useSettingsStore.getState().settings).toMatchObject({ theme: "dark", terminalFontSize: 16 });
   });
 
   it("reverts and rethrows when saving fails", async () => {
