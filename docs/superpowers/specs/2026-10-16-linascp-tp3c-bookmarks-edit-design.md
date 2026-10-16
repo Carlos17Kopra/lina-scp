@@ -118,8 +118,7 @@ Nicht enthalten:
    samt Verzeichnis wird gelöscht, wenn ihr letzter Stand hochgeladen ist. Sonst bleibt sie liegen und ein Hinweis
    nennt den Pfad.
 8. **Tab schließen:** Wie „Beenden“ für alle Dateien des Tabs, nach einem letzten Poll. Der Schließen-Dialog aus
-   TP3b zählt Dateien mit nicht hochgeladenen Änderungen (`changed`, `uploading`, `conflict`, `failed` mit neuerem
-   lokalem Stand) zu den offenen Übertragungen dazu.
+   TP3b zählt Dateien mit nicht hochgeladenen Änderungen (`dirty`) zu den offenen Übertragungen dazu.
 
 ### Core (`crates/core/src/edit/`, neu; Änderungen in `crates/core/src/transfer/`)
 
@@ -137,8 +136,9 @@ Nicht enthalten:
     (der behaltene Pfad, falls Änderungen nicht hochgeladen sind), `close() -> Vec<PathBuf>`.
   - `Launcher` ist ein Trait mit `open(path) -> Result<()>`. Der Core kennt kein GTK; die echte Implementierung lebt
     in `src-tauri`. Tests nutzen einen Fake, der die Aufrufe zählt.
-  - Event `EditEvent::File(EditFile)` bei jedem Statuswechsel. `EditFile { id, name, remote_path, state,
-    error? }`, `state` ∈ `downloading`, `synced`, `changed`, `uploading`, `conflict`, `failed`.
+  - Event `EditEvent::File(EditFile)` bei jedem Statuswechsel. `EditFile { id, name, remote_path, state, dirty,
+    error? }`, `state` ∈ `downloading`, `synced`, `changed`, `uploading`, `conflict`, `failed`. `dirty` heißt: die
+    lokale Kopie hat einen Stand, der noch nicht hochgeladen ist.
 - Tests mit zwei `LocalSide`s (wie TP3b) und Fake-Launcher. Das Poll-Intervall ist im Test kurz einstellbar
   (`tokio::time::pause` oder Parameter).
 
