@@ -1,6 +1,6 @@
 import { Download, Upload } from "lucide-react";
 import { useId, useState } from "react";
-import { Button, Checkbox, Dialog, Segmented, Select, useToast } from "../../components";
+import { Button, Checkbox, Dialog, Segmented, Select, TextField, useToast } from "../../components";
 import { t } from "../../i18n/de";
 import type { Settings, SshMode, TerminalRenderer, Theme } from "../../ipc/api";
 import { errorDetails } from "../../ipc/errors";
@@ -37,6 +37,7 @@ export function SettingsDialog() {
   const openModal = useUiStore((state) => state.openModal);
   const toast = useToast();
   const [pendingMode, setPendingMode] = useState<SshMode | null>(null);
+  const [editor, setEditor] = useState(settings.editorCommand ?? "");
   const ids = { appearance: useId(), ssh: useId(), terminal: useId(), data: useId() };
 
   const persist = (patch: Partial<Settings>) => {
@@ -134,6 +135,19 @@ export function SettingsDialog() {
             label={t.settings.autoReconnect}
             checked={settings.autoReconnect}
             onChange={(autoReconnect) => persist({ autoReconnect })}
+          />
+          <TextField
+            label={t.settings.editor}
+            hint={t.settings.editorHint}
+            placeholder={t.settings.editorPlaceholder}
+            mono
+            spellCheck={false}
+            value={editor}
+            onChange={setEditor}
+            onBlur={() => {
+              const editorCommand = editor.trim() || null;
+              if (editorCommand !== settings.editorCommand) persist({ editorCommand });
+            }}
           />
         </section>
         <section className={styles.section} aria-labelledby={ids.data}>

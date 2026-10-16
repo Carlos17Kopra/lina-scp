@@ -58,6 +58,15 @@
   font-size: 13px;
 }
 
+.editRow {
+  display: grid;
+  grid-template-columns: minmax(120px, 2fr) minmax(100px, 2fr) 160px 28px 28px;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 13px;
+}
+
 .name,
 .target {
   overflow: hidden;

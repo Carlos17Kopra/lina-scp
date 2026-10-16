@@ -13,8 +13,8 @@ use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
 use crate::error::{CoreError, Result};
 use crate::model::{
-    AuthConfig, AuthMethod, ForwardKind, Group, Host, HostAuth, HostSource, Id, LoginProfile, PortForward, Snippet,
-    now_unix,
+    AuthConfig, AuthMethod, Bookmark, ForwardKind, Group, Host, HostAuth, HostSource, Id, LoginProfile, PortForward,
+    Snippet, now_unix,
 };
 
 /// Setting key: `"dark"` | `"light"`.
@@ -31,6 +31,8 @@ pub const TERMINAL_SCHEME: &str = "terminal_scheme";
 pub const TERMINAL_SIDEBAR_OPEN: &str = "terminal_sidebar_open";
 /// Setting key: `"0"` turns automatic SSH reconnects off (default on).
 pub const TERMINAL_AUTO_RECONNECT: &str = "terminal_auto_reconnect";
+/// "Editor" for SFTP editing; empty = the system's text editor.
+pub const EDITOR_COMMAND: &str = "editor_command";
 /// Setting key: `"true"` once the first-run dialog was completed.
 pub const FIRST_RUN_DONE: &str = "first_run_done";
 
@@ -40,6 +42,7 @@ const HOST_COLUMNS: &str = "id, name, address, port, user, group_id, color, note
 
 const PROFILE_COLUMNS: &str = "id, name, user, method, key_path, has_secret, created_at, updated_at";
 
+const BOOKMARK_COLUMNS: &str = "id, host_id, path, position, created_at";
 const SNIPPET_COLUMNS: &str = "id, name, command, host_id, created_at, updated_at";
 
 pub struct Store {
@@ -111,6 +114,7 @@ impl Store {
         let tx = conn.transaction()?;
         tx.execute("UPDATE hosts SET jump_host_id = NULL WHERE jump_host_id = ?1", [id.to_string()])?;
         tx.execute("DELETE FROM hosts WHERE id = ?1", [id.to_string()])?;
+        tx.execute("DELETE FROM bookmarks WHERE host_id = ?1", [id.to_string()])?;
         tx.commit()?;
         Ok(())
     }
@@ -217,6 +221,45 @@ impl Store {
         Ok(())
     }
 
+    // ---- bookmarks ----
+
+    /// The local bookmarks (`None`) or those of one host, in insertion order.
+    pub fn list_bookmarks(&self, host_id: Option<Id>) -> Result<Vec<Bookmark>> {
+        let conn = self.conn();
+        let sql = format!("SELECT {BOOKMARK_COLUMNS} FROM bookmarks WHERE host_id IS ?1 ORDER BY position, id");
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([host_id.map(|id| id.to_string())], bookmark_from_row)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Appends `path`; an existing bookmark of the same path is returned instead of a duplicate.
+    pub fn add_bookmark(&self, host_id: Option<Id>, path: &str) -> Result<Bookmark> {
+        crate::validate::validate_bookmark_path(path)?;
+        let conn = self.conn();
+        let host = host_id.map(|id| id.to_string());
+        let sql = format!("SELECT {BOOKMARK_COLUMNS} FROM bookmarks WHERE host_id IS ?1 AND path = ?2");
+        if let Some(existing) = conn.query_row(&sql, params![host, path], bookmark_from_row).optional()? {
+            return Ok(existing);
+        }
+        let position: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(position), 0) + 1 FROM bookmarks WHERE host_id IS ?1",
+            [&host],
+            |row| row.get(0),
+        )?;
+        let bookmark =
+            Bookmark { id: uuid::Uuid::new_v4(), host_id, path: path.to_string(), position, created_at: now_unix() };
+        conn.execute(
+            "INSERT INTO bookmarks (id, host_id, path, position, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![bookmark.id.to_string(), host, bookmark.path, position, bookmark.created_at],
+        )?;
+        Ok(bookmark)
+    }
+
+    pub fn remove_bookmark(&self, id: Id) -> Result<()> {
+        self.conn().execute("DELETE FROM bookmarks WHERE id = ?1", [id.to_string()])?;
+        Ok(())
+    }
+
     // ---- settings ----
 
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
@@ -307,6 +350,16 @@ fn upsert_snippet(conn: &Connection, s: &Snippet) -> Result<()> {
         params![s.id.to_string(), s.name, s.command, s.host_id.map(|id| id.to_string()), s.created_at, now_unix()],
     )?;
     Ok(())
+}
+
+fn bookmark_from_row(row: &Row<'_>) -> rusqlite::Result<Bookmark> {
+    Ok(Bookmark {
+        id: id_col(row, 0)?,
+        host_id: opt_id_col(row, 1)?,
+        path: row.get(2)?,
+        position: row.get(3)?,
+        created_at: row.get(4)?,
+    })
 }
 
 fn snippet_from_row(row: &Row<'_>) -> rusqlite::Result<Snippet> {

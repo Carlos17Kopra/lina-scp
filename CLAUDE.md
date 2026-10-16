@@ -19,6 +19,8 @@ non-commercial open-source release later. Target platform is Linux only: Debian 
   - `connect/`: russh pipeline (jump host, auth, prompts, timeouts).
   - `session/`: local PTY and SSH sessions.
   - `transfer/`: transfer queue (TP3b) over the `Side` trait (local fs, `SftpSession`).
+  - `edit/`: editing remote files (TP3c): private copy in `~/.cache/linascp/edit/`, polled and uploaded through the
+    transfer queue; the editor is started by `src-tauri/src/editor.rs` (gio, `text/plain` default).
 - `src-tauri`: Tauri 2 app.
   - Commands in `commands/`, output pump with ack flow control in `output.rs`.
   - specta bindings are exported to `ui/src/ipc/bindings.ts`. That file is generated, never edit it by hand. Regenerate
@@ -37,8 +39,10 @@ non-commercial open-source release later. Target platform is Linux only: Debian 
   file operations).
 - `docs/superpowers/specs/2026-10-15-linascp-tp3b-transfers-design.md`: TP3b spec (transfers, queue, conflicts, SFTP
   reconnect).
+- `docs/superpowers/specs/2026-10-16-linascp-tp3c-bookmarks-edit-design.md`: TP3c spec (bookmarks, editing remote
+  files).
 - `docs/acceptance-tp1.md`: manual acceptance checklist (`docs/acceptance-tp2a.md` … `docs/acceptance-tp2d.md` for
-  TP2a–TP2d, `docs/acceptance-tp3a.md` for TP3a, `docs/acceptance-tp3b.md` for TP3b).
+  TP2a–TP2d, `docs/acceptance-tp3a.md` for TP3a, `docs/acceptance-tp3b.md` for TP3b, `docs/acceptance-tp3c.md` for TP3c).
 - `docs/backlog-after-tp1.md`: deferred review findings. Start TP2 planning there.
 
 ## Commands (run from the repo root)
@@ -75,6 +79,9 @@ bun run tauri build               # .deb + .AppImage in target/release/bundle/
   - The WebGL renderer is the default, with a DOM fallback on context loss.
   - Opaque background, and no `WEBKIT_DISABLE_*` unless compat rendering is enabled.
 - **File permissions:** files holding secrets get mode 0600, their directories 0700.
+- **Editing (TP3c):** a server file changed since the last known state is never overwritten without an explicit
+  „Überschreiben“; uploads keep the remote mode and resolve symlinks; local copies live in 0700 directories, are never
+  executable, and copies with changes the server does not have are never deleted.
 
 ## Workflow
 
@@ -95,7 +102,7 @@ bun run tauri build               # .deb + .AppImage in target/release/bundle/
 - TP1, foundation (done, v0.1.0): hosts, editor, connect flow, host keys, error screens, terminal tabs, local
   terminals, settings, export/import, packaging.
 - TP2: complete the terminal, and work off the backlog in `docs/backlog-after-tp1.md`.
-- TP3: SFTP (3a browse done; 3b transfers done; 3c bookmarks + edit).
+- TP3: SFTP (3a browse, 3b transfers, 3c bookmarks + edit: done).
 - TP4: advanced SFTP.
 - TP5: tunnels, keychain, keygen/ssh-copy-id, full settings.
 - No sync between devices. Moving data to another device goes through export/import (`.linascp` files).

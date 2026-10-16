@@ -194,4 +194,66 @@ describe("FilePane", () => {
     fireEvent.pointerUp(document, { clientX: 12, clientY: 11, pointerId: 1 });
     expect(onTransfer).not.toHaveBeenCalled();
   });
+
+  it("Ctrl+B toggles the bookmark of the current folder, per side", async () => {
+    vi.mocked(api.bookmarksList).mockResolvedValue([]);
+    vi.mocked(api.bookmarkAdd).mockResolvedValue({ id: "b1", hostId: "h1", path: "/srv/www", position: 1, createdAt: 0 });
+    renderBothPanes();
+    await localLoaded();
+    screen.getByRole("grid", { name: "Remote" }).focus();
+    await userEvent.keyboard("{Control>}b{/Control}");
+    expect(api.bookmarkAdd).toHaveBeenCalledWith("h1", "/srv/www");
+    screen.getByRole("grid", { name: "Lokal" }).focus();
+    await userEvent.keyboard("{Control>}b{/Control}");
+    expect(api.bookmarkAdd).toHaveBeenLastCalledWith(null, "/l");
+  });
+
+  it("edits files with F4, Enter, double click and the menu; folders still open", async () => {
+    const onEdit = vi.fn();
+    useSftpStore.setState(useSftpStore.getInitialState(), true);
+    useSftpStore.getState().openTab("t1", "h1", {
+      sessionId: "s1", info: makeSessionInfo(), version: 3,
+      listing: { path: "/srv", entries: [
+        f("b.txt"), f("dir", "dir"), f("bad?", "file", { nameLossy: true }),
+        f("link-f", "file", { kind: { type: "symlink", target: "file" } }), f("link-d", "file", { kind: { type: "symlink", target: "dir" } }),
+      ] },
+    });
+    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} onTransfer={onTransfer} onEdit={onEdit} />);
+    const grid = screen.getByRole("grid");
+    grid.focus();
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}");
+    expect(pane().cursor).toBe("b.txt");
+    await userEvent.keyboard("{F4}");
+    await userEvent.keyboard("{Enter}");
+    expect(onEdit.mock.calls).toEqual([["b.txt", "editor"], ["b.txt", "default"]]);
+    await userEvent.dblClick(screen.getByText("link-f"));
+    expect(onEdit).toHaveBeenLastCalledWith("link-f", "default");
+    await userEvent.dblClick(screen.getByText("bad?"));
+    expect(onEdit).toHaveBeenCalledTimes(3);
+    await userEvent.dblClick(screen.getByText("link-d"));
+    expect(api.sftpList).toHaveBeenLastCalledWith("s1", "/srv/link-d");
+    expect(onEdit).toHaveBeenCalledTimes(3);
+  });
+
+  it("offers Bearbeiten in the context menu", async () => {
+    const onEdit = vi.fn();
+    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} onTransfer={onTransfer} onEdit={onEdit} />);
+    fireEvent.contextMenu(screen.getByText("b.txt"));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Bearbeiten" }));
+    expect(onEdit).toHaveBeenCalledWith("b.txt", "editor");
+    fireEvent.contextMenu(screen.getByText("b.txt"));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Öffnen mit …" }));
+    expect(onEdit).toHaveBeenLastCalledWith("b.txt", "choose");
+  });
+
+  it("creates a new file with Shift+F4 and from the menu", async () => {
+    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} onTransfer={onTransfer} />);
+    screen.getByRole("grid").focus();
+    await userEvent.keyboard("{Shift>}{F4}{/Shift}");
+    expect(onCommand).toHaveBeenLastCalledWith("newFile", []);
+    onCommand.mockClear();
+    fireEvent.contextMenu(screen.getByText("b.txt"));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Neue Datei" }));
+    expect(onCommand).toHaveBeenLastCalledWith("newFile", []);
+  });
 });

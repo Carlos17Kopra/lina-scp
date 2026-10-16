@@ -215,6 +215,17 @@ impl Group {
     }
 }
 
+/// A remembered folder: local (`host_id == None`) or on one host's remote side.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct Bookmark {
+    pub id: Id,
+    pub host_id: Option<Id>,
+    pub path: String,
+    pub position: i64,
+    pub created_at: i64,
+}
+
 /// A saved command, global (`host_id == None`) or bound to one stored host.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]

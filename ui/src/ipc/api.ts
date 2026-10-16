@@ -6,6 +6,8 @@
 import { Channel } from "@tauri-apps/api/core";
 import { commands } from "./bindings";
 import type {
+  Bookmark,
+  ChosenApp,
   CancelTarget,
   Decision,
   Direction,
@@ -19,6 +21,7 @@ import type {
   ImportReport,
   Listing,
   LoginProfile,
+  OpenApp,
   ProfileWithUsage,
   PromptAnswer,
   Resolution,
@@ -32,6 +35,12 @@ import type {
 } from "./bindings";
 
 export type {
+  ChosenApp,
+  OpenApp,
+  Bookmark,
+  EditEvent,
+  EditFile,
+  EditState,
   CancelTarget,
   Decision,
   Direction,
@@ -149,6 +158,17 @@ export function secretDelete(owner: SecretOwner, kind: SecretKind): Promise<void
   return unwrapVoid(commands.secretDelete(owner, kind));
 }
 
+// Bookmarks (hostId null = local)
+export function bookmarksList(hostId: Id | null): Promise<Bookmark[]> {
+  return unwrap(commands.bookmarksList(hostId));
+}
+export function bookmarkAdd(hostId: Id | null, path: string): Promise<Bookmark> {
+  return unwrap(commands.bookmarkAdd(hostId, path));
+}
+export function bookmarkRemove(id: Id): Promise<void> {
+  return unwrapVoid(commands.bookmarkRemove(id));
+}
+
 // Snippets
 export function snippetsList(): Promise<Snippet[]> {
   return unwrap(commands.snippetsList());
@@ -235,8 +255,32 @@ export function sftpRename(sessionId: SessionId, dir: string, from: string, to: 
 export function sftpDelete(sessionId: SessionId, dir: string, names: string[]): Promise<void> {
   return unwrapVoid(commands.sftpDelete(sessionId, dir, names));
 }
-export function sftpClose(sessionId: SessionId): Promise<void> {
-  return unwrapVoid(commands.sftpClose(sessionId));
+/** Resolves with the edited copies that were kept (they hold changes the server does not have). */
+export function sftpClose(sessionId: SessionId): Promise<string[]> {
+  return unwrap(commands.sftpClose(sessionId));
+}
+export function sftpCreateFile(sessionId: SessionId, dir: string, name: string): Promise<void> {
+  return unwrapVoid(commands.sftpCreateFile(sessionId, dir, name));
+}
+export function editOpen(sessionId: SessionId, path: string, how: OpenApp): Promise<number> {
+  return unwrap(commands.editOpen(sessionId, path, how));
+}
+export function localEdit(path: string, how: OpenApp): Promise<void> {
+  return unwrapVoid(commands.localEdit(path, how));
+}
+/** The system's "Open with" dialog; resolves `null` when cancelled. */
+export function openWithChoose(name: string, rememberLabel: string): Promise<ChosenApp | null> {
+  return unwrap(commands.openWithChoose(name, rememberLabel));
+}
+export function editResolve(sessionId: SessionId, editId: number, overwrite: boolean): Promise<void> {
+  return unwrapVoid(commands.editResolve(sessionId, editId, overwrite));
+}
+export function editReopen(sessionId: SessionId, editId: number): Promise<void> {
+  return unwrapVoid(commands.editReopen(sessionId, editId));
+}
+/** Resolves with the kept copy's path when it holds changes the server does not have. */
+export function editStop(sessionId: SessionId, editId: number): Promise<string | null> {
+  return unwrap(commands.editStop(sessionId, editId));
 }
 export function localList(path: string): Promise<Listing> {
   return unwrap(commands.localList(path));
@@ -246,6 +290,9 @@ export function localHome(hostId: Id | null): Promise<string> {
 }
 export function localMkdir(dir: string, name: string): Promise<void> {
   return unwrapVoid(commands.localMkdir(dir, name));
+}
+export function localCreateFile(dir: string, name: string): Promise<void> {
+  return unwrapVoid(commands.localCreateFile(dir, name));
 }
 export function localRename(dir: string, from: string, to: string): Promise<void> {
   return unwrapVoid(commands.localRename(dir, from, to));

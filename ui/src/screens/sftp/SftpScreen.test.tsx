@@ -1,9 +1,11 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../ipc/api";
 import { useConnectStore } from "../../stores/connect";
+import { useEditsStore } from "../../stores/edits";
 import { useHostsStore } from "../../stores/hosts";
+import { useNoticeStore } from "../../stores/notices";
 import { useSftpStore } from "../../stores/sftp";
 import { useTransfersStore } from "../../stores/transfers";
 import { makeHost, makeSessionInfo } from "../../test/fixtures";
@@ -17,10 +19,12 @@ beforeEach(() => {
   start.mockClear();
   vi.mocked(api.localHome).mockResolvedValue("/l");
   vi.mocked(api.localList).mockResolvedValue({ path: "/l", entries: [] });
-  vi.mocked(api.sftpClose).mockResolvedValue();
+  vi.mocked(api.sftpClose).mockResolvedValue([]);
   useConnectStore.setState({ ...useConnectStore.getInitialState(), start }, true);
   useSftpStore.setState(useSftpStore.getInitialState(), true);
   useTransfersStore.setState(useTransfersStore.getInitialState(), true);
+  useEditsStore.setState(useEditsStore.getInitialState(), true);
+  useNoticeStore.setState(useNoticeStore.getInitialState(), true);
   useHostsStore.setState({
     ...useHostsStore.getInitialState(),
     hosts: [
@@ -129,7 +133,7 @@ describe("SftpScreen", () => {
 
   it("asks before closing a tab with open transfers", async () => {
     openTab();
-    useTransfersStore.getState().onEvent("t1", { kind: "job", job: { id: 1, batchId: 1, direction: "upload", source: "/a", target: "/b", rel: "a", kind: "file", size: 1, done: 0, state: "running", note: null, error: null } });
+    useTransfersStore.getState().onEvent("t1", { kind: "job", job: { id: 1, batchId: 1, direction: "upload", source: "/a", target: "/b", rel: "a", kind: "file", size: 1, done: 0, state: "running", note: null, error: null, retryable: true } });
     render(<SftpScreen />);
     await userEvent.click(screen.getByRole("button", { name: "web schließen" }));
     expect(screen.getByRole("alertdialog", { name: "Übertragungen offen" })).toBeInTheDocument();
@@ -140,10 +144,85 @@ describe("SftpScreen", () => {
 
   it("marks another tab that waits for a conflict decision and shows the dialog only in its own tab", () => {
     openTwoTabs();
-    useTransfersStore.getState().onEvent("t2", { kind: "job", job: { id: 1, batchId: 1, direction: "upload", source: "/a", target: "/srv/a", rel: "a", kind: "file", size: 1, done: 0, state: "waitingDecision", note: null, error: null } });
+    useTransfersStore.getState().onEvent("t2", { kind: "job", job: { id: 1, batchId: 1, direction: "upload", source: "/a", target: "/srv/a", rel: "a", kind: "file", size: 1, done: 0, state: "waitingDecision", note: null, error: null, retryable: true } });
     useTransfersStore.getState().onEvent("t2", { kind: "conflict", jobId: 1, source: { size: 1, mtime: 1 }, target: { size: 1, mtime: 1 } });
     render(<SftpScreen />);
     expect(screen.getByRole("tab", { name: /Wartet auf eine Entscheidung/ })).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "Datei existiert bereits" })).not.toBeInTheDocument();
+  });
+
+  it("edits remote files through the session and local files in place", async () => {
+    vi.mocked(api.localList).mockResolvedValue({ path: "/l", entries: [{ name: "a.txt", kind: { type: "file" }, size: 1, mtime: 0, mode: 0o100644, owner: "u", nameLossy: false }] });
+    vi.mocked(api.editOpen).mockResolvedValue(1);
+    vi.mocked(api.localEdit).mockResolvedValue();
+    useSftpStore.getState().openTab("t1", "h1", {
+      sessionId: "s1", info: makeSessionInfo(), version: 3,
+      listing: { path: "/srv", entries: [{ name: "a.txt", kind: { type: "file" }, size: 1, mtime: 0, mode: 0o100644, owner: "u", nameLossy: false }] },
+    });
+    await vi.waitFor(() => expect(useSftpStore.getState().tabs[0]!.panes.local.entries).toHaveLength(1));
+    render(<SftpScreen />);
+    await userEvent.dblClick(within(screen.getByRole("grid", { name: "Remote" })).getByText("a.txt"));
+    expect(api.editOpen).toHaveBeenCalledWith("s1", "/srv/a.txt", { kind: "default" });
+    await userEvent.dblClick(within(screen.getByRole("grid", { name: "Lokal" })).getByText("a.txt"));
+    expect(api.localEdit).toHaveBeenCalledWith("/l/a.txt", { kind: "default" });
+  });
+
+  it("opens a file with the app picked in the system chooser", async () => {
+    vi.mocked(api.editOpen).mockResolvedValue(1);
+    vi.mocked(api.openWithChoose).mockResolvedValueOnce(null).mockResolvedValueOnce({ id: "gimp.desktop", remember: true });
+    useSftpStore.getState().openTab("t1", "h1", {
+      sessionId: "s1", info: makeSessionInfo(), version: 3,
+      listing: { path: "/srv", entries: [{ name: "a.png", kind: { type: "file" }, size: 1, mtime: 0, mode: 0o100644, owner: "u", nameLossy: false }] },
+    });
+    render(<SftpScreen />);
+    const openWith = async () => {
+      fireEvent.contextMenu(within(screen.getByRole("grid", { name: "Remote" })).getByText("a.png"));
+      await userEvent.click(screen.getByRole("menuitem", { name: "Öffnen mit …" }));
+    };
+    await openWith();
+    expect(api.openWithChoose).toHaveBeenCalledWith("a.png", "Immer für diesen Dateityp verwenden");
+    expect(api.editOpen).not.toHaveBeenCalled();
+    await openWith();
+    await vi.waitFor(() =>
+      expect(api.editOpen).toHaveBeenCalledWith("s1", "/srv/a.png", { kind: "app", id: "gimp.desktop", remember: true }));
+  });
+
+  it("creates a new file from the toolbar", async () => {
+    openTab();
+    vi.mocked(api.sftpCreateFile).mockResolvedValue();
+    vi.mocked(api.sftpList).mockResolvedValue({ path: "/srv", entries: [] });
+    render(<SftpScreen />);
+    await userEvent.click(screen.getByRole("button", { name: "Neue Datei" }));
+    expect(screen.getByRole("dialog", { name: "Neue Datei" })).toBeInTheDocument();
+    await userEvent.type(screen.getByRole("textbox", { name: "Name" }), "neu.txt{Enter}");
+    expect(api.sftpCreateFile).toHaveBeenCalledWith("s1", "/srv", "neu.txt");
+    expect(api.sftpList).toHaveBeenCalledWith("s1", "/srv");
+  });
+
+  it("the toolbar edit button is off on the remote side while not connected", () => {
+    openTab();
+    useSftpStore.getState().onEvent("t1", "s1", { kind: "lost", error: { type: "cancelled" } });
+    useSftpStore.getState().setActivePane("t1", "remote");
+    render(<SftpScreen />);
+    expect(screen.getByRole("button", { name: "Bearbeiten" })).toBeDisabled();
+  });
+
+  it("counts unsaved edits when closing and names kept copies afterwards", async () => {
+    openTab();
+    vi.mocked(api.sftpClose).mockResolvedValue(["/c/x/a.conf"]);
+    useEditsStore.getState().onEvent("t1", { kind: "file", file: { id: 1, name: "a.conf", remotePath: "/srv/a.conf", state: "changed", dirty: true, error: null } });
+    render(<SftpScreen />);
+    await userEvent.click(screen.getByRole("button", { name: "web schließen" }));
+    expect(screen.getByRole("alertdialog", { name: "Übertragungen offen" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Schließen" }));
+    await vi.waitFor(() => expect(useNoticeStore.getState().notices.map((n) => n.message)).toContain("Nicht hochgeladene Änderungen liegen unter /c/x/a.conf"));
+  });
+
+  it("marks another tab whose edit waits for a decision", () => {
+    openTwoTabs();
+    useEditsStore.getState().onEvent("t2", { kind: "file", file: { id: 1, name: "a.conf", remotePath: "/srv/a.conf", state: "conflict", dirty: true, error: null } });
+    render(<SftpScreen />);
+    expect(screen.getByRole("tab", { name: /Wartet auf eine Entscheidung/ })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Datei auf dem Server geändert" })).not.toBeInTheDocument();
   });
 });

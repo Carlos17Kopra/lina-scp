@@ -89,4 +89,16 @@ describe("SettingsDialog", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Speichern fehlgeschlagen");
     expect(screen.getByRole("radio", { name: "Integrieren" })).toHaveAttribute("aria-checked", "true");
   });
+
+  it("saves the editor command on blur, empty as null", async () => {
+    renderDialog();
+    const field = screen.getByLabelText("Editor");
+    expect(field).toHaveAttribute("placeholder", "Standard-Texteditor des Systems");
+    await userEvent.type(field, " code -w ");
+    await userEvent.tab();
+    expect(api.settingsSet).toHaveBeenLastCalledWith(expect.objectContaining({ editorCommand: "code -w" }));
+    await userEvent.clear(field);
+    await userEvent.tab();
+    expect(api.settingsSet).toHaveBeenLastCalledWith(expect.objectContaining({ editorCommand: null }));
+  });
 });

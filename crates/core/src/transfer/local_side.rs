@@ -163,6 +163,12 @@ impl Side for LocalSide {
         let path = path.to_string();
         run(move || std::fs::remove_file(&path).map_err(|e| io_error(e, &path))).await
     }
+
+    async fn realpath(&self, path: &str) -> Result<String> {
+        let path = path.to_string();
+        let real = run(move || std::fs::canonicalize(&path).map_err(|e| io_error(e, &path))).await?;
+        real.into_os_string().into_string().map_err(|_| CoreError::config("path is not valid UTF-8"))
+    }
 }
 
 #[cfg(test)]
@@ -246,4 +252,14 @@ mod tests {
     }
 
     use std::os::unix::ffi::OsStrExt;
+
+    #[tokio::test]
+    async fn local_realpath_resolves_symlinks() {
+        let d = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(d.path()).unwrap();
+        std::fs::write(root.join("real.txt"), b"x").unwrap();
+        std::os::unix::fs::symlink(root.join("real.txt"), root.join("link")).unwrap();
+        assert_eq!(LocalSide.realpath(&p(&root.join("link"))).await.unwrap(), p(&root.join("real.txt")));
+        assert!(LocalSide.realpath(&p(&root.join("missing"))).await.is_err());
+    }
 }

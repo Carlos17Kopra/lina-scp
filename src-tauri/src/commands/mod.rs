@@ -1,3 +1,4 @@
+pub mod bookmarks;
 pub mod connect;
 pub mod hosts;
 pub mod profiles;
@@ -5,6 +6,7 @@ pub mod secrets;
 pub mod sessions;
 pub mod settings;
 pub mod sftp;
+pub mod sftp_edit;
 pub mod sftp_transfers;
 pub mod snippets;
 pub mod transfer;

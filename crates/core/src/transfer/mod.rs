@@ -5,7 +5,7 @@ mod local_side;
 mod queue;
 mod side;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 pub use local_side::LocalSide;
 pub use queue::{TransferEmit, TransferQueue};
@@ -81,6 +81,9 @@ pub struct Job {
     pub state: JobState,
     pub note: Option<JobNote>,
     pub error: Option<CoreError>,
+    /// `false` for batches with `EnqueueOptions` (editing): retrying them would skip the edit's
+    /// check for changes on the server; saving again is the retry.
+    pub retryable: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -118,6 +121,15 @@ pub enum TransferEvent {
     Conflict { job_id: JobId, source: FileStamp, target: FileStamp },
     /// Every job of the batch reached a final state.
     BatchDone { batch_id: BatchId, target_dir: String, direction: Direction },
+}
+
+/// Per-batch overrides (used by editing: always overwrite, keep the remote file's mode).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EnqueueOptions {
+    /// Answer to every conflict of the batch, as if chosen with "Für alle übernehmen".
+    pub decision: Option<Decision>,
+    /// Mode of transferred files instead of `TransferOptions::file_mode`.
+    pub file_mode: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

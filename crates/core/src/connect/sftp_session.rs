@@ -197,6 +197,23 @@ impl SftpSession {
     }
 
     /// SFTP v3 `rename` refuses an existing target; the `lstat` before gives a clear `AlreadyExists`.
+    /// Creates an empty file (`CREATE | EXCLUDE`): an existing name is never touched.
+    pub async fn create_file(&self, dir: &str, name: &str) -> Result<()> {
+        validate_file_name(name)?;
+        self.ensure_alive()?;
+        let path = join(dir, name);
+        let flags = OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUDE;
+        let attrs = FileAttributes { permissions: Some(0o644), ..FileAttributes::default() };
+        match self.raw.open(path.as_str(), flags, attrs).await {
+            Ok(handle) => self.check(self.raw.close(handle.handle).await, &path).map(drop),
+            // OpenSSH answers a generic Failure for an existing name.
+            Err(SftpError::Status(s)) if s.status_code == StatusCode::Failure && self.exists(&path).await => {
+                Err(CoreError::fs(FsKind::AlreadyExists, &path, s.error_message))
+            }
+            Err(e) => self.check(Err(e), &path),
+        }
+    }
+
     pub async fn rename(&self, dir: &str, from: &str, to: &str) -> Result<()> {
         validate_file_name(from)?;
         validate_file_name(to)?;
@@ -451,6 +468,10 @@ impl Side for SftpSession {
 
     async fn remove(&self, path: &str) -> Result<()> {
         self.check(self.raw.remove(path).await, path).map(|_| ())
+    }
+
+    async fn realpath(&self, path: &str) -> Result<String> {
+        self.canonical(path).await
     }
 }
 

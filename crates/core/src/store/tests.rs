@@ -232,3 +232,65 @@ fn deleting_a_host_deletes_only_its_snippets() {
     store.delete_snippet(global.id).unwrap();
     assert!(store.list_snippets().unwrap().is_empty());
 }
+
+#[test]
+fn bookmarks_are_kept_per_host_and_local() {
+    let store = Store::open_in_memory().unwrap();
+    let (a, b) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+    store.add_bookmark(None, "/home/u").unwrap();
+    store.add_bookmark(Some(a), "/srv").unwrap();
+    store.add_bookmark(Some(b), "/etc").unwrap();
+    let paths = |h| store.list_bookmarks(h).unwrap().into_iter().map(|b| b.path).collect::<Vec<_>>();
+    assert_eq!(paths(None), ["/home/u"]);
+    assert_eq!(paths(Some(a)), ["/srv"]);
+    assert_eq!(paths(Some(b)), ["/etc"]);
+}
+
+#[test]
+fn adding_a_bookmark_twice_returns_the_existing_one() {
+    let store = Store::open_in_memory().unwrap();
+    let first = store.add_bookmark(None, "/srv").unwrap();
+    let again = store.add_bookmark(None, "/srv").unwrap();
+    assert_eq!(first, again);
+    assert_eq!(store.list_bookmarks(None).unwrap().len(), 1);
+}
+
+#[test]
+fn bookmarks_keep_insertion_order() {
+    let store = Store::open_in_memory().unwrap();
+    for p in ["/z", "/a", "/m"] {
+        store.add_bookmark(None, p).unwrap();
+    }
+    let paths: Vec<_> = store.list_bookmarks(None).unwrap().into_iter().map(|b| b.path).collect();
+    assert_eq!(paths, ["/z", "/a", "/m"]);
+}
+
+#[test]
+fn removing_bookmarks_including_unknown_ones() {
+    let store = Store::open_in_memory().unwrap();
+    let b = store.add_bookmark(None, "/srv").unwrap();
+    store.remove_bookmark(uuid::Uuid::new_v4()).unwrap();
+    store.remove_bookmark(b.id).unwrap();
+    assert!(store.list_bookmarks(None).unwrap().is_empty());
+}
+
+#[test]
+fn deleting_a_host_deletes_its_bookmarks() {
+    let store = Store::open_in_memory().unwrap();
+    let host = Host::new("web", "10.0.0.1");
+    store.save_host(&host).unwrap();
+    store.add_bookmark(Some(host.id), "/srv").unwrap();
+    store.add_bookmark(None, "/home").unwrap();
+    store.delete_host(host.id).unwrap();
+    assert!(store.list_bookmarks(Some(host.id)).unwrap().is_empty());
+    assert_eq!(store.list_bookmarks(None).unwrap().len(), 1);
+}
+
+#[test]
+fn bookmark_paths_are_validated() {
+    let store = Store::open_in_memory().unwrap();
+    for bad in ["rel/x".to_string(), "/a\nb".to_string(), format!("/{}", "a".repeat(4096))] {
+        assert!(store.add_bookmark(None, &bad).is_err(), "{bad:?}");
+    }
+    assert!(store.list_bookmarks(None).unwrap().is_empty());
+}

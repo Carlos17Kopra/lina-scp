@@ -3,6 +3,7 @@ import {
   type CoreError,
   type Entry,
   type Id,
+  localCreateFile,
   localDelete,
   localHome,
   localList,
@@ -14,6 +15,7 @@ import {
   type SftpConnected,
   type SftpEvent,
   sftpClose,
+  sftpCreateFile,
   sftpDelete,
   sftpList,
   sftpMkdir,
@@ -24,6 +26,7 @@ import { type Sort, type SortKey, visibleEntries } from "../screens/sftp/entries
 import { fireAndForget } from "./connectProgress";
 import { useConnectStore } from "./connect";
 import { useHostsStore } from "./hosts";
+import { noticeKept, useEditsStore } from "./edits";
 import { useTransfersStore } from "./transfers";
 
 export type Side = "local" | "remote";
@@ -75,6 +78,7 @@ export interface SftpState {
   setEditingPath(tabId: string, side: Side, on: boolean): void;
   select(tabId: string, side: Side, patch: Pick<PaneState, "selection" | "cursor" | "anchor">): void;
   mkdir(tabId: string, side: Side, name: string): Promise<void>;
+  createFile(tabId: string, side: Side, name: string): Promise<void>;
   rename(tabId: string, side: Side, from: string, to: string): Promise<void>;
   remove(tabId: string, side: Side, names: string[], mode: "trash" | "permanent"): Promise<void>;
 }
@@ -171,8 +175,9 @@ export const useSftpStore = create<SftpState>()((set, get) => {
     closeTab: (tabId) => {
       const tab = findTab(tabId);
       if (!tab) return;
-      fireAndForget(() => sftpClose(tab.sessionId));
+      fireAndForget(async () => (await sftpClose(tab.sessionId)).forEach(noticeKept));
       useTransfersStore.getState().dropTab(tabId);
+      useEditsStore.getState().drop(tabId);
       set((state) => {
         const tabs = state.tabs.filter((x) => x.id !== tabId);
         const activeTabId = state.activeTabId === tabId ? (tabs.at(-1)?.id ?? null) : state.activeTabId;
@@ -186,6 +191,9 @@ export const useSftpStore = create<SftpState>()((set, get) => {
     onEvent: (tabId, sessionId, event) => {
       if (findTab(tabId)?.sessionId !== sessionId) return;
       switch (event.kind) {
+        case "edit":
+          useEditsStore.getState().onEvent(tabId, event.event);
+          return;
         case "transfer":
           useTransfersStore.getState().onEvent(tabId, event.event);
           return;
@@ -253,6 +261,14 @@ export const useSftpStore = create<SftpState>()((set, get) => {
       if (!tab) return;
       const dir = tab.panes[side].path;
       await (side === "remote" ? sftpMkdir(tab.sessionId, dir, name) : localMkdir(dir, name));
+      await get().reload(tabId, side, name);
+    },
+
+    createFile: async (tabId, side, name) => {
+      const tab = findTab(tabId);
+      if (!tab) return;
+      const dir = tab.panes[side].path;
+      await (side === "remote" ? sftpCreateFile(tab.sessionId, dir, name) : localCreateFile(dir, name));
       await get().reload(tabId, side, name);
     },
 

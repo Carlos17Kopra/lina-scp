@@ -530,6 +530,10 @@ async fn sftp_mkdir_rename_and_errors() {
     assert!(names.contains(&"c".into()) && names.contains(&"b".into()) && !names.contains(&"a".into()));
     assert!(matches!(s.list("/root").await, Err(CoreError::Fs { kind: FsKind::PermissionDenied, .. })));
     assert!(matches!(s.mkdir(&d, "x/y").await, Err(CoreError::Config { .. })));
+    s.create_file(&d, "new.txt").await.unwrap();
+    assert!(matches!(s.create_file(&d, "new.txt").await, Err(CoreError::Fs { kind: FsKind::AlreadyExists, .. })));
+    assert!(matches!(s.create_file(&d, "b").await, Err(CoreError::Fs { kind: FsKind::AlreadyExists, .. })));
+    assert!(matches!(s.create_file(&d, "x/y").await, Err(CoreError::Config { .. })));
     s.close().await;
 }
 
@@ -834,5 +838,68 @@ mod transfers {
         assert!(std::fs::read(back.path().join("big.bin")).unwrap() == data, "content differs after resume");
         queue.close().await;
         rc.close().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires docker"]
+    async fn edit_roundtrip_against_sshd() {
+        use linascp_core::edit::{EditEvent, EditManager, EditState, Launcher};
+        struct Remember(Mutex<Option<std::path::PathBuf>>);
+        impl Launcher for Remember {
+            fn open(&self, path: &std::path::Path, _app: Option<&str>) -> Result<()> {
+                *self.0.lock().unwrap() = Some(path.to_path_buf());
+                Ok(())
+            }
+        }
+        let c = Container::start(None);
+        let env = Env::new();
+        let h = host(c.port, "pwuser", AuthMethod::Password, None);
+        env.store_password(&h, "pwpass");
+        let (session, home, _) = sftp(&env, h, no_lost()).await;
+        let session = Arc::new(session);
+        let path = format!("{}/app.conf", home.path);
+        let writer = session.open_write(&path, false).await.unwrap();
+        writer.write_at(0, b"port=80\n".to_vec()).await.unwrap();
+        writer.close().await.unwrap();
+        session.set_mode(&path, 0o640).await.unwrap();
+
+        let (_, emit) = recorder();
+        let queue =
+            TransferQueue::new(Arc::new(LocalSide), TransferOptions { parallel: 2, upload_mode: Some(0o600) }, emit);
+        queue.set_remote(Some(session.clone()));
+        let cache = tempfile::tempdir().unwrap();
+        let launcher = Arc::new(Remember(Mutex::new(None)));
+        let states: Arc<Mutex<Vec<EditState>>> = Arc::default();
+        let sink = states.clone();
+        let edits = EditManager::new(
+            queue.clone(),
+            cache.path().join("edit"),
+            launcher.clone(),
+            Arc::new(move |EditEvent::File { file }| sink.lock().unwrap().push(file.state)),
+            std::time::Duration::from_millis(100),
+        );
+        edits.open(&path).await.unwrap();
+        let copy = launcher.0.lock().unwrap().clone().unwrap();
+        assert_eq!(std::fs::read(&copy).unwrap(), b"port=80\n");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        std::fs::write(&copy, b"port=8080\n").unwrap();
+        for _ in 0..300 {
+            if states.lock().unwrap().ends_with(&[EditState::Uploading, EditState::Synced]) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(
+            states.lock().unwrap().ends_with(&[EditState::Uploading, EditState::Synced]),
+            "{:?}",
+            states.lock().unwrap()
+        );
+        let reader = session.open_read(&path).await.unwrap();
+        assert_eq!(reader.read_at(0, 64).await.unwrap(), b"port=8080\n");
+        reader.close().await;
+        assert_eq!(session.stat(&path).await.unwrap().unwrap().mode & 0o777, 0o640);
+        assert_eq!(edits.close().await, Vec::<std::path::PathBuf>::new());
+        queue.close().await;
+        session.close().await;
     }
 }
