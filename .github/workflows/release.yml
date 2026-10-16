@@ -100,6 +100,16 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+      # A re-run for the same tag would otherwise add a second draft; a published release is never touched.
+      - name: Remove an earlier draft of this tag
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft -q .isDraft 2>/dev/null)" = "true" ]; then
+            gh release delete "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --yes
+          fi
+
       - name: Create draft release
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
