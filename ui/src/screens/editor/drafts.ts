@@ -8,7 +8,6 @@ import type {
   Id,
   LoginProfile,
   PortForward,
-  TransferMode,
 } from "../../ipc/api";
 import { nowSeconds } from "../../model/defaults";
 import { type HostColor, isHostColor } from "../../model/hostFormat";
@@ -34,7 +33,6 @@ export interface AuthDraft {
 export interface SftpDraft {
   remoteStart: string;
   localStart: string;
-  transferMode: TransferMode;
   parallel: string;
   uploadPerms: string;
   bandwidthLimit: string;
@@ -146,7 +144,6 @@ export function hostToDraft(host: Host): HostDraft {
     sftp: {
       remoteStart: host.sftp.remoteStart ?? "",
       localStart: host.sftp.localStart ?? "",
-      transferMode: host.sftp.transferMode,
       parallel: String(host.sftp.parallel),
       uploadPerms: host.sftp.uploadPerms ?? "",
       bandwidthLimit: host.sftp.bandwidthLimitKbps === null ? "" : String(host.sftp.bandwidthLimitKbps),
@@ -187,7 +184,6 @@ export function draftToHost(draft: HostDraft, groupId: Id | null): Host {
     sftp: {
       remoteStart: optional(draft.sftp.remoteStart),
       localStart: optional(draft.sftp.localStart),
-      transferMode: draft.sftp.transferMode,
       parallel: Number(draft.sftp.parallel.trim()),
       uploadPerms: optional(draft.sftp.uploadPerms),
       bandwidthLimitKbps: draft.sftp.bandwidthLimit.trim() ? Number(draft.sftp.bandwidthLimit.trim()) : null,

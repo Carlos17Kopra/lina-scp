@@ -95,7 +95,6 @@ export type {
   Step,
   TerminalRenderer,
   Theme,
-  TransferMode,
 } from "./bindings";
 
 /** UUID string (hosts, profiles, groups, connect attempts). */

@@ -40,7 +40,7 @@ describe("host drafts", () => {
     startCommand: "tmux",
     terminalScheme: "nord",
     terminalFontSize: 16,
-    sftp: { remoteStart: "/srv", localStart: null, transferMode: "auto", parallel: 3, uploadPerms: "0644", bandwidthLimitKbps: 500, sftpServerCmd: null },
+    sftp: { remoteStart: "/srv", localStart: null, parallel: 3, uploadPerms: "0644", bandwidthLimitKbps: 500, sftpServerCmd: null },
   });
 
   it("round-trips every field", () => {

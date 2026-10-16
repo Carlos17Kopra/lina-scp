@@ -424,7 +424,6 @@ export type SftpEvent = { kind: "reconnecting"; attempt: number; maxAttempts: nu
 export type SftpSettings = {
 	remoteStart: string | null,
 	localStart: string | null,
-	transferMode: TransferMode,
 	parallel: number,
 	uploadPerms: string | null,
 	bandwidthLimitKbps: number | null,
@@ -458,8 +457,6 @@ export type TransferEvent =
 { kind: "conflict"; jobId: number; source: FileStamp; target: FileStamp } | 
 /**  Every job of the batch reached a final state. */
 { kind: "batchDone"; batchId: number; targetDir: string; direction: Direction };
-
-export type TransferMode = "binary" | "text" | "auto";
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

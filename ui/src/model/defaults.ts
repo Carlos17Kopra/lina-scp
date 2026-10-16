@@ -13,7 +13,6 @@ export function defaultSftpSettings(): SftpSettings {
   return {
     remoteStart: null,
     localStart: null,
-    transferMode: "binary",
     parallel: 4,
     uploadPerms: null,
     bandwidthLimitKbps: null,
