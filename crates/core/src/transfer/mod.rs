@@ -3,6 +3,7 @@
 mod chmod;
 mod compare;
 mod copy;
+mod keep;
 mod local_side;
 mod queue;
 mod side;
@@ -12,6 +13,7 @@ pub(crate) mod test_support;
 
 pub use chmod::{ModeChange, PathFailure, chmod};
 pub use compare::{DiffStatus, Difference, DirContents, NodeInfo, TreeEntry, compare};
+pub use keep::{KeepEmit, KeepEvent, KeepHandle, keep_up_to_date};
 pub use local_side::LocalSide;
 pub use queue::{TransferEmit, TransferQueue};
 pub use side::{Child, Node, NodeKind, Reader, Side, Writer};
