@@ -52,7 +52,7 @@ describe("SftpScreen", () => {
 
   it("shows the lost banner and reconnects", async () => {
     openTab();
-    useSftpStore.getState().markLost("t1", "s1", { type: "network", kind: "other", message: "connection lost" });
+    useSftpStore.getState().onEvent("t1", "s1", { kind: "lost", error: { type: "network", kind: "other", message: "connection lost" } });
     render(<SftpScreen />);
     expect(screen.getByText("Verbindung verloren")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Neu verbinden" }));

@@ -12,6 +12,7 @@ import {
   type Listing,
   type SessionInfo,
   type SftpConnected,
+  type SftpEvent,
   sftpClose,
   sftpDelete,
   sftpList,
@@ -23,6 +24,7 @@ import { type Sort, type SortKey, visibleEntries } from "../screens/sftp/entries
 import { fireAndForget } from "./connectProgress";
 import { useConnectStore } from "./connect";
 import { useHostsStore } from "./hosts";
+import { useTransfersStore } from "./transfers";
 
 export type Side = "local" | "remote";
 
@@ -46,8 +48,10 @@ export interface SftpTab {
   hostId: Id;
   sessionId: string;
   title: string;
-  status: "connected" | "lost";
+  status: "connected" | "reconnecting" | "lost";
   lostError?: CoreError;
+  /** Automatic reconnect in progress (`status === "reconnecting"`). */
+  reconnect?: { attempt: number; maxAttempts: number; retryAt: number; reason: CoreError };
   info: SessionInfo;
   version: number;
   panes: Record<Side, PaneState>;
@@ -62,7 +66,7 @@ export interface SftpState {
   closeTab(tabId: string): void;
   setActiveTab(tabId: string): void;
   setActivePane(tabId: string, side: Side): void;
-  markLost(tabId: string, sessionId: string, error: CoreError): void;
+  onEvent(tabId: string, sessionId: string, event: SftpEvent): void;
   reconnect(tabId: string): void;
   navigate(tabId: string, side: Side, path: string, focus?: string): Promise<void>;
   reload(tabId: string, side: Side, focus?: string): Promise<void>;
@@ -168,6 +172,7 @@ export const useSftpStore = create<SftpState>()((set, get) => {
       const tab = findTab(tabId);
       if (!tab) return;
       fireAndForget(() => sftpClose(tab.sessionId));
+      useTransfersStore.getState().dropTab(tabId);
       set((state) => {
         const tabs = state.tabs.filter((x) => x.id !== tabId);
         const activeTabId = state.activeTabId === tabId ? (tabs.at(-1)?.id ?? null) : state.activeTabId;
@@ -178,15 +183,32 @@ export const useSftpStore = create<SftpState>()((set, get) => {
     setActiveTab: (tabId) => set({ activeTabId: tabId }),
     setActivePane: (tabId, side) => patchTab(tabId, () => ({ active: side })),
 
-    markLost: (tabId, sessionId, error) => {
+    onEvent: (tabId, sessionId, event) => {
       if (findTab(tabId)?.sessionId !== sessionId) return;
-      patchTab(tabId, () => ({ status: "lost", lostError: error }));
+      switch (event.kind) {
+        case "transfer":
+          useTransfersStore.getState().onEvent(tabId, event.event);
+          return;
+        case "reconnecting":
+          patchTab(tabId, () => ({
+            status: "reconnecting",
+            reconnect: { attempt: event.attempt, maxAttempts: event.maxAttempts, retryAt: Date.now() + event.retryInMs, reason: event.reason },
+          }));
+          return;
+        case "reconnected":
+          patchTab(tabId, () => ({ status: "connected", reconnect: undefined, lostError: undefined, info: event.info }));
+          void get().reload(tabId, "remote");
+          void get().reload(tabId, "local");
+          return;
+        case "lost":
+          patchTab(tabId, () => ({ status: "lost", reconnect: undefined, lostError: event.error }));
+      }
     },
 
     reconnect: (tabId) => {
       const tab = findTab(tabId);
       if (!tab) return;
-      fireAndForget(() => sftpClose(tab.sessionId));
+      // Re-attaches to the same backend session: the queue and paused jobs survive.
       void useConnectStore.getState().start(tab.hostId, "sftp", { sftpTabId: tabId });
     },
 

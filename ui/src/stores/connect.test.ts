@@ -259,6 +259,22 @@ describe("connect store", () => {
     expect(useUiStore.getState().view).toBe("sftp");
   });
 
+  it("a reconnect of an SFTP tab passes its session id and never closes it on a stale result", async () => {
+    vi.mocked(api.localHome).mockResolvedValue("/home/me");
+    vi.mocked(api.localList).mockResolvedValue({ path: "/home/me", entries: [] });
+    const connected: api.SftpConnected = { sessionId: "s1", info: makeSessionInfo(), version: 3, listing: { path: "/home/u", entries: [] } };
+    useSftpStore.getState().openTab("t1", web.id, connected);
+    let resolve!: (c: api.SftpConnected) => void;
+    vi.mocked(api.connectSftp).mockReturnValue(new Promise((r) => { resolve = r; }));
+    void useConnectStore.getState().start(web.id, "sftp", { sftpTabId: "t1" });
+    await settle();
+    expect(vi.mocked(api.connectSftp).mock.calls[0]![2]).toBe("s1");
+    await useConnectStore.getState().cancel();
+    resolve(connected);
+    await settle();
+    expect(api.sftpClose).not.toHaveBeenCalled();
+  });
+
   it("reports unknown hosts", async () => {
     await useConnectStore.getState().start("missing", "ssh");
     expect(flow()).toBeNull();

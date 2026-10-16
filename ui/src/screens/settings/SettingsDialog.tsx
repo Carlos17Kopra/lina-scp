@@ -132,8 +132,8 @@ export function SettingsDialog() {
           />
           <Checkbox
             label={t.settings.autoReconnect}
-            checked={settings.terminalAutoReconnect}
-            onChange={(terminalAutoReconnect) => persist({ terminalAutoReconnect })}
+            checked={settings.autoReconnect}
+            onChange={(autoReconnect) => persist({ autoReconnect })}
           />
         </section>
         <section className={styles.section} aria-labelledby={ids.data}>

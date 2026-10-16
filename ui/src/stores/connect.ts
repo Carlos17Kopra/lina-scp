@@ -221,12 +221,15 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
     const tabId = flow.sftpTabId ?? newId();
     let bound: string | null = null;
     const events = createEventChannel<ConnectEvent>((event) => onEvent(connectId, event));
+    const existing = flow.sftpTabId ? (useSftpStore.getState().tabs.find((t) => t.id === flow.sftpTabId)?.sessionId ?? null) : null;
+    // On a re-attach the backend keeps the tab's first channel; this one stays silent.
     const sftpEvents = createEventChannel<SftpEvent>((event) => {
-      if (bound !== null) useSftpStore.getState().markLost(tabId, bound, event.error);
+      if (bound !== null) useSftpStore.getState().onEvent(tabId, bound, event);
     });
-    const connected = await connectSftp(connectId, flow.hostId, events, sftpEvents);
+    const connected = await connectSftp(connectId, flow.hostId, existing, events, sftpEvents);
     if (!isCurrent(connectId)) {
-      fireAndForget(() => sftpClose(connected.sessionId));
+      // A re-attached connection belongs to the tab's session: never close that one here.
+      if (!existing) fireAndForget(() => sftpClose(connected.sessionId));
       return;
     }
     bound = connected.sessionId;
