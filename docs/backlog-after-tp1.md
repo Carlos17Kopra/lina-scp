@@ -127,3 +127,16 @@ fixed before the merge are not listed.
 - "Für alle übernehmen" in a sync conflict covers only one target directory (one batch per directory).
 - A remote edit in the same second with the same size still matches the expected stamp and is overwritten.
 - Missing tests: unchecked rows not sent, late compare result dropped, file link as delete target.
+
+## Deferred from the TP4c review
+
+- A remote folder that is a file, or was deleted on the server after the start, still counts as a folder: every
+  later change becomes a failed job (no automatic retry).
+- A new local folder with one file that never stops changing (a log) is never uploaded, not even its finished
+  siblings.
+- Local symlinks are skipped silently; the dialog hint could say so.
+- „Abbrechen“ in the keep dialog stays enabled while `keepStart` runs; the bar then appears anyway.
+- Dir links on the server are followed one level deep only.
+- The keep stop test waits with fixed sleeps (100/150 ms).
+- No Tauri-level test that a failing `keep_start` leaves the running one alone (needs a connected SftpEntry).
+

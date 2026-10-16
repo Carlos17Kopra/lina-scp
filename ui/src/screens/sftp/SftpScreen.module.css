@@ -139,3 +139,24 @@
   border-radius: 50%;
   background: var(--amber);
 }
+
+.keep {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 10px;
+  border-top: 1px solid var(--bd);
+  font-size: 12px;
+}
+
+.keep > :first-child {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.keepError {
+  color: var(--red);
+}

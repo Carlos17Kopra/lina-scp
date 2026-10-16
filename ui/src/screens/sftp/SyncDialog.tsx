@@ -7,28 +7,10 @@ import { pushNotice } from "../../stores/notices";
 import { useSftpStore } from "../../stores/sftp";
 import { useTransfersStore } from "../../stores/transfers";
 import { formatMtime, formatSize } from "./entries";
+import { loadExclude, patterns, saveExclude } from "./excludePatterns";
 import styles from "./SyncDialog.module.css";
 import { planSync, requestsFor, type SyncAction, type SyncDirection } from "./syncPlan";
 
-const excludeKey = (hostId: string) => `linascp.sync.exclude.${hostId}`;
-
-function loadExclude(hostId: string): string {
-  try {
-    return localStorage.getItem(excludeKey(hostId)) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function saveExclude(hostId: string, text: string) {
-  try {
-    localStorage.setItem(excludeKey(hostId), text);
-  } catch {
-    // ponytail: a remembered filter is a convenience; without storage it is simply not remembered.
-  }
-}
-
-const patterns = (text: string) => text.split(",").map((p) => p.trim()).filter(Boolean);
 const reasonOf = (error: unknown) => (isCoreError(error) && "message" in error ? error.message : t.sftp.failed);
 
 function nodeText(node: NodeInfo | null, contents: DirContents | null): string {

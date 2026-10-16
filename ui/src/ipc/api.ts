@@ -41,6 +41,7 @@ import type {
 } from "./bindings";
 
 export type {
+  KeepEvent,
   ChosenApp,
   OpenApp,
   Bookmark,
@@ -289,6 +290,12 @@ export function syncEnqueue(sessionId: SessionId, direction: Direction, localDir
 }
 export function syncDelete(sessionId: SessionId, side: PaneSide, baseDir: string, items: SyncItem[], exclude: string[]): Promise<SyncDeleteReport> {
   return unwrap(commands.syncDelete(sessionId, side, baseDir, items, exclude));
+}
+export function keepStart(sessionId: SessionId, localDir: string, remoteDir: string, exclude: string[]): Promise<void> {
+  return unwrapVoid(commands.keepStart(sessionId, localDir, remoteDir, exclude));
+}
+export function keepStop(sessionId: SessionId): Promise<void> {
+  return unwrapVoid(commands.keepStop(sessionId));
 }
 export function sftpCreateFile(sessionId: SessionId, dir: string, name: string): Promise<void> {
   return unwrapVoid(commands.sftpCreateFile(sessionId, dir, name));

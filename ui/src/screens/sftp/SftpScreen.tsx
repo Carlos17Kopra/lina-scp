@@ -1,4 +1,4 @@
-import { ArrowLeftRight, Download, Eye, FilePen, FilePlus, FolderPlus, Pencil, RefreshCw, SquareTerminal, Trash2, Upload, X } from "lucide-react";
+import { ArrowLeftRight, Download, Eye, FilePen, FilePlus, FolderPlus, FolderSync, Pencil, RefreshCw, SquareTerminal, Trash2, Upload, X } from "lucide-react";
 import { useState } from "react";
 import { Button, cx, IconButton } from "../../components";
 import { t } from "../../i18n/de";
@@ -18,6 +18,7 @@ import { DeleteDialog } from "./DeleteDialog";
 import { isDirLike, isFileLike, joinPath } from "./entries";
 import { FilePane, type PaneCommand } from "./FilePane";
 import { NameDialog } from "./NameDialog";
+import { KeepDialog } from "./KeepDialog";
 import { SyncDialog } from "./SyncDialog";
 import { PermissionsDialog } from "./PermissionsDialog";
 import filePaneStyles from "./FilePane.module.css";
@@ -74,6 +75,7 @@ export function SftpScreen() {
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [closing, setClosing] = useState<{ tabId: string; count: number } | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [keeping, setKeeping] = useState(false);
   const byTab = useTransfersStore((s) => s.byTab);
   const edits = useEditsStore((s) => s.byTab);
   const tab = tabs.find((x) => x.id === activeTabId) ?? null;
@@ -170,6 +172,7 @@ export function SftpScreen() {
         <Button icon={FilePen} disabled={sideDisabled(side)} onClick={editCursor}>{t.sftp.edit.button}</Button>
         <Button icon={Trash2} disabled={sideDisabled(side)} onClick={() => toolbar("delete")}>{t.sftp.delete}</Button>
         <Button icon={ArrowLeftRight} disabled={tab.status !== "connected"} onClick={() => setSyncing(true)}>{t.sftp.sync.button}</Button>
+        <Button icon={FolderSync} disabled={tab.status !== "connected" || !tab.panes.local.path} onClick={() => setKeeping(true)}>{t.sftp.keep.button}</Button>
         <Button icon={RefreshCw} disabled={sideDisabled(side)} onClick={() => void store().reload(tab.id, side)}>{t.sftp.reload}</Button>
         <Button icon={Eye} aria-pressed={pane.showHidden} onClick={() => store().toggleHidden(tab.id, side)}>{t.sftp.hidden}</Button>
         <Button icon={SquareTerminal} onClick={() => void start(tab.hostId, "ssh")}>{t.sftp.terminal}</Button>
@@ -193,6 +196,15 @@ export function SftpScreen() {
           <FilePane tabId={tab.id} side="remote" disabled={tab.status !== "connected"} onCommand={onCommand("remote")} onTransfer={onTransfer("remote")} onEdit={onEdit("remote")} />
         </div>
       </div>
+      {tab.keep ? (
+        <section aria-label={t.sftp.keep.button} className={cx(styles.keep, tab.keep.error && styles.keepError)}>
+          <span className="mono">{t.sftp.keep.bar(tab.keep.remoteDir, tab.keep.uploaded)}</span>
+          {tab.keep.error ? (
+            <span role="alert">{t.sftp.keep.failed("message" in tab.keep.error ? tab.keep.error.message : t.sftp.failed)}</span>
+          ) : null}
+          <Button size="sm" onClick={() => store().stopKeep(tab.id)}>{t.sftp.keep.stop}</Button>
+        </section>
+      ) : null}
       <TransferPanel tabId={tab.id} />
       <footer className={styles.status}>
         {t.sftp.status(`${user}@${host?.address ?? ""}`, tab.version, tab.info.cipher)}
@@ -225,6 +237,15 @@ export function SftpScreen() {
           localDir={tab.panes.local.path}
           remoteDir={tab.panes.remote.path}
           onClose={() => setSyncing(false)}
+        />
+      ) : null}
+      {keeping ? (
+        <KeepDialog
+          sessionId={tab.sessionId}
+          hostId={tab.hostId}
+          localDir={tab.panes.local.path}
+          remoteDir={tab.panes.remote.path}
+          onClose={() => setKeeping(false)}
         />
       ) : null}
       {closing ? (

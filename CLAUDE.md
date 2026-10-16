@@ -19,7 +19,7 @@ non-commercial open-source release later. Target platform is Linux only: Debian 
   - `connect/`: russh pipeline (jump host, auth, prompts, timeouts).
   - `session/`: local PTY and SSH sessions.
   - `transfer/`: transfer queue (TP3b) over the `Side` trait (local fs, `SftpSession`), bandwidth pacer, `chmod`
-    (TP4a), `compare` and sync helpers (TP4b).
+    (TP4a), `compare` and sync helpers (TP4b), `keep` (TP4c: polls the local tree, uploads what changed).
   - `edit/`: editing remote files (TP3c): private copy in `~/.cache/linascp/edit/`, polled and uploaded through the
     transfer queue; the editor is started by `src-tauri/src/editor.rs` (gio, `text/plain` default).
 - `src-tauri`: Tauri 2 app.
@@ -45,8 +45,10 @@ non-commercial open-source release later. Target platform is Linux only: Debian 
 - `docs/superpowers/specs/2026-10-16-linascp-tp4a-permissions-bandwidth-design.md`: TP4a spec (permissions, bandwidth
   limit, SFTP server command) and the TP4 split.
 - `docs/superpowers/specs/2026-10-16-linascp-tp4b-compare-sync-design.md`: TP4b spec (compare and synchronize).
+- `docs/superpowers/specs/2026-10-16-linascp-tp4c-keep-up-to-date-design.md`: TP4c spec (keep a remote folder up to
+  date).
 - `docs/acceptance-tp1.md`: manual acceptance checklist (`docs/acceptance-tp2a.md` … `docs/acceptance-tp2d.md` for
-  TP2a–TP2d, `docs/acceptance-tp3a.md` for TP3a, `docs/acceptance-tp3b.md` for TP3b, `docs/acceptance-tp3c.md` for TP3c, `docs/acceptance-tp4a.md` for TP4a, `docs/acceptance-tp4b.md` for TP4b).
+  TP2a–TP2d, `docs/acceptance-tp3a.md` for TP3a, `docs/acceptance-tp3b.md` for TP3b, `docs/acceptance-tp3c.md` for TP3c, `docs/acceptance-tp4a.md` for TP4a, `docs/acceptance-tp4b.md` for TP4b, `docs/acceptance-tp4c.md` for TP4c).
 - `docs/backlog-after-tp1.md`: deferred review findings. Start TP2 planning there.
 
 ## Commands (run from the repo root)
@@ -90,6 +92,8 @@ bun run tauri build               # .deb + .AppImage in target/release/bundle/
   server command is never silently replaced by the `sftp` subsystem (invalid or failing means the connect fails).
 - **Sync (TP4b):** a target changed since the compare is never silently overwritten or deleted; an unreadable
   directory aborts the compare and never counts as empty; local sync deletes go to the trash.
+- **Keep up to date (TP4c):** never deletes; a server file changed since its last known state is never silently
+  overwritten; two jobs never write the same target; a file goes up only after one quiet poll.
 
 ## Workflow
 
@@ -111,6 +115,6 @@ bun run tauri build               # .deb + .AppImage in target/release/bundle/
   terminals, settings, export/import, packaging.
 - TP2: complete the terminal, and work off the backlog in `docs/backlog-after-tp1.md`.
 - TP3: SFTP (3a browse, 3b transfers, 3c bookmarks + edit: done).
-- TP4: advanced SFTP (4a permissions, bandwidth, server command; 4b compare + sync: done; 4c keep up to date).
+- TP4: advanced SFTP (4a permissions, bandwidth, server command; 4b compare + sync; 4c keep up to date: done).
 - TP5: tunnels, keychain, keygen/ssh-copy-id, full settings.
 - No sync between devices. Moving data to another device goes through export/import (`.linascp` files).

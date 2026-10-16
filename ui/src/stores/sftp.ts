@@ -18,6 +18,7 @@ import {
   type SftpConnected,
   type SftpEvent,
   sftpChmod,
+  keepStop,
   sftpClose,
   sftpCreateFile,
   sftpDelete,
@@ -63,6 +64,10 @@ export interface SftpTab {
   version: number;
   panes: Record<Side, PaneState>;
   active: Side;
+  /** "Aktuell halten" is running (TP4c). */
+  keep?: { localDir: string; remoteDir: string; uploaded: number; error: CoreError | null };
+  /** Events of runs below this are late ones of a stopped or replaced "Aktuell halten". */
+  keepRun?: number;
 }
 
 export interface SftpState {
@@ -71,6 +76,7 @@ export interface SftpState {
   openTab(tabId: string, hostId: Id, connected: SftpConnected): void;
   attachSession(tabId: string, connected: SftpConnected): boolean;
   closeTab(tabId: string): void;
+  stopKeep(tabId: string): void;
   setActiveTab(tabId: string): void;
   setActivePane(tabId: string, side: Side): void;
   onEvent(tabId: string, sessionId: string, event: SftpEvent): void;
@@ -191,6 +197,13 @@ export const useSftpStore = create<SftpState>()((set, get) => {
       });
     },
 
+    stopKeep: (tabId) => {
+      const tab = findTab(tabId);
+      if (!tab) return;
+      patchTab(tabId, (x) => ({ keep: undefined, keepRun: (x.keepRun ?? 0) + 1 }));
+      fireAndForget(() => keepStop(tab.sessionId));
+    },
+
     setActiveTab: (tabId) => set({ activeTabId: tabId }),
     setActivePane: (tabId, side) => patchTab(tabId, () => ({ active: side })),
 
@@ -200,6 +213,12 @@ export const useSftpStore = create<SftpState>()((set, get) => {
         case "edit":
           useEditsStore.getState().onEvent(tabId, event.event);
           return;
+        case "keep": {
+          const { kind: _, run, ...keep } = event.event;
+          if (run < (findTab(tabId)?.keepRun ?? 0)) return;
+          patchTab(tabId, () => ({ keep, keepRun: run }));
+          return;
+        }
         case "transfer":
           useTransfersStore.getState().onEvent(tabId, event.event);
           return;

@@ -13,7 +13,8 @@ use linascp_core::model::Id;
 use linascp_core::session::SessionId;
 use linascp_core::sftp::{Listing, local};
 use linascp_core::transfer::{
-    LocalSide, ModeChange, PathFailure, Side, TransferEvent, TransferOptions, TransferQueue, chmod,
+    KeepEmit, KeepEvent, KeepHandle, LocalSide, ModeChange, PathFailure, Side, TransferEvent, TransferOptions,
+    TransferQueue, chmod,
 };
 use serde::Serialize;
 use tauri::State;
@@ -61,6 +62,9 @@ pub enum SftpEvent {
     Edit {
         event: EditEvent,
     },
+    Keep {
+        event: KeepEvent,
+    },
 }
 
 pub(crate) type SftpEmit = Arc<dyn Fn(SftpEvent) + Send + Sync>;
@@ -72,6 +76,9 @@ pub struct SftpEntry {
     pub edits: EditManager,
     /// The running compare of this tab (TP4b), cancelled by a new one or `sync_cancel`.
     pub compare: std::sync::Mutex<Option<tokio_util::sync::CancellationToken>>,
+    /// The running "keep up to date" of this tab (TP4c); dropping the handle stops it.
+    pub keep: std::sync::Mutex<Option<KeepHandle>>,
+    pub keep_emit: KeepEmit,
 }
 
 /// How often edited copies are checked for a save.
@@ -127,6 +134,10 @@ fn new_entry(state: &AppState, host: &linascp_core::model::Host, sftp_emit: Sftp
             EDIT_POLL,
         )
     };
+    let keep_emit: KeepEmit = {
+        let emit = sftp_emit.clone();
+        Arc::new(move |event| emit(SftpEvent::Keep { event }))
+    };
     let store = state.store.clone();
     let conn = Reconnecting::new(
         sftp_connector(state.connect_env(), host.id),
@@ -137,7 +148,7 @@ fn new_entry(state: &AppState, host: &linascp_core::model::Host, sftp_emit: Sftp
             Arc::new(move |session: Option<Arc<SftpSession>>| queue.set_remote(session.map(|s| s as Arc<dyn Side>)))
         },
     );
-    Arc::new(SftpEntry { conn, queue, edits, compare: Default::default() })
+    Arc::new(SftpEntry { conn, queue, edits, compare: Default::default(), keep: Default::default(), keep_emit })
 }
 
 /// `existing`: re-attach a fresh, interactive connection to that tab's session (queue survives).
@@ -336,6 +347,7 @@ pub async fn sftp_chmod(
 pub async fn sftp_close(state: State<'_, AppState>, session_id: SessionId) -> Result<Vec<String>> {
     let removed = lock(&state.sftp).remove(&session_id);
     let Some(entry) = removed else { return Ok(Vec::new()) };
+    lock(&entry.keep).take();
     let kept = entry.edits.close().await;
     entry.queue.close().await;
     entry.conn.close().await;
