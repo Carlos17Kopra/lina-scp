@@ -48,7 +48,6 @@ fixed before the merge are not listed.
 - TP2a terminal sidebar (from the branch review):
   - Fast A+/A− or scheme clicks: optimistic settings saves can finish out of order or revert to a stale value;
     in host scope a quick double click loses a step until `hostSave` + reload resolve. Serialize saves.
-  - The "Tunnel folgen …" hint shows below every sidebar panel instead of on the disabled Tunnel tab.
   - The scheme radiogroup has no roving tabindex / arrow keys (10 tab stops).
   - Every xterm resize calls `updateTab`, re-rendering all terminal tabs while the window is dragged.
 - TP2b snippets (from the branch review):
