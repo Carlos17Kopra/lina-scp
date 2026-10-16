@@ -2,6 +2,7 @@ import { t } from "../i18n/de";
 import type { SessionEventDto } from "../ipc/api";
 import { type Tab, useSessionsStore } from "./sessions";
 import { getStream } from "./streams";
+import { setTunnelState } from "./tunnels";
 
 /**
  * Terminal session events that arrived before their tab existed or while it still showed the pane
@@ -29,12 +30,18 @@ export function sessionEventPatch(event: SessionEventDto): Partial<Omit<Tab, "id
       return { status: "connected", info: event.info, connectedAt: Date.now(), reconnect: undefined, error: undefined };
     case "lost":
       return { status: "lost", error: event.reason, reconnect: undefined };
+    case "tunnel":
+      return {};
   }
 }
 
 /** Handler for a session's `session_events` channel: the tab shows "Sitzung beendet" afterwards. */
 export function sessionEventHandler(tabId: string): (event: SessionEventDto) => void {
   return (event) => {
+    if (event.kind === "tunnel") {
+      setTunnelState(tabId, event.event);
+      return;
+    }
     const sessions = useSessionsStore.getState();
     // A picking pane has no session yet: keep the event for `attachSession`.
     if (sessions.tabs.some((tab) => tab.id === tabId && tab.status !== "picking")) {

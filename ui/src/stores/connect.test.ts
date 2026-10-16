@@ -47,7 +47,7 @@ beforeEach(() => {
   vi.mocked(api.connectSsh).mockImplementation(
     () =>
       new Promise<api.ConnectedSession>((resolve, reject) => {
-        attempts.push({ resolve: (sessionId) => resolve({ sessionId, info: makeSessionInfo() }), reject });
+        attempts.push({ resolve: (sessionId) => resolve({ sessionId, info: makeSessionInfo(), forwards: [] }), reject });
       }),
   );
   vi.mocked(api.connectAnswer).mockResolvedValue(true);

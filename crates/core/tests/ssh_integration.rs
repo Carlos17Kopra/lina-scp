@@ -36,7 +36,12 @@ impl Env {
     }
 
     fn deps(&self, agent_sock: Option<std::path::PathBuf>) -> ConnectDeps {
-        ConnectDeps { known_hosts: KnownHosts::new(self.known_hosts_path()), secrets: self.secrets.clone(), agent_sock }
+        ConnectDeps {
+            known_hosts: KnownHosts::new(self.known_hosts_path()),
+            secrets: self.secrets.clone(),
+            agent_sock,
+            forwarded: None,
+        }
     }
 
     fn store_password(&self, host: &Host, password: &str) {
@@ -309,6 +314,80 @@ async fn jump_host_tunnel() {
     assert_shell(session.expect("connected via jump"), &output).await;
     let host_key_prompts = p.prompts().iter().filter(|pr| matches!(pr, Prompt::HostKeyUnknown { .. })).count();
     assert_eq!(host_key_prompts, 2, "jump and target keys are checked separately");
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn local_and_remote_forwards_run_over_the_terminal_connection() {
+    use linascp_core::model::{ForwardKind, PortForward};
+    use linascp_core::tunnel::{TunnelEvent, TunnelState, Tunnels};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let c = Container::start(None);
+    let env = Env::new();
+    let h = host(c.port, "pwuser", AuthMethod::Password, None);
+    env.store_password(&h, "pwpass");
+    let echo = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let echo_port = echo.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let (mut s, _) = echo.accept().await.unwrap();
+            tokio::spawn(async move {
+                let (mut r, mut w) = s.split();
+                let _ = tokio::io::copy(&mut r, &mut w).await;
+            });
+        }
+    });
+    let local_port = free_port();
+    let rule = |kind, bind: String, target: String| PortForward {
+        id: uuid::Uuid::new_v4(),
+        kind,
+        bind,
+        target,
+        autostart: true,
+    };
+    let local = rule(ForwardKind::Local, local_port.to_string(), "127.0.0.1:22".into());
+    let remote = rule(ForwardKind::Remote, "0".into(), format!("127.0.0.1:{echo_port}"));
+    let events = Arc::new(std::sync::Mutex::new(Vec::<TunnelEvent>::new()));
+    let sink = events.clone();
+    let tunnels = Tunnels::new(vec![local.clone(), remote.clone()], Arc::new(move |e| sink.lock().unwrap().push(e)));
+
+    let mut deps = env.deps(None);
+    let (epoch, routes) = tunnels.routes();
+    deps.forwarded = Some(routes);
+    let (output, out_sink) = Output::new();
+    let p = prompter(trust_all);
+    let session =
+        connect_ssh(request(h, None), deps, p.broker.clone(), p.emit.clone(), out_sink, CancellationToken::new())
+            .await
+            .expect("connected");
+    tunnels.attach(epoch, session.link()).await;
+
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", local_port)).await.unwrap();
+    let mut banner = [0u8; 4];
+    s.read_exact(&mut banner).await.unwrap();
+    assert_eq!(&banner, b"SSH-", "local forward reaches the server's own sshd");
+    s.write_all(b"x").await.unwrap();
+
+    let port = events
+        .lock()
+        .unwrap()
+        .iter()
+        .find_map(|e| match e.state {
+            TunnelState::Active { port } if e.rule_id == remote.id => Some(port),
+            _ => None,
+        })
+        .expect("remote forward active");
+    assert_ne!(port, 0, "the server picked a port");
+    session
+        .write(
+            format!("exec 3<>/dev/tcp/127.0.0.1/{port}; echo ping-rf >&3; read -t 5 l <&3; echo got-$l\n").as_bytes(),
+        )
+        .await
+        .unwrap();
+    output.wait_for("got-ping-rf").await;
+    tunnels.end();
+    assert_shell(session, &output).await;
 }
 
 #[tokio::test]

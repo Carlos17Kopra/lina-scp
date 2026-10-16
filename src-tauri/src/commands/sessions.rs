@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use linascp_core::error::{CoreError, Result};
+use linascp_core::model::Id;
 use linascp_core::session::{LocalPtySession, OutputSink, Session, SessionEvent, SessionId};
+use linascp_core::tunnel::{TunnelEvent, Tunnels};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use tauri::ipc::Channel;
@@ -20,6 +22,7 @@ pub enum SessionEventDto {
     Reconnecting { attempt: u32, max_attempts: u32, retry_in_ms: u32, reason: CoreError },
     Reconnected { info: linascp_core::connect::SessionInfo },
     Lost { reason: CoreError },
+    Tunnel { event: TunnelEvent },
 }
 
 pub(crate) type EventSender = Arc<dyn Fn(SessionEventDto) + Send + Sync>;
@@ -73,9 +76,12 @@ pub(crate) fn make_sink(pump: Arc<OutputPump>, send_event: EventSender, cleanup:
 pub(crate) fn cleanup_fn(state: &AppState, id: SessionId) -> Cleanup {
     let sessions = state.sessions.clone();
     let outputs = state.outputs.clone();
+    let tunnels = state.tunnels.clone();
     Arc::new(move || {
         sessions.remove(id);
         lock(&outputs).remove(&id);
+        // Dropping them closes their listeners and connections.
+        lock(&tunnels).remove(&id);
     })
 }
 
@@ -87,6 +93,7 @@ pub(crate) fn register(state: &AppState, id: SessionId, session: Arc<dyn Session
 /// Removes session `id` from both maps, returning whatever was present. Shared by the explicit
 /// `session_close` path and by `heal_if_already_exited`'s race-closing re-check.
 pub(crate) fn remove_session(state: &AppState, id: SessionId) -> (Option<Arc<dyn Session>>, Option<Arc<OutputPump>>) {
+    lock(&state.tunnels).remove(&id);
     (state.sessions.remove(id), lock(&state.outputs).remove(&id))
 }
 
@@ -163,6 +170,34 @@ pub(crate) fn reconnect_stop(state: &AppState, id: SessionId) {
     if let Some(session) = state.sessions.get(id) {
         session.stop_reconnect();
     }
+}
+
+fn get_tunnels(state: &AppState, id: SessionId) -> Result<Arc<Tunnels>> {
+    lock(&state.tunnels)
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| CoreError::Internal { message: format!("unknown session {id}") })
+}
+
+pub(crate) async fn tunnel_start_inner(state: &AppState, id: SessionId, rule_id: Id) -> Result<()> {
+    get_tunnels(state, id)?.start(rule_id).await
+}
+
+pub(crate) async fn tunnel_stop_inner(state: &AppState, id: SessionId, rule_id: Id) -> Result<()> {
+    get_tunnels(state, id)?.stop(rule_id).await;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn tunnel_start(state: State<'_, AppState>, session_id: SessionId, rule_id: Id) -> Result<()> {
+    tunnel_start_inner(&state, session_id, rule_id).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn tunnel_stop(state: State<'_, AppState>, session_id: SessionId, rule_id: Id) -> Result<()> {
+    tunnel_stop_inner(&state, session_id, rule_id).await
 }
 
 #[tauri::command]
@@ -398,5 +433,22 @@ mod tests {
         }
         assert!(removed, "a session that exited on its own must be removed from both maps");
         assert!(matches!(events.lock().unwrap().as_slice(), [SessionEventDto::Exit { .. }]));
+    }
+
+    #[tokio::test]
+    async fn tunnel_commands_need_a_known_session_and_tunnels_end_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::for_tests(dir.path());
+        let (id, rule) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+        assert!(matches!(tunnel_start_inner(&state, id, rule).await, Err(CoreError::Internal { .. })));
+        assert!(matches!(tunnel_stop_inner(&state, id, rule).await, Err(CoreError::Internal { .. })));
+
+        let tunnels = || Arc::new(Tunnels::new(Vec::new(), Arc::new(|_| {})));
+        lock(&state.tunnels).insert(id, tunnels());
+        cleanup_fn(&state, id)();
+        assert!(lock(&state.tunnels).is_empty(), "a session that ends on its own takes its tunnels along");
+        lock(&state.tunnels).insert(id, tunnels());
+        close(&state, id).await.unwrap();
+        assert!(lock(&state.tunnels).is_empty(), "closing the session ends its tunnels");
     }
 }

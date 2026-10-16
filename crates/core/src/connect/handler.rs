@@ -3,8 +3,9 @@
 use std::future::Future;
 use std::sync::{Arc, PoisonError};
 
-use russh::client;
+use russh::client::{self, Msg};
 use russh::keys::{PublicKey, PublicKeyOrCertificate};
+use russh::{Channel, ChannelOpenFailure};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
@@ -14,6 +15,7 @@ use super::log_line;
 use super::prompt::{EmitFn, HostKeyDecision, Prompt, PromptAnswer, PromptBroker};
 use crate::error::{CoreError, Result};
 use crate::known_hosts::{HostKeyInfo, HostKeyStatus, KnownHosts, fingerprints};
+use crate::tunnel::{ForwardRoutes, serve_forwarded};
 
 /// What to do with a server key after the user (or known_hosts) decided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +104,7 @@ pub struct ClientHandler {
     /// (possibly slow) host-key prompt that follows.
     key_seen: Arc<Notify>,
     negotiated: InfoSlot,
+    forwarded: Option<ForwardRoutes>,
 }
 
 impl ClientHandler {
@@ -116,7 +119,13 @@ impl ClientHandler {
         key_seen: Arc<Notify>,
         negotiated: InfoSlot,
     ) -> Self {
-        Self { host, port, known_hosts, broker, emit, cancel, key_seen, negotiated }
+        Self { host, port, known_hosts, broker, emit, cancel, key_seen, negotiated, forwarded: None }
+    }
+
+    /// Accept `forwarded-tcpip` channels for these routes (remote port forwards of this connection).
+    pub fn with_forwarded(mut self, forwarded: Option<ForwardRoutes>) -> Self {
+        self.forwarded = forwarded;
+        self
     }
 
     async fn verify(&self, key: &PublicKey) -> Result<()> {
@@ -187,6 +196,28 @@ impl client::Handler for ClientHandler {
                 Err(HandlerError::Core(rejected("host certificates are not supported")))
             }
         }
+    }
+
+    /// Only forwards this connection asked for are accepted (fail closed): the server must not make us connect
+    /// anywhere else.
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: Channel<Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        match self.forwarded.as_ref().and_then(|routes| routes(connected_address, connected_port)) {
+            Some((target, token)) => {
+                reply.accept().await;
+                tokio::spawn(serve_forwarded(Box::new(channel.into_stream()), target, token));
+            }
+            None => reply.reject(ChannelOpenFailure::AdministrativelyProhibited).await,
+        }
+        Ok(())
     }
 
     async fn kex_done(
