@@ -353,14 +353,15 @@ async fn local_and_remote_forwards_run_over_the_terminal_connection() {
     let tunnels = Tunnels::new(vec![local.clone(), remote.clone()], Arc::new(move |e| sink.lock().unwrap().push(e)));
 
     let mut deps = env.deps(None);
-    deps.forwarded = Some(tunnels.routes());
+    let (epoch, routes) = tunnels.routes();
+    deps.forwarded = Some(routes);
     let (output, out_sink) = Output::new();
     let p = prompter(trust_all);
     let session =
         connect_ssh(request(h, None), deps, p.broker.clone(), p.emit.clone(), out_sink, CancellationToken::new())
             .await
             .expect("connected");
-    tunnels.attach(session.link()).await;
+    tunnels.attach(epoch, session.link()).await;
 
     let mut s = tokio::net::TcpStream::connect(("127.0.0.1", local_port)).await.unwrap();
     let mut banner = [0u8; 4];
@@ -385,7 +386,7 @@ async fn local_and_remote_forwards_run_over_the_terminal_connection() {
         .await
         .unwrap();
     output.wait_for("got-ping-rf").await;
-    tunnels.stop_all().await;
+    tunnels.end();
     assert_shell(session, &output).await;
 }
 

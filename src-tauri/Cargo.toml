@@ -33,5 +33,6 @@ gio = "0.18"
 gtk = "0.18"
 
 [dev-dependencies]
+async-trait = "0.1"
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "test-util"] }

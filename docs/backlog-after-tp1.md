@@ -139,3 +139,12 @@ fixed before the merge are not listed.
 - The keep stop test waits with fixed sleeps (100/150 ms).
 - No Tauri-level test that a failing `keep_start` leaves the running one alone (needs a connected SftpEntry).
 
+
+## Deferred from the TP5a review
+
+- Autostart requests remote forwards one after another in one task; that task holds the `Tunnels`, so after a
+  very fast tab close the listeners stay up until it finishes.
+- Incoming `forwarded-tcpip` channels are matched on the exact listen address we asked for (OpenSSH echoes it);
+  other servers may answer with a different spelling and get rejected.
+- A second „Starten“ while a remote forward is still being requested sends a second `tcpip-forward`; with a fixed
+  port it can fail until the first grant is cancelled.

@@ -10,7 +10,7 @@ use linascp_core::connect::{
 use linascp_core::error::{CoreError, Result};
 use linascp_core::known_hosts::KnownHosts;
 use linascp_core::model::{Host, HostAuth, Id};
-use linascp_core::session::Session;
+use linascp_core::session::{OutputSink, Session, SessionEvent};
 use linascp_core::tunnel::Tunnels;
 use tauri::State;
 use tauri::ipc::Channel;
@@ -160,11 +160,14 @@ fn reconnect_connector(env: ConnectEnv, host_id: Id, tunnels: Weak<Tunnels>) -> 
             let broker = Arc::new(PromptBroker::non_interactive());
             let quiet: EmitFn = Arc::new(|_| {});
             let mut deps = connect_deps_in(&env);
-            deps.forwarded = tunnels.upgrade().map(|t| t.routes());
+            let routes = tunnels.upgrade().map(|t| t.routes());
+            deps.forwarded = routes.as_ref().map(|(_, routes)| routes.clone());
             match run_pipeline(request, deps, broker.clone(), quiet, sink, cancel).await {
                 Ok(session) => {
-                    if let Some(tunnels) = tunnels.upgrade() {
-                        tunnels.attach(session.link()).await;
+                    if let (Some(tunnels), Some((epoch, _))) = (tunnels.upgrade(), routes) {
+                        let link = session.link();
+                        // In the background: a slow `tcpip-forward` reply must not hold up `Reconnected`.
+                        tokio::spawn(async move { tunnels.attach(epoch, link).await });
                     }
                     let info = session.info().clone();
                     Ok((Arc::new(session) as Arc<dyn Session>, info))
@@ -173,6 +176,21 @@ fn reconnect_connector(env: ConnectEnv, host_id: Id, tunnels: Weak<Tunnels>) -> 
                 Err(error) => Err(error),
             }
         })
+    })
+}
+
+/// Lets the session's tunnels follow its connection: a loss detaches them (no routes, open connections end),
+/// giving up ends them. Exit and error drop them through the session's cleanup.
+fn tunnel_sink(tunnels: Weak<Tunnels>, sink: OutputSink) -> OutputSink {
+    Arc::new(move |event: SessionEvent| {
+        if let Some(tunnels) = tunnels.upgrade() {
+            match &event {
+                SessionEvent::Reconnecting { .. } => tunnels.detach(),
+                SessionEvent::Lost(_) => tunnels.end(),
+                _ => {}
+            }
+        }
+        sink(event)
     })
 }
 
@@ -242,7 +260,8 @@ async fn connect_ssh_registered(
         forwards.clone(),
         Arc::new(move |event| tunnel_events(SessionEventDto::Tunnel { event })),
     ));
-    let sink = make_sink(pump.clone(), send_event, cleanup_fn(state, session_id));
+    let sink =
+        tunnel_sink(Arc::downgrade(&tunnels), make_sink(pump.clone(), send_event, cleanup_fn(state, session_id)));
     let store = state.store.clone();
     let enabled: Enabled = Arc::new(move || auto_reconnect_enabled(&store));
     let reconnecting = Arc::new(ReconnectingSession::new(
@@ -254,7 +273,8 @@ async fn connect_ssh_registered(
     ));
     let cancel = guard.token();
     let mut deps = connect_deps(state);
-    deps.forwarded = Some(tunnels.routes());
+    let (epoch, routes) = tunnels.routes();
+    deps.forwarded = Some(routes);
     let result =
         run_pipeline(request, deps, state.broker.clone(), emit.clone(), reconnecting.first_sink(), cancel.clone())
             .await;
@@ -279,7 +299,7 @@ async fn connect_ssh_registered(
             // core emits `Failed` on errors; the success event is ours (exactly one terminal event).
             emit(ConnectEvent::Connected { session_id });
             // Autostart after `Connected`: its events belong to a tab that exists by then.
-            tokio::spawn(async move { tunnels.attach(link).await });
+            tokio::spawn(async move { tunnels.attach(epoch, link).await });
             Ok(ConnectedSession { session_id, info, forwards })
         }
         Err(error) => {
@@ -365,6 +385,61 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = AppState::for_tests(dir.path());
         (dir, state)
+    }
+
+    struct NoLink;
+
+    #[async_trait::async_trait]
+    impl linascp_core::tunnel::TunnelLink for NoLink {
+        async fn open_direct(
+            &self,
+            _: &str,
+            _: u16,
+            _: std::net::SocketAddr,
+        ) -> Result<linascp_core::tunnel::TunnelStream> {
+            Err(CoreError::internal("unused"))
+        }
+        async fn request_remote(&self, _: &str, port: u16) -> Result<u16> {
+            Ok(port)
+        }
+        async fn cancel_remote(&self, _: &str, _: u16) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_lost_connection_detaches_the_tunnels_and_giving_up_ends_them() {
+        use linascp_core::model::{ForwardKind, PortForward};
+        use linascp_core::session::SessionEvent;
+        use linascp_core::tunnel::{TunnelEvent, TunnelState};
+        let rule = PortForward {
+            id: Uuid::new_v4(),
+            kind: ForwardKind::Remote,
+            bind: "9".into(),
+            target: "a:1".into(),
+            autostart: true,
+        };
+        let events = Arc::new(Mutex::new(Vec::<TunnelEvent>::new()));
+        let seen = events.clone();
+        let tunnels = Arc::new(Tunnels::new(vec![rule.clone()], Arc::new(move |e| seen.lock().unwrap().push(e))));
+        let passed = Arc::new(Mutex::new(0));
+        let count = passed.clone();
+        let sink = tunnel_sink(Arc::downgrade(&tunnels), Arc::new(move |_| *count.lock().unwrap() += 1));
+        let (epoch, routes) = tunnels.routes();
+        tunnels.attach(epoch, Arc::new(NoLink)).await;
+        assert!(routes("localhost", 9).is_some());
+
+        let reason = CoreError::internal("x");
+        sink(SessionEvent::Reconnecting {
+            attempt: 1,
+            max_attempts: 8,
+            retry_in: Duration::from_secs(1),
+            reason: reason.clone(),
+        });
+        assert!(routes("localhost", 9).is_none(), "nothing is routed while reconnecting");
+        sink(SessionEvent::Lost(reason));
+        assert_eq!(events.lock().unwrap().last().map(|e| e.state.clone()), Some(TunnelState::Off));
+        assert_eq!(*passed.lock().unwrap(), 2, "the app still gets every event");
     }
 
     #[tokio::test]

@@ -53,6 +53,12 @@ describe("TunnelPanel", () => {
     for (const button of screen.getAllByRole("button", { name: /Starten|Stoppen/ })) expect(button).toBeDisabled();
   });
 
+  it("shows every rule as off once the session ended", () => {
+    sessionEventHandler("t1")({ kind: "tunnel", event: { ruleId: "r2", state: { kind: "active", port: 1080 } } });
+    render(<TunnelPanel tab={{ ...tab, status: "closed" }} />);
+    expect(within(row("[::1]:1080 · SOCKS")).getByText("Aus")).toBeInTheDocument();
+  });
+
   it("says when there are no rules and links to the host editor", async () => {
     render(<TunnelPanel tab={{ ...tab, forwards: [] }} />);
     expect(screen.getByText("Für diesen Host sind keine Regeln angelegt.")).toBeInTheDocument();

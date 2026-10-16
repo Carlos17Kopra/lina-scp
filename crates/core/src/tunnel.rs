@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
@@ -68,19 +68,29 @@ pub struct Tunnels {
 struct Inner {
     rules: Vec<PortForward>,
     emit: TunnelEmit,
-    link: Mutex<Option<Arc<dyn TunnelLink>>>,
-    /// Autostart ran (on the first connection only).
+    link: Mutex<Option<Link>>,
+    /// Autostart ran (on the first connection after the start or an `end`).
     started: AtomicBool,
+    /// Numbers the connections; a connection's routes only see forwards granted to it.
+    epochs: AtomicU64,
     /// Rules the user wants on, including ones that failed again after a reconnect.
     running: Mutex<HashMap<Id, Running>>,
+}
+
+#[derive(Clone)]
+struct Link {
+    epoch: u64,
+    link: Arc<dyn TunnelLink>,
+    /// Ends every tunnelled connection that runs over this connection.
+    token: CancellationToken,
 }
 
 struct Running {
     spec: ForwardSpec,
     /// Ends the listener and every connection of the rule.
     token: CancellationToken,
-    /// Remote: the port the current connection listens on; `None` while not (yet) granted.
-    bound: Option<u16>,
+    /// Connection and port the forward was granted on; `None` while not (yet) granted.
+    bound: Option<(u64, u16)>,
 }
 
 /// A handshake that does not finish in time is dropped (it would otherwise hold a task until the rule stops).
@@ -101,34 +111,70 @@ impl Tunnels {
             emit,
             link: Mutex::new(None),
             started: AtomicBool::new(false),
+            epochs: AtomicU64::new(0),
             running: Mutex::new(HashMap::new()),
         };
         Self { inner: Arc::new(inner) }
     }
 
-    /// A (new) connection is up: remote forwards are requested on it again; on the first one, autostart rules start.
-    pub async fn attach(&self, link: Arc<dyn TunnelLink>) {
-        *lock(&self.inner.link) = Some(link.clone());
-        let remotes: Vec<(Id, Endpoint)> = lock(&self.inner.running)
+    /// For the handler of a new connection: its number (pass it to `attach`) and its routes for incoming
+    /// `forwarded-tcpip` channels. They only route forwards granted on that same connection.
+    pub fn routes(&self) -> (u64, ForwardRoutes) {
+        let epoch = self.inner.epochs.fetch_add(1, Ordering::SeqCst) + 1;
+        let inner = Arc::downgrade(&self.inner);
+        let routes: ForwardRoutes = Arc::new(move |host: &str, port: u32| {
+            let inner = inner.upgrade()?;
+            let running = lock(&inner.running);
+            running
+                .values()
+                .find(|run| {
+                    run.spec.kind == ForwardKind::Remote
+                        && run.spec.bind.host == host
+                        && run.bound.is_some_and(|(e, bound)| e == epoch && u32::from(bound) == port)
+                })
+                .and_then(|run| Some((run.spec.target.clone()?, run.token.clone())))
+        });
+        (epoch, routes)
+    }
+
+    /// Connection `epoch` is up: remote forwards are requested on it again; after the start (or an `end`),
+    /// autostart rules start.
+    pub async fn attach(&self, epoch: u64, link: Arc<dyn TunnelLink>) {
+        let link = Link { epoch, link, token: CancellationToken::new() };
+        if let Some(old) = lock(&self.inner.link).replace(link.clone()) {
+            old.token.cancel();
+        }
+        let remotes: Vec<(Id, Endpoint, CancellationToken)> = lock(&self.inner.running)
             .iter_mut()
             .filter(|(_, run)| run.spec.kind == ForwardKind::Remote)
             .map(|(id, run)| {
                 run.bound = None;
-                (*id, run.spec.bind.clone())
+                (*id, run.spec.bind.clone(), run.token.clone())
             })
             .collect();
-        for (id, bind) in remotes {
-            let state = match link.request_remote(&bind.host, bind.port).await {
-                Ok(port) => match lock(&self.inner.running).get_mut(&id) {
-                    Some(run) => {
-                        run.bound = Some(port);
-                        TunnelState::Active { port }
+        for (id, bind, token) in remotes {
+            let granted = link.link.request_remote(&bind.host, bind.port).await;
+            let current = {
+                let mut running = lock(&self.inner.running);
+                match running.get_mut(&id) {
+                    Some(run) if run.token == token => {
+                        if let Ok(port) = &granted {
+                            run.bound = Some((epoch, *port));
+                        }
+                        true
                     }
-                    None => continue,
-                },
-                Err(error) => TunnelState::Failed { error },
+                    _ => false,
+                }
             };
-            self.inner.send(id, state);
+            match granted {
+                Ok(port) if current => self.inner.send(id, TunnelState::Active { port }),
+                // Stopped or restarted meanwhile: the grant must not stay open on the server.
+                Ok(port) => {
+                    let _ = link.link.cancel_remote(&bind.host, port).await;
+                }
+                Err(error) if current => self.inner.send(id, TunnelState::Failed { error }),
+                Err(_) => {}
+            }
         }
         if !self.inner.started.swap(true, Ordering::SeqCst) {
             let autostart: Vec<Id> = self.inner.rules.iter().filter(|r| r.autostart).map(|r| r.id).collect();
@@ -138,12 +184,26 @@ impl Tunnels {
         }
     }
 
-    /// The connection is gone: new local connections are closed until the next `attach`.
+    /// The connection is gone (reconnecting): its tunnelled connections end, new ones are closed until the next
+    /// `attach`, and nothing is routed. Listeners stay.
     pub fn detach(&self) {
-        *lock(&self.inner.link) = None;
+        if let Some(old) = lock(&self.inner.link).take() {
+            old.token.cancel();
+        }
         for run in lock(&self.inner.running).values_mut() {
             run.bound = None;
         }
+    }
+
+    /// The session gave up or ended: every rule stops. A later connection (manual reconnect) autostarts again.
+    pub fn end(&self) {
+        self.detach();
+        let stopped: Vec<(Id, Running)> = lock(&self.inner.running).drain().collect();
+        for (id, run) in stopped {
+            run.token.cancel();
+            self.inner.send(id, TunnelState::Off);
+        }
+        self.inner.started.store(false, Ordering::SeqCst);
     }
 
     pub async fn start(&self, id: Id) -> Result<()> {
@@ -155,14 +215,18 @@ impl Tunnels {
         let token = CancellationToken::new();
         {
             let mut running = lock(&inner.running);
-            if running.contains_key(&id) {
-                return Ok(());
+            match running.get(&id) {
+                // A remote forward without a grant (failed after a reconnect) is requested again.
+                Some(run) if run.spec.kind == ForwardKind::Remote && run.bound.is_none() => run.token.cancel(),
+                Some(_) => return Ok(()),
+                None => {}
             }
             running.insert(id, Running { spec: spec.clone(), token: token.clone(), bound: None });
+            // Under the lock: a concurrent `stop` sends its `Off` after this.
+            inner.send(id, TunnelState::Starting);
         }
-        inner.send(id, TunnelState::Starting);
         let started = match spec.kind {
-            ForwardKind::Remote => link.request_remote(&spec.bind.host, spec.bind.port).await,
+            ForwardKind::Remote => link.link.request_remote(&spec.bind.host, spec.bind.port).await,
             ForwardKind::Local | ForwardKind::Dynamic => {
                 match TcpListener::bind((spec.bind.host.as_str(), spec.bind.port)).await {
                     Ok(listener) => {
@@ -178,12 +242,18 @@ impl Tunnels {
         };
         match started {
             Ok(port) => {
-                match lock(&inner.running).get_mut(&id) {
-                    Some(run) if run.token == token => run.bound = Some(port),
-                    // Stopped meanwhile.
-                    _ => return Ok(()),
+                let current = match lock(&inner.running).get_mut(&id) {
+                    Some(run) if run.token == token => {
+                        run.bound = Some((link.epoch, port));
+                        inner.send(id, TunnelState::Active { port });
+                        true
+                    }
+                    _ => false,
+                };
+                if !current && spec.kind == ForwardKind::Remote {
+                    // Stopped meanwhile: the grant must not stay open on the server.
+                    let _ = link.link.cancel_remote(&spec.bind.host, port).await;
                 }
-                inner.send(id, TunnelState::Active { port });
                 Ok(())
             }
             Err(error) => {
@@ -191,9 +261,8 @@ impl Tunnels {
                 let mut running = lock(&inner.running);
                 if running.get(&id).is_some_and(|run| run.token == token) {
                     running.remove(&id);
+                    inner.send(id, TunnelState::Failed { error: error.clone() });
                 }
-                drop(running);
-                inner.send(id, TunnelState::Failed { error: error.clone() });
                 Err(error)
             }
         }
@@ -205,41 +274,20 @@ impl Tunnels {
         };
         run.token.cancel();
         let link = lock(&self.inner.link).clone();
-        if let (ForwardKind::Remote, Some(port), Some(link)) = (run.spec.kind, run.bound, link) {
-            let _ = link.cancel_remote(&run.spec.bind.host, port).await;
+        if let (ForwardKind::Remote, Some((epoch, port)), Some(link)) = (run.spec.kind, run.bound, link)
+            && link.epoch == epoch
+        {
+            let _ = link.link.cancel_remote(&run.spec.bind.host, port).await;
         }
         self.inner.send(id, TunnelState::Off);
-    }
-
-    /// The session ended.
-    pub async fn stop_all(&self) {
-        let ids: Vec<Id> = lock(&self.inner.running).keys().copied().collect();
-        for id in ids {
-            self.stop(id).await;
-        }
-        *lock(&self.inner.link) = None;
-    }
-
-    /// For the connection's handler: routes incoming `forwarded-tcpip` channels.
-    pub fn routes(&self) -> ForwardRoutes {
-        let inner = Arc::downgrade(&self.inner);
-        Arc::new(move |host: &str, port: u32| {
-            let inner = inner.upgrade()?;
-            let running = lock(&inner.running);
-            running
-                .values()
-                .find(|run| {
-                    run.spec.kind == ForwardKind::Remote
-                        && run.spec.bind.host == host
-                        && run.bound.is_some_and(|bound| u32::from(bound) == port)
-                })
-                .and_then(|run| Some((run.spec.target.clone()?, run.token.clone())))
-        })
     }
 }
 
 impl Drop for Tunnels {
     fn drop(&mut self) {
+        if let Some(link) = lock(&self.inner.link).take() {
+            link.token.cancel();
+        }
         for run in lock(&self.inner.running).values() {
             run.token.cancel();
         }
@@ -272,7 +320,7 @@ async fn serve(listener: TcpListener, inner: Weak<Inner>, spec: ForwardSpec, tok
         let link = lock(&inner.link).clone();
         drop(inner);
         // Without a connection (reconnecting) the socket is simply closed.
-        let Some(link) = link else { continue };
+        let Some(Link { link, token: link_token, .. }) = link else { continue };
         let spec = spec.clone();
         let token = token.clone();
         tokio::spawn(async move {
@@ -282,7 +330,7 @@ async fn serve(listener: TcpListener, inner: Weak<Inner>, spec: ForwardSpec, tok
                 None => tokio::time::timeout(SOCKS_HANDSHAKE, socks(&mut socket, &*link, origin)).await.ok().flatten(),
             };
             if let Some(channel) = opened {
-                pipe(socket, channel, &token).await;
+                pipe(socket, channel, &token, &link_token).await;
             }
         });
     }
@@ -367,10 +415,11 @@ async fn socks(socket: &mut TcpStream, link: &dyn TunnelLink, origin: SocketAddr
     }
 }
 
-/// Copies both ways until one side ends or the rule stops.
-async fn pipe(mut a: impl TunnelIo, mut b: impl TunnelIo, token: &CancellationToken) {
+/// Copies both ways until one side ends, the rule stops or the connection goes.
+async fn pipe(mut a: impl TunnelIo, mut b: impl TunnelIo, token: &CancellationToken, link: &CancellationToken) {
     tokio::select! {
         () = token.cancelled() => {}
+        () = link.cancelled() => {}
         _ = tokio::io::copy_bidirectional(&mut a, &mut b) => {}
     }
 }
@@ -378,7 +427,8 @@ async fn pipe(mut a: impl TunnelIo, mut b: impl TunnelIo, token: &CancellationTo
 /// An incoming `forwarded-tcpip` channel: connect to the rule's target and copy.
 pub async fn serve_forwarded(channel: TunnelStream, target: Endpoint, token: CancellationToken) {
     match TcpStream::connect((target.host.as_str(), target.port)).await {
-        Ok(socket) => pipe(socket, channel, &token).await,
+        // The channel itself ends with its connection.
+        Ok(socket) => pipe(socket, channel, &token, &CancellationToken::new()).await,
         Err(error) => tracing::debug!(%error, "remote forward target unreachable"),
     }
 }
@@ -386,14 +436,16 @@ pub async fn serve_forwarded(channel: TunnelStream, target: Endpoint, token: Can
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
 
     /// Test link: "the server" is this machine, channels are plain TCP connections.
     #[derive(Default)]
     struct DirectLink {
         requested: Mutex<Vec<(String, u16)>>,
         cancelled: Mutex<Vec<(String, u16)>>,
-        refuse_remote: bool,
+        refuse_remote: AtomicBool,
+        /// Holds `request_remote` until notified.
+        gate: Option<Arc<tokio::sync::Notify>>,
         opened: AtomicUsize,
     }
 
@@ -406,7 +458,12 @@ mod tests {
             Ok(Box::new(stream))
         }
         async fn request_remote(&self, host: &str, port: u16) -> Result<u16> {
-            if self.refuse_remote {
+            if let Some(gate) = &self.gate {
+                self.requested.lock().unwrap().push((host.into(), port));
+                gate.notified().await;
+                return Ok(if port == 0 { 41234 } else { port });
+            }
+            if self.refuse_remote.load(Ordering::SeqCst) {
                 return Err(network_error(NetworkKind::Other, "tcpip-forward refused"));
             }
             self.requested.lock().unwrap().push((host.into(), port));
@@ -432,6 +489,13 @@ mod tests {
             }
         });
         port
+    }
+
+    /// A new connection: its routes, then the link.
+    async fn connect(tunnels: &Tunnels, link: Arc<DirectLink>) -> ForwardRoutes {
+        let (epoch, routes) = tunnels.routes();
+        tunnels.attach(epoch, link).await;
+        routes
     }
 
     fn free_port() -> u16 {
@@ -471,7 +535,7 @@ mod tests {
         let r = rule(ForwardKind::Local, port.to_string(), format!("127.0.0.1:{target}"), false);
         let (emit, events) = recorder();
         let tunnels = Tunnels::new(vec![r.clone()], emit);
-        tunnels.attach(Arc::new(DirectLink::default())).await;
+        connect(&tunnels, Arc::new(DirectLink::default())).await;
         assert_eq!(last_state(&events, r.id), None, "no autostart");
         tunnels.start(r.id).await.unwrap();
         assert_eq!(last_state(&events, r.id), Some(TunnelState::Active { port }));
@@ -489,10 +553,10 @@ mod tests {
         let r = rule(ForwardKind::Local, free_port().to_string(), format!("127.0.0.1:{target}"), true);
         let (emit, events) = recorder();
         let tunnels = Tunnels::new(vec![r.clone()], emit);
-        tunnels.attach(Arc::new(DirectLink::default())).await;
+        connect(&tunnels, Arc::new(DirectLink::default())).await;
         assert!(matches!(last_state(&events, r.id), Some(TunnelState::Active { .. })));
         tunnels.stop(r.id).await;
-        tunnels.attach(Arc::new(DirectLink::default())).await;
+        connect(&tunnels, Arc::new(DirectLink::default())).await;
         assert_eq!(last_state(&events, r.id), Some(TunnelState::Off), "a reconnect does not restart a stopped rule");
     }
 
@@ -504,7 +568,7 @@ mod tests {
         let broken = rule(ForwardKind::Local, "x".into(), "y".into(), false);
         let (emit, events) = recorder();
         let tunnels = Tunnels::new(vec![r.clone(), broken.clone()], emit);
-        tunnels.attach(Arc::new(DirectLink::default())).await;
+        connect(&tunnels, Arc::new(DirectLink::default())).await;
         assert!(tunnels.start(r.id).await.is_err());
         assert!(matches!(last_state(&events, r.id), Some(TunnelState::Failed { .. })));
         assert!(matches!(tunnels.start(broken.id).await, Err(CoreError::Config { .. })));
@@ -520,9 +584,10 @@ mod tests {
         let tunnels = Tunnels::new(vec![r.clone()], emit);
         assert!(tunnels.start(r.id).await.is_err());
         let link = Arc::new(DirectLink::default());
-        tunnels.attach(link.clone()).await;
+        connect(&tunnels, link.clone()).await;
         tunnels.start(r.id).await.unwrap();
         tunnels.detach();
+        assert!(tunnels.start(uuid::Uuid::new_v4()).await.is_err());
         let port: u16 = r.bind.parse().unwrap();
         let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         assert!(closed(&mut client).await);
@@ -548,7 +613,7 @@ mod tests {
         let r = rule(ForwardKind::Dynamic, port.to_string(), String::new(), false);
         let (emit, _) = recorder();
         let tunnels = Tunnels::new(vec![r.clone()], emit);
-        tunnels.attach(Arc::new(DirectLink::default())).await;
+        connect(&tunnels, Arc::new(DirectLink::default())).await;
         tunnels.start(r.id).await.unwrap();
 
         let [hi, lo] = target.to_be_bytes();
@@ -583,10 +648,10 @@ mod tests {
         let r = rule(ForwardKind::Remote, "0".into(), "127.0.0.1:5432".into(), true);
         let (emit, events) = recorder();
         let tunnels = Tunnels::new(vec![r.clone()], emit);
-        let routes = tunnels.routes();
-        assert!(routes("localhost", 41234).is_none(), "nothing requested yet");
+        let (_, unused) = tunnels.routes();
+        assert!(unused("localhost", 41234).is_none(), "nothing requested yet");
         let first = Arc::new(DirectLink::default());
-        tunnels.attach(first.clone()).await;
+        let routes = connect(&tunnels, first.clone()).await;
         assert_eq!(last_state(&events, r.id), Some(TunnelState::Active { port: 41234 }));
         assert_eq!(*first.requested.lock().unwrap(), vec![("localhost".to_string(), 0)]);
         let (target, _) = routes("localhost", 41234).expect("requested forward is routed");
@@ -595,31 +660,107 @@ mod tests {
         assert!(routes("0.0.0.0", 41234).is_none());
 
         let second = Arc::new(DirectLink::default());
-        tunnels.attach(second.clone()).await;
+        let routes = connect(&tunnels, second.clone()).await;
         assert_eq!(second.requested.lock().unwrap().len(), 1, "requested again on the new connection");
+        assert!(routes("localhost", 41234).is_some());
+        assert!(unused("localhost", 41234).is_none(), "only the connection that asked gets the channel");
 
-        let refusing = Arc::new(DirectLink { refuse_remote: true, ..DirectLink::default() });
-        tunnels.attach(refusing).await;
+        tunnels.detach();
+        assert!(routes("localhost", 41234).is_none(), "nothing is routed while reconnecting");
+        let refusing = Arc::new(DirectLink::default());
+        refusing.refuse_remote.store(true, Ordering::SeqCst);
+        let routes = connect(&tunnels, refusing.clone()).await;
         assert!(matches!(last_state(&events, r.id), Some(TunnelState::Failed { .. })));
         assert!(routes("localhost", 41234).is_none(), "a failed rule routes nothing");
 
-        tunnels.attach(second.clone()).await;
+        refusing.refuse_remote.store(false, Ordering::SeqCst);
         tunnels.start(r.id).await.unwrap();
+        assert_eq!(last_state(&events, r.id), Some(TunnelState::Active { port: 41234 }), "a failed rule starts again");
         tunnels.stop(r.id).await;
-        assert_eq!(*second.cancelled.lock().unwrap(), vec![("localhost".to_string(), 41234)]);
+        assert_eq!(*refusing.cancelled.lock().unwrap(), vec![("localhost".to_string(), 41234)]);
         assert!(routes("localhost", 41234).is_none());
     }
 
     #[tokio::test]
-    async fn stop_all_ends_every_rule() {
+    async fn end_stops_every_rule_and_a_later_connection_autostarts_again() {
         let target = echo().await;
         let port = free_port();
         let r = rule(ForwardKind::Local, port.to_string(), format!("127.0.0.1:{target}"), true);
         let (emit, events) = recorder();
         let tunnels = Tunnels::new(vec![r.clone()], emit);
-        tunnels.attach(Arc::new(DirectLink::default())).await;
-        tunnels.stop_all().await;
+        connect(&tunnels, Arc::new(DirectLink::default())).await;
+        tunnels.end();
         assert_eq!(last_state(&events, r.id), Some(TunnelState::Off));
         assert!(TcpStream::connect(("127.0.0.1", port)).await.is_err());
+        assert!(tunnels.start(r.id).await.is_err(), "no connection after the end");
+        connect(&tunnels, Arc::new(DirectLink::default())).await;
+        assert!(matches!(last_state(&events, r.id), Some(TunnelState::Active { .. })));
+    }
+
+    #[tokio::test]
+    async fn losing_the_connection_cuts_open_connections_but_keeps_the_listener() {
+        let target = echo().await;
+        let port = free_port();
+        let r = rule(ForwardKind::Local, port.to_string(), format!("127.0.0.1:{target}"), true);
+        let (emit, _) = recorder();
+        let tunnels = Tunnels::new(vec![r.clone()], emit);
+        connect(&tunnels, Arc::new(DirectLink::default())).await;
+        let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        assert_eq!(roundtrip(&mut client, b"a").await, b"a");
+        tunnels.detach();
+        assert!(closed(&mut client).await, "an idle connection does not hang on a dead link");
+        connect(&tunnels, Arc::new(DirectLink::default())).await;
+        let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        assert_eq!(roundtrip(&mut client, b"b").await, b"b");
+    }
+
+    async fn requested(link: &DirectLink, n: usize) {
+        for _ in 0..500 {
+            if link.requested.lock().unwrap().len() >= n {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        panic!("request_remote was not called");
+    }
+
+    #[tokio::test]
+    async fn a_remote_forward_stopped_while_it_is_requested_is_cancelled_on_the_server() {
+        let r = rule(ForwardKind::Remote, "0".into(), "127.0.0.1:5432".into(), false);
+        let (emit, events) = recorder();
+        let tunnels = Arc::new(Tunnels::new(vec![r.clone()], emit));
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let link = Arc::new(DirectLink { gate: Some(gate.clone()), ..DirectLink::default() });
+        let routes = connect(&tunnels, link.clone()).await;
+
+        let starting = tokio::spawn({
+            let tunnels = tunnels.clone();
+            async move { tunnels.start(r.id).await }
+        });
+        requested(&link, 1).await;
+        tunnels.stop(r.id).await;
+        gate.notify_one();
+        starting.await.unwrap().unwrap();
+        assert_eq!(*link.cancelled.lock().unwrap(), vec![("localhost".to_string(), 41234)]);
+        assert_eq!(last_state(&events, r.id), Some(TunnelState::Off));
+        assert!(routes("localhost", 41234).is_none());
+
+        // The same during the re-request after a reconnect.
+        let plain = Arc::new(DirectLink::default());
+        connect(&tunnels, plain).await;
+        tunnels.start(r.id).await.unwrap();
+        let (epoch, _) = tunnels.routes();
+        let gated = Arc::new(DirectLink { gate: Some(gate.clone()), ..DirectLink::default() });
+        let attaching = tokio::spawn({
+            let tunnels = tunnels.clone();
+            let gated = gated.clone();
+            async move { tunnels.attach(epoch, gated).await }
+        });
+        requested(&gated, 1).await;
+        tunnels.stop(r.id).await;
+        gate.notify_one();
+        attaching.await.unwrap();
+        assert_eq!(*gated.cancelled.lock().unwrap(), vec![("localhost".to_string(), 41234)]);
+        assert_eq!(last_state(&events, r.id), Some(TunnelState::Off));
     }
 }

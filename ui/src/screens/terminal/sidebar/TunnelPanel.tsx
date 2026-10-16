@@ -46,6 +46,8 @@ export function TunnelPanel({ tab }: { tab: Tab }) {
   const openModal = useUiStore((state) => state.openModal);
   const rules = tab.forwards ?? [];
   const ready = tab.status === "connected" && tab.sessionId !== undefined;
+  // The backend drops the tunnels of an ended session without further events.
+  const ended = tab.status === "closed" || tab.status === "error";
 
   if (rules.length === 0) {
     return (
@@ -63,7 +65,7 @@ export function TunnelPanel({ tab }: { tab: Tab }) {
   return (
     <ul className={styles.tunnels}>
       {rules.map((rule) => {
-        const state = states?.[rule.id] ?? OFF;
+        const state = (!ended && states?.[rule.id]) || OFF;
         const on = state.kind === "active" || state.kind === "starting";
         const toggle = () => {
           const sessionId = tab.sessionId;
