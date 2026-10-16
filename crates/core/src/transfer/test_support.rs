@@ -77,6 +77,8 @@ pub(crate) struct FaultySide {
     fake_children: Mutex<Vec<String>>,
     denied: Mutex<HashSet<String>>,
     mode_denied: Mutex<HashSet<String>>,
+    /// `stat` leaves out the permission bits, like a server that does not send them.
+    hide_modes: AtomicBool,
     /// Slows `rename_over` down (the last step of every file), in milliseconds.
     rename_delay_ms: AtomicU64,
     /// Slows `open_read` down, in milliseconds.
@@ -106,6 +108,9 @@ impl FaultySide {
     }
     pub(crate) fn deny_set_mode(&self, path: &str) {
         self.mode_denied.lock().unwrap().insert(path.to_string());
+    }
+    pub(crate) fn hide_modes(&self) {
+        self.hide_modes.store(true, Ordering::SeqCst);
     }
     pub(crate) fn delay_reads(&self, ms: u64) {
         self.read_delay_ms.store(ms, Ordering::SeqCst);
@@ -162,7 +167,8 @@ impl Reader for CountingReader {
 #[async_trait]
 impl Side for FaultySide {
     async fn stat(&self, path: &str) -> Result<Option<Node>> {
-        LocalSide.stat(path).await
+        let hide = self.hide_modes.load(Ordering::SeqCst);
+        Ok(LocalSide.stat(path).await?.map(|node| Node { mode: if hide { None } else { node.mode }, ..node }))
     }
     async fn children(&self, path: &str) -> Result<Vec<Child>> {
         if self.children_fail.load(Ordering::SeqCst) {

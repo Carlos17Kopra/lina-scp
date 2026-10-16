@@ -20,8 +20,8 @@ pub struct Node {
     pub kind: NodeKind,
     pub size: u64,
     pub mtime: Option<i64>,
-    /// `st_mode` (type and permission bits).
-    pub mode: u32,
+    /// `st_mode` (type and permission bits); `None` when the server did not send them.
+    pub mode: Option<u32>,
     /// The path itself is a symlink (`kind` describes its target).
     pub link: bool,
 }

@@ -209,7 +209,7 @@ impl EditManager {
                 dir: dir.clone(),
                 copy: copy.clone(),
                 remote: Some(stamp(&node)),
-                remote_mode: node.mode & 0o777,
+                remote_mode: node.mode.unwrap_or(0) & 0o777,
                 synced: None,
                 hold: None,
                 decision: None,
@@ -230,7 +230,7 @@ impl EditManager {
         if jobs.first().map(|j| j.state) != Some(JobState::Done) {
             return Err(inner.fail_download(id, &dir, job_error(jobs.first(), "download")));
         }
-        std::fs::set_permissions(&copy, std::fs::Permissions::from_mode((node.mode & 0o666) | 0o600))?;
+        std::fs::set_permissions(&copy, std::fs::Permissions::from_mode((node.mode.unwrap_or(0) & 0o666) | 0o600))?;
         let synced = local_stamp(&copy);
         let watch = tokio::spawn(watch(inner.clone(), id, synced)).abort_handle();
         inner.update(id, |f| {
@@ -341,7 +341,7 @@ impl Inner {
             }
         }
         // Editing never changes rights: the server's current mode, or the one it had (re-created file).
-        let mode = node.map(|n| n.mode & 0o777).unwrap_or(mode);
+        let mode = node.and_then(|n| n.mode).map(|m| m & 0o777).unwrap_or(mode);
         self.update(id, |f| {
             f.file.state = EditState::Uploading;
             f.file.error = None;
