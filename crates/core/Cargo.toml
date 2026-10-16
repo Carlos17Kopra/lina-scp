@@ -22,6 +22,7 @@ futures = "0.3"
 libc = "0.2"
 md-5 = "0.11"
 portable-pty = "0.9"
+rand = "0.10"
 rusqlite = { version = "0.40", features = ["bundled"] }
 russh = "0.64"
 russh-sftp = "3.0"

@@ -1,9 +1,11 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { FolderOpen } from "lucide-react";
+import { FolderOpen, KeyRound } from "lucide-react";
+import { useState } from "react";
 import { Button, Segmented, TextField, useToast } from "../../components";
 import { t } from "../../i18n/de";
 import type { AuthMethod } from "../../ipc/api";
 import { errorDetails } from "../../ipc/errors";
+import { GenerateKeyDialog } from "../keychain/GenerateKeyDialog";
 import type { AuthDraft } from "./drafts";
 import styles from "./Editor.module.css";
 
@@ -25,6 +27,7 @@ export function AuthMethodFields({
   keyPathError?: string;
 }) {
   const toast = useToast();
+  const [generating, setGenerating] = useState(false);
   const set = (patch: Partial<AuthDraft>) => onChange({ ...auth, ...patch });
 
   const pickKey = async () => {
@@ -70,7 +73,20 @@ export function AuthMethodFields({
             <Button icon={FolderOpen} onClick={() => void pickKey()}>
               {t.editor.pickKey}
             </Button>
+            <Button icon={KeyRound} onClick={() => setGenerating(true)}>
+              {t.editor.generateKey}
+            </Button>
           </div>
+          {generating ? (
+            <GenerateKeyDialog
+              onClose={() => setGenerating(false)}
+              onGenerated={(key, passphrase) => {
+                setGenerating(false);
+                // The passphrase is then saved with the host/profile, like a typed one.
+                set({ keyPath: key.path, passphrase });
+              }}
+            />
+          ) : null}
           <TextField
             type="password"
             label={t.editor.passphrase}

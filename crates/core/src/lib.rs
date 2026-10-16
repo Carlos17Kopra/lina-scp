@@ -5,6 +5,7 @@ pub mod edit;
 pub mod error;
 pub mod export;
 mod fsutil;
+pub mod keys;
 pub mod known_hosts;
 pub mod model;
 pub mod paths;

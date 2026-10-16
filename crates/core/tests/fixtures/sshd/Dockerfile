@@ -9,6 +9,8 @@ RUN apt-get update \
  && useradd -m -s /bin/bash kbduser && echo 'kbduser:kbdpass' | chpasswd \
  && useradd -m -s /bin/bash mfauser && echo 'mfauser:mfapass' | chpasswd \
  && useradd -m -s /bin/bash mfpwuser && echo 'mfpwuser:mfpwpass' | chpasswd \
+ && useradd -m -s /bin/bash fcuser && echo 'fcuser:fcpass' | chpasswd \
+ && useradd -m -s /bin/bash hanguser && echo 'hanguser:hangpass' | chpasswd \
  && echo 'pwuser ALL=(root) NOPASSWD: /usr/lib/openssh/sftp-server' > /etc/sudoers.d/sftp \
  && chmod 440 /etc/sudoers.d/sftp
 COPY sshd_config /etc/ssh/sshd_config

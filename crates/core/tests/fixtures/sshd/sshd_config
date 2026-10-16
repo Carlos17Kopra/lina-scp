@@ -22,3 +22,10 @@ Match User mfauser
 
 Match User mfpwuser
     AuthenticationMethods publickey,password
+
+# ssh-copy-id against servers that never run our script.
+Match User fcuser
+    ForceCommand true
+
+Match User hanguser
+    ForceCommand sleep 600

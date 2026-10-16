@@ -117,6 +117,11 @@ impl Container {
     }
 
     /// The server's public host key of `kind` (`ed25519`, `ecdsa`, `rsa`) as `<algorithm> <base64>`.
+    /// Runs a command in the container as root; returns its trimmed stdout.
+    pub fn exec(&self, args: &[&str]) -> String {
+        run(Command::new("docker").args(["exec", &self.id]).args(args))
+    }
+
     pub fn host_public_key(&self, kind: &str) -> String {
         let line =
             run(Command::new("docker").args(["exec", &self.id, "cat", &format!("/etc/ssh/ssh_host_{kind}_key.pub")]));
