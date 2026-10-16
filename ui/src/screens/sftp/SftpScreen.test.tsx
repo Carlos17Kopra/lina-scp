@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../ipc/api";
@@ -251,5 +251,21 @@ describe("SftpScreen", () => {
     render(<SftpScreen />);
     expect(screen.getByRole("tab", { name: /Wartet auf eine Entscheidung/ })).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "Datei auf dem Server geändert" })).not.toBeInTheDocument();
+  });
+  it("shows the keep-up-to-date bar with its count and error and stops it", async () => {
+    vi.mocked(api.keepStop).mockResolvedValue();
+    openTab();
+    render(<SftpScreen />);
+    await userEvent.click(screen.getByRole("button", { name: "Aktuell halten" }));
+    expect(screen.getByRole("dialog", { name: "Remote-Ordner aktuell halten" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Abbrechen" }));
+    const error = { type: "fs" as const, kind: "notFound" as const, path: "/l", message: "gone" };
+    act(() => useSftpStore.getState().onEvent("t1", "s1", { kind: "keep", event: { kind: "state", localDir: "/l", remoteDir: "/srv", uploaded: 2, error } }));
+    const bar = screen.getByRole("status", { name: "Aktuell halten" });
+    expect(bar).toHaveTextContent("Hält /srv aktuell · 2 übertragen");
+    expect(bar).toHaveTextContent("Lokaler Ordner nicht lesbar: gone");
+    await userEvent.click(within(bar).getByRole("button", { name: "Beenden" }));
+    expect(api.keepStop).toHaveBeenCalledWith("s1");
+    expect(screen.queryByRole("status", { name: "Aktuell halten" })).not.toBeInTheDocument();
   });
 });

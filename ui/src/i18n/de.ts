@@ -530,6 +530,16 @@ export const t = {
     newFolder: "Neuer Ordner",
     newFile: "Neue Datei",
     openWith: { menu: "Öffnen mit …", remember: "Immer für diesen Dateityp verwenden" },
+    keep: {
+      button: "Aktuell halten",
+      title: "Remote-Ordner aktuell halten",
+      hint: "Lokale Änderungen werden ab jetzt hochgeladen. Gelöschtes bleibt auf dem Server.",
+      start: "Starten",
+      failed: "Starten fehlgeschlagen",
+      bar: (remote: string, n: number) => `Hält ${remote} aktuell · ${n} übertragen`,
+      readFailed: (reason: string) => `Lokaler Ordner nicht lesbar: ${reason}`,
+      stop: "Beenden",
+    },
     sync: {
       button: "Synchronisieren",
       title: "Synchronisieren",
