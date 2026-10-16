@@ -52,8 +52,9 @@ non-commercial open-source release later. Target platform is Linux only: Debian 
 - `docs/superpowers/specs/2026-10-16-linascp-tp5a-tunnels-design.md`: TP5a spec (tunnels) and the TP5 split.
 - `docs/superpowers/specs/2026-10-17-linascp-tp5b-keychain-design.md`: TP5b spec (keychain, keygen, ssh-copy-id).
 - `docs/superpowers/specs/2026-10-17-linascp-tp5c-settings-design.md`: TP5c spec (settings screen).
+- `docs/superpowers/specs/2026-10-17-linascp-tp6a-cleanup-design.md`: TP6a spec (backlog cleanup) and the TP6 split.
 - `docs/acceptance-tp1.md`: manual acceptance checklist (`docs/acceptance-tp2a.md` … `docs/acceptance-tp2d.md` for
-  TP2a–TP2d, `docs/acceptance-tp3a.md` for TP3a, `docs/acceptance-tp3b.md` for TP3b, `docs/acceptance-tp3c.md` for TP3c, `docs/acceptance-tp4a.md` for TP4a, `docs/acceptance-tp4b.md` for TP4b, `docs/acceptance-tp4c.md` for TP4c, `docs/acceptance-tp5a.md` for TP5a, `docs/acceptance-tp5b.md` for TP5b, `docs/acceptance-tp5c.md` for TP5c).
+  TP2a–TP2d, `docs/acceptance-tp3a.md` for TP3a, `docs/acceptance-tp3b.md` for TP3b, `docs/acceptance-tp3c.md` for TP3c, `docs/acceptance-tp4a.md` for TP4a, `docs/acceptance-tp4b.md` for TP4b, `docs/acceptance-tp4c.md` for TP4c, `docs/acceptance-tp5a.md` for TP5a, `docs/acceptance-tp5b.md` for TP5b, `docs/acceptance-tp5c.md` for TP5c, `docs/acceptance-tp6a.md` for TP6a).
 - `docs/backlog-after-tp1.md`: deferred review findings. Start TP2 planning there.
 
 ## Commands (run from the repo root)
@@ -127,4 +128,5 @@ bun run tauri build               # .deb + .AppImage in target/release/bundle/
 - TP3: SFTP (3a browse, 3b transfers, 3c bookmarks + edit: done).
 - TP4: advanced SFTP (4a permissions, bandwidth, server command; 4b compare + sync; 4c keep up to date: done).
 - TP5: tunnels, keychain, keygen/ssh-copy-id, full settings (5a–5c: done).
+- TP6: 6a backlog cleanup (done), 6b port-forwarding screen, 6c SSH agent identities.
 - No sync between devices. Moving data to another device goes through export/import (`.linascp` files).
