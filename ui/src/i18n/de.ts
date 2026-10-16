@@ -530,6 +530,45 @@ export const t = {
     newFolder: "Neuer Ordner",
     newFile: "Neue Datei",
     openWith: { menu: "Öffnen mit …", remember: "Immer für diesen Dateityp verwenden" },
+    sync: {
+      button: "Synchronisieren",
+      title: "Synchronisieren",
+      comparing: "Vergleiche …",
+      direction: "Richtung",
+      directions: { upload: "Hochladen", download: "Herunterladen", both: "Beide Richtungen" },
+      deleteExtra: "Auf der Zielseite löschen, was es nur dort gibt",
+      exclude: "Ausschließen",
+      excludePlaceholder: ".git, node_modules, *.tmp",
+      recompare: "Neu vergleichen",
+      equal: "Beide Ordner sind gleich.",
+      failed: "Vergleich fehlgeschlagen",
+      columns: { action: "Aktion", path: "Pfad", local: "Lokal", remote: "Remote" },
+      include: (rel: string) => `${rel} übernehmen`,
+      actions: { upload: "Hochladen", download: "Herunterladen", deleteLocal: "Löschen lokal", deleteRemote: "Löschen remote" },
+      skipped: {
+        onlyLocal: "Übersprungen: nur lokal",
+        onlyRemote: "Übersprungen: nur remote",
+        localNewer: "Übersprungen: lokal neuer",
+        remoteNewer: "Übersprungen: remote neuer",
+        sizeDiffers: "Übersprungen: gleiches Datum, andere Größe",
+        typeMismatch: "Übersprungen: Datei und Ordner",
+      },
+      dir: "Ordner",
+      summary: (c: { upload: number; download: number; deleteLocal: number; deleteRemote: number }) =>
+        [
+          c.upload ? `${c.upload} hochladen` : "",
+          c.download ? `${c.download} herunterladen` : "",
+          c.deleteLocal ? `${c.deleteLocal} in den Papierkorb` : "",
+          c.deleteRemote ? `${c.deleteRemote} auf dem Server löschen` : "",
+        ].filter(Boolean).join(", ") || "Nichts ausgewählt",
+      remoteDeleteWarning: (n: number) =>
+        `${n === 1 ? "1 Eintrag wird" : `${n} Einträge werden`} auf dem Server endgültig gelöscht.`,
+      run: "Synchronisieren",
+      deleteSkipped: (n: number) =>
+        `${n === 1 ? "1 Eintrag wurde" : `${n} Einträge wurden`} nicht gelöscht, weil sie sich seit dem Vergleich geändert haben.`,
+      deleteFailed: (n: number, path: string, reason: string) =>
+        `${n === 1 ? "1 Eintrag konnte" : `${n} Einträge konnten`} nicht gelöscht werden. Zuerst: ${path} (${reason})`,
+    },
     permissions: {
       menu: "Eigenschaften …",
       title: "Eigenschaften",
