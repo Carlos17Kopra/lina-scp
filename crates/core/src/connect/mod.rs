@@ -487,17 +487,18 @@ impl Pipeline {
                 }
                 let version = raw.init().await.map_err(|e| sftp_session::map_sftp_error(e, ""))?;
                 self.log(format!("debug1: SFTP protocol version {}", version.version));
-                Ok((raw, version.version))
+                let posix_rename = version.extensions.contains_key("posix-rename@openssh.com");
+                Ok((raw, version.version, posix_rename))
             })
             .await;
-        let (raw, version) = match opened {
+        let (raw, version, posix_rename) = match opened {
             Ok(opened) => opened,
             Err(error) => {
                 disconnect(Established { handle, jump, info }).await;
                 return Err(error);
             }
         };
-        let session = SftpSession::start(raw, version, handle, jump, info, on_lost);
+        let session = SftpSession::start(raw, version, posix_rename, handle, jump, info, on_lost);
         let listing = self
             .step(Step::Directory, async {
                 let start = match host.sftp.remote_start.as_deref().map(str::trim).filter(|s| !s.is_empty()) {

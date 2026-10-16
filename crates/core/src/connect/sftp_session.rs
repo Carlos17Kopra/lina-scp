@@ -8,7 +8,7 @@ use futures::{StreamExt, stream};
 use russh::client;
 use russh_sftp::client::RawSftpSession;
 use russh_sftp::client::error::Error as SftpError;
-use russh_sftp::protocol::{FileAttributes, StatusCode};
+use russh_sftp::protocol::{FileAttributes, OpenFlags, Packet, StatusCode};
 use tokio::task::AbortHandle;
 
 use super::SessionInfo;
@@ -16,6 +16,7 @@ use super::classify::network_error;
 use super::handler::ClientHandler;
 use crate::error::{CoreError, FsKind, NetworkKind, Result};
 use crate::sftp::{Entry, EntryKind, LinkTarget, Listing, join};
+use crate::transfer::{Child, Node, NodeKind, Reader, Side, Writer};
 use crate::validate::validate_file_name;
 
 /// In-flight `stat` requests while resolving symlinks of one listing.
@@ -39,7 +40,8 @@ impl Lost {
 }
 
 pub struct SftpSession {
-    raw: RawSftpSession,
+    raw: Arc<RawSftpSession>,
+    posix_rename: bool,
     handle: Arc<client::Handle<ClientHandler>>,
     jump: Option<client::Handle<ClientHandler>>,
     info: SessionInfo,
@@ -56,6 +58,7 @@ impl SftpSession {
     pub(crate) fn start(
         raw: RawSftpSession,
         version: u32,
+        posix_rename: bool,
         handle: client::Handle<ClientHandler>,
         jump: Option<client::Handle<ClientHandler>>,
         info: SessionInfo,
@@ -78,7 +81,7 @@ impl SftpSession {
             })
             .abort_handle()
         };
-        Self { raw, handle, jump, info, version, lost, watcher }
+        Self { raw: Arc::new(raw), posix_rename, handle, jump, info, version, lost, watcher }
     }
 
     pub fn info(&self) -> &SessionInfo {
@@ -89,17 +92,13 @@ impl SftpSession {
         self.version
     }
 
-    /// Maps the error and reports a lost connection (once) on any transport failure: a request
-    /// timeout (frozen link without keepalive) or a dead SFTP channel leaves the SSH handle open,
-    /// but the session is unusable either way; reconnecting is cheap.
+    /// The server offers `posix-rename@openssh.com` (atomic overwrite).
+    pub fn posix_rename(&self) -> bool {
+        self.posix_rename
+    }
+
     fn check<T>(&self, result: std::result::Result<T, SftpError>, path: &str) -> Result<T> {
-        result.map_err(|e| {
-            let error = map_sftp_error(e, path);
-            if matches!(error, CoreError::Network { .. }) {
-                self.lost.fire(error.clone());
-            }
-            error
-        })
+        checked(&self.lost, result, path)
     }
 
     fn ensure_alive(&self) -> Result<()> {
@@ -273,6 +272,175 @@ impl SftpSession {
 impl Drop for SftpSession {
     fn drop(&mut self) {
         self.watcher.abort();
+    }
+}
+
+/// Maps the error and reports a lost connection (once) on any transport failure: a request
+/// timeout (frozen link without keepalive) or a dead SFTP channel leaves the SSH handle open,
+/// but the session is unusable either way; reconnecting is cheap.
+fn checked<T>(lost: &Lost, result: std::result::Result<T, SftpError>, path: &str) -> Result<T> {
+    result.map_err(|e| {
+        let error = map_sftp_error(e, path);
+        if matches!(error, CoreError::Network { .. }) {
+            lost.fire(error.clone());
+        }
+        error
+    })
+}
+
+/// An open remote file (read or write) of a transfer.
+struct RemoteFile {
+    raw: Arc<RawSftpSession>,
+    lost: Arc<Lost>,
+    handle: String,
+    path: String,
+}
+
+#[async_trait::async_trait]
+impl Reader for RemoteFile {
+    async fn read_at(&self, offset: u64, len: usize) -> Result<Vec<u8>> {
+        let mut out = Vec::with_capacity(len);
+        // A server may answer short before the end: keep reading until `len` or EOF.
+        while out.len() < len {
+            let want = (len - out.len()) as u32;
+            match self.raw.read(self.handle.as_str(), offset + out.len() as u64, want).await {
+                Ok(data) if data.data.is_empty() => break,
+                Ok(data) => out.extend_from_slice(&data.data),
+                Err(SftpError::Status(s)) if s.status_code == StatusCode::Eof => break,
+                Err(e) => return checked(&self.lost, Err(e), &self.path),
+            }
+        }
+        Ok(out)
+    }
+
+    async fn close(&self) {
+        let _ = self.raw.close(self.handle.as_str()).await;
+    }
+}
+
+#[async_trait::async_trait]
+impl Writer for RemoteFile {
+    async fn write_at(&self, offset: u64, data: Vec<u8>) -> Result<()> {
+        checked(&self.lost, self.raw.write(self.handle.as_str(), offset, data).await, &self.path).map(|_| ())
+    }
+
+    async fn close(&self) -> Result<()> {
+        checked(&self.lost, self.raw.close(self.handle.as_str()).await, &self.path).map(|_| ())
+    }
+}
+
+fn node_of(attrs: &FileAttributes, kind: NodeKind) -> Node {
+    Node {
+        kind,
+        size: attrs.size.unwrap_or(0),
+        mtime: attrs.mtime.map(i64::from),
+        mode: attrs.permissions.unwrap_or(0),
+    }
+}
+
+/// SSH wire string: u32 length + bytes.
+fn ssh_string(out: &mut Vec<u8>, s: &str) {
+    out.extend_from_slice(&(s.len() as u32).to_be_bytes());
+    out.extend_from_slice(s.as_bytes());
+}
+
+#[async_trait::async_trait]
+impl Side for SftpSession {
+    async fn stat(&self, path: &str) -> Result<Option<Node>> {
+        self.ensure_alive()?;
+        let attrs = match self.raw.lstat(path).await {
+            Ok(a) => a.attrs,
+            Err(SftpError::Status(s)) if s.status_code == StatusCode::NoSuchFile => return Ok(None),
+            Err(e) => return self.check(Err(e), path),
+        };
+        if !attrs.is_symlink() {
+            let kind = if attrs.is_dir() {
+                NodeKind::Dir
+            } else if attrs.is_regular() {
+                NodeKind::File
+            } else {
+                NodeKind::Other
+            };
+            return Ok(Some(node_of(&attrs, kind)));
+        }
+        Ok(Some(match self.raw.stat(path).await {
+            Ok(t) if t.attrs.is_dir() => node_of(&t.attrs, NodeKind::DirLink),
+            Ok(t) if t.attrs.is_regular() => node_of(&t.attrs, NodeKind::File),
+            Ok(t) => node_of(&t.attrs, NodeKind::Other),
+            Err(SftpError::Status(_)) => node_of(&attrs, NodeKind::BrokenLink),
+            Err(e) => return self.check(Err(e), path),
+        }))
+    }
+
+    async fn children(&self, path: &str) -> Result<Vec<Child>> {
+        self.ensure_alive()?;
+        Ok(self.list_names(path).await?.into_iter().map(|name| Child { name, lossy: false }).collect())
+    }
+
+    async fn mkdir(&self, path: &str) -> Result<()> {
+        self.ensure_alive()?;
+        match self.raw.mkdir(path, FileAttributes::default()).await {
+            Ok(_) => Ok(()),
+            Err(SftpError::Status(s)) if s.status_code == StatusCode::Failure && self.exists(path).await => {
+                Err(CoreError::fs(FsKind::AlreadyExists, path, s.error_message))
+            }
+            Err(e) => self.check(Err(e), path),
+        }
+    }
+
+    async fn open_read(&self, path: &str) -> Result<Box<dyn Reader>> {
+        self.ensure_alive()?;
+        let handle = self.check(self.raw.open(path, OpenFlags::READ, FileAttributes::default()).await, path)?.handle;
+        Ok(Box::new(RemoteFile { raw: self.raw.clone(), lost: self.lost.clone(), handle, path: path.to_string() }))
+    }
+
+    async fn open_write(&self, path: &str, resume: bool) -> Result<Box<dyn Writer>> {
+        self.ensure_alive()?;
+        let mut flags = OpenFlags::WRITE | OpenFlags::CREATE;
+        if !resume {
+            flags |= OpenFlags::TRUNCATE;
+        }
+        let attrs = FileAttributes { permissions: Some(0o600), ..FileAttributes::default() };
+        let handle = self.check(self.raw.open(path, flags, attrs).await, path)?.handle;
+        Ok(Box::new(RemoteFile { raw: self.raw.clone(), lost: self.lost.clone(), handle, path: path.to_string() }))
+    }
+
+    async fn set_mode(&self, path: &str, mode: u32) -> Result<()> {
+        let attrs = FileAttributes { permissions: Some(mode), ..FileAttributes::default() };
+        self.check(self.raw.setstat(path, attrs).await, path).map(|_| ())
+    }
+
+    async fn set_mtime(&self, path: &str, mtime: i64) -> Result<()> {
+        // SFTP v3 sets atime and mtime together.
+        let t = mtime.clamp(0, i64::from(u32::MAX)) as u32;
+        let attrs = FileAttributes { atime: Some(t), mtime: Some(t), ..FileAttributes::default() };
+        self.check(self.raw.setstat(path, attrs).await, path).map(|_| ())
+    }
+
+    async fn rename_over(&self, from: &str, to: &str) -> Result<()> {
+        self.ensure_alive()?;
+        if self.posix_rename {
+            let mut data = Vec::new();
+            ssh_string(&mut data, from);
+            ssh_string(&mut data, to);
+            return match self.raw.extended("posix-rename@openssh.com", data).await {
+                Ok(Packet::Status(s)) if s.status_code == StatusCode::Ok => Ok(()),
+                Ok(Packet::Status(s)) => Err(map_sftp_error(SftpError::Status(s), to)),
+                Ok(_) => Err(CoreError::internal("unexpected reply to posix-rename")),
+                Err(e) => self.check(Err(e), to),
+            };
+        }
+        // ponytail: not atomic without the extension; a crash between both steps leaves only the part.
+        match self.raw.remove(to).await {
+            Ok(_) => {}
+            Err(SftpError::Status(s)) if s.status_code == StatusCode::NoSuchFile => {}
+            Err(e) => return self.check(Err(e), to),
+        }
+        self.check(self.raw.rename(from, to).await, from).map(|_| ())
+    }
+
+    async fn remove(&self, path: &str) -> Result<()> {
+        self.check(self.raw.remove(path).await, path).map(|_| ())
     }
 }
 
