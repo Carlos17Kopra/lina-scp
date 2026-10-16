@@ -6,7 +6,7 @@ denselben Host.
 ## Starten und Beenden
 - [ ] Ohne Verbindung ist „Aktuell halten“ aus.
 - [ ] „Aktuell halten“: der Dialog zeigt `lokal → remote`, den Hinweis zu Löschungen und das Muster vom
-      Synchronisieren. „Starten“: über dem Übertragungs-Panel steht „Hält <remote> aktuell · 0 übertragen“.
+      Synchronisieren. „Starten“: über dem Übertragungs-Panel steht „Hält <remote> aktuell · 0 hochgeladen“.
 - [ ] Ein nicht vorhandener Remote-Ordner (vorher im Terminal löschen): der Dialog meldet „Starten fehlgeschlagen“.
 - [ ] „Beenden“: die Leiste verschwindet; eine danach gespeicherte Datei wird nicht hochgeladen.
 - [ ] Tab schließen beendet es ebenfalls.
@@ -21,7 +21,7 @@ denselben Host.
 - [ ] Lokal eine Datei löschen: sie bleibt auf dem Server.
 
 ## Fehler
-- [ ] Den lokalen Ordner umbenennen: die Leiste zeigt rot „Lokaler Ordner nicht lesbar …“. Zurück umbenennen: der
+- [ ] Den lokalen Ordner umbenennen: die Leiste zeigt rot „Fehler: …“. Zurück umbenennen: der
       Fehler verschwindet, Änderungen werden wieder hochgeladen.
 - [ ] Verbindung trennen (z. B. Netzwerk aus), lokal speichern, Verbindung zurück: nach dem Reconnect wird
       hochgeladen.
