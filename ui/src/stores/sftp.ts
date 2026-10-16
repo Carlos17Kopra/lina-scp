@@ -66,6 +66,8 @@ export interface SftpTab {
   active: Side;
   /** "Aktuell halten" is running (TP4c). */
   keep?: { localDir: string; remoteDir: string; uploaded: number; error: CoreError | null };
+  /** Events of runs below this are late ones of a stopped or replaced "Aktuell halten". */
+  keepRun?: number;
 }
 
 export interface SftpState {
@@ -198,7 +200,7 @@ export const useSftpStore = create<SftpState>()((set, get) => {
     stopKeep: (tabId) => {
       const tab = findTab(tabId);
       if (!tab) return;
-      patchTab(tabId, () => ({ keep: undefined }));
+      patchTab(tabId, (x) => ({ keep: undefined, keepRun: (x.keepRun ?? 0) + 1 }));
       fireAndForget(() => keepStop(tab.sessionId));
     },
 
@@ -212,8 +214,9 @@ export const useSftpStore = create<SftpState>()((set, get) => {
           useEditsStore.getState().onEvent(tabId, event.event);
           return;
         case "keep": {
-          const { kind: _, ...keep } = event.event;
-          patchTab(tabId, () => ({ keep }));
+          const { kind: _, run, ...keep } = event.event;
+          if (run < (findTab(tabId)?.keepRun ?? 0)) return;
+          patchTab(tabId, () => ({ keep, keepRun: run }));
           return;
         }
         case "transfer":

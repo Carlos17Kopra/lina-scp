@@ -42,7 +42,7 @@ export function KeepDialog(props: { sessionId: string; hostId: string; localDir:
     >
       <p className={styles.status}>{texts.hint}</p>
       <TextField label={t.sftp.sync.exclude} mono spellCheck={false} placeholder={t.sftp.sync.excludePlaceholder} value={exclude} onChange={setExclude} />
-      {error ? <p role="alert" className={styles.error}>{`${texts.failed}: ${reasonOf(error)}`}</p> : null}
+      {error ? <p role="alert" className={styles.error}>{`${texts.startFailed}: ${reasonOf(error)}`}</p> : null}
     </Dialog>
   );
 }

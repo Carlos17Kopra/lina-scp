@@ -356,8 +356,8 @@ export type KbdPrompt = {
 };
 
 export type KeepEvent = 
-/**  On start and on every change. */
-{ kind: "state"; localDir: string; remoteDir: string; uploaded: number; error: CoreError | null };
+/**  On start and on every change. `run` tells the events of one start from those of an earlier one. */
+{ kind: "state"; run: number; localDir: string; remoteDir: string; uploaded: number; error: CoreError | null };
 
 /**  What a symlink points to; `None` in `EntryKind::Symlink` = dangling or unreadable. */
 export type LinkTarget = "file" | "dir" | "other";

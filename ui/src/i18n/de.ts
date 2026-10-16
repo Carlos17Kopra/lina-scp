@@ -535,9 +535,9 @@ export const t = {
       title: "Remote-Ordner aktuell halten",
       hint: "Lokale Änderungen werden ab jetzt hochgeladen. Gelöschtes bleibt auf dem Server.",
       start: "Starten",
-      failed: "Starten fehlgeschlagen",
-      bar: (remote: string, n: number) => `Hält ${remote} aktuell · ${n} übertragen`,
-      readFailed: (reason: string) => `Lokaler Ordner nicht lesbar: ${reason}`,
+      startFailed: "Starten fehlgeschlagen",
+      bar: (remote: string, n: number) => `Hält ${remote} aktuell · ${n} hochgeladen`,
+      failed: (reason: string) => `Fehler: ${reason}`,
       stop: "Beenden",
     },
     sync: {

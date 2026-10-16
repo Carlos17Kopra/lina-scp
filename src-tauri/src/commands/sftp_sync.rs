@@ -118,11 +118,11 @@ pub(crate) async fn keep_start_inner(
     exclude: Vec<String>,
 ) -> Result<()> {
     let entry = lookup(state, session_id)?;
-    lock(&entry.keep).take();
+    // A start that fails leaves the running one alone; a new one replaces it.
     let handle =
         keep_up_to_date(entry.queue.clone(), local_dir, remote_dir, exclude, KEEP_POLL, entry.keep_emit.clone())
             .await?;
-    *lock(&entry.keep) = Some(handle);
+    lock(&entry.keep).replace(handle);
     Ok(())
 }
 

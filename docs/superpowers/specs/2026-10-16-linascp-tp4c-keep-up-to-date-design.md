@@ -26,14 +26,18 @@ Nicht enthalten:
   gemerkt) und den Hinweis „Lokale Änderungen werden ab jetzt hochgeladen. Gelöschtes bleibt auf dem Server.“
   „Starten“ beginnt.
 - Solange es läuft, steht über dem Übertragungs-Panel eine Leiste: „Hält <remote> aktuell · N hochgeladen“ und
-  „Beenden“. Ein Fehler beim Lesen des lokalen Ordners steht rot in der Leiste; es wird weiter versucht.
+  „Beenden“. N zählt fertig hochgeladene Dateien. Ein Fehler (lokaler Ordner nicht lesbar, Einreihen fehlgeschlagen)
+  steht rot in der Leiste; es wird weiter versucht.
+- Der Knopf ist auch aus, solange das lokale Panel keinen Ordner hat. Ein neuer Start ersetzt den laufenden erst,
+  wenn er gelungen ist.
 - Je SFTP-Tab läuft höchstens ein „Aktuell halten“. Es endet mit „Beenden“ und beim Schließen des Tabs.
   Bei einem Verbindungsabbruch läuft es weiter; die Queue überträgt nach dem Reconnect.
 
 ## 2. Ablauf (Core, `crates/core/src/transfer/keep.rs`)
 
 - Start: lokalen Baum lesen (`walk` aus TP4b, mit Ausschlüssen) als Ausgangsstand, Remote-Baum lesen als bekannter
-  Serverstand. Schlägt eins davon fehl, schlägt der Start fehl.
+  Serverstand. Ist ein lokaler Ordner auf dem Server ein Link auf einen Ordner, zählt er als dieser Ordner (sein
+  Inhalt wird mitgelesen, eine Ebene tief). Schlägt eins davon fehl, schlägt der Start fehl.
 - Alle 2 s: lokalen Baum neu lesen.
   - Eine Datei ist bereit, wenn ihr Stand (Größe, Änderungszeit) anders ist als der zuletzt hochgeladene bzw.
     der Ausgangsstand und sich seit dem letzten Lesen nicht mehr geändert hat (ein Takt Ruhe, damit halb
@@ -42,11 +46,15 @@ Nicht enthalten:
     darin sich im letzten Takt geändert hat. Einträge darunter zählen dann als hochgeladen.
   - Die bereiten Einträge gehen über `enqueue_sync` in die Queue, mit dem bekannten Serverstand als `expected`:
     ist das Ziel noch so, wird ohne Frage überschrieben; sonst öffnet sich der normale Konfliktdialog.
-  - Danach gilt der lokale Stand als hochgeladen und als bekannter Serverstand (Uploads übernehmen die
-    Änderungszeit).
+  - Ein Eintrag ist bis zum Ende seines Auftrags „unterwegs“: er und alles darunter wird nicht erneut eingereiht,
+    so schreiben nie zwei Aufträge dasselbe Ziel. Eine zweite Änderung währenddessen geht danach hoch.
+  - Ist der Auftrag fertig, wird der Serverstand neu gelesen (`stat`) und gilt als bekannter Serverstand.
+    Fehlgeschlagene, übersprungene oder abgebrochene Einträge ändern den bekannten Serverstand nicht und werden
+    erst bei der nächsten lokalen Änderung wieder versucht (die Übertragungsliste bietet „Wiederholen“).
 - Ein Lesefehler lokal: Zustand „Fehler“ mit dem Fehler, alter Stand bleibt, nächster Takt versucht es wieder.
   Ein Fehler beim Einreihen ebenso.
-- Ereignis `KeepEvent::State { local_dir, remote_dir, uploaded, error }` bei jeder Änderung.
+- Ereignis `KeepEvent::State { run, local_dir, remote_dir, uploaded, error }` bei jeder Änderung. `run` ist je
+  Start neu; die UI verwirft späte Ereignisse eines beendeten oder ersetzten Laufs.
 
 ## 3. Tauri
 
@@ -58,7 +66,8 @@ Nicht enthalten:
 
 - Eine Serverdatei, die sich seit dem letzten bekannten Stand geändert hat, wird nie still überschrieben.
 - Es wird nie etwas gelöscht.
-- Halb geschriebene Dateien (Stand ändert sich noch) werden nicht übertragen.
+- Eine Datei wird erst hochgeladen, wenn ihr Stand einen Takt lang gleich blieb. Grenze: Zeiten in Sekunden; wer
+  die Größe vorab festlegt (fallocate) oder in derselben Sekunde weiterschreibt, sieht stabil aus.
 
 ## 5. Tests
 

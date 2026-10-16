@@ -93,7 +93,7 @@ bun run tauri build               # .deb + .AppImage in target/release/bundle/
 - **Sync (TP4b):** a target changed since the compare is never silently overwritten or deleted; an unreadable
   directory aborts the compare and never counts as empty; local sync deletes go to the trash.
 - **Keep up to date (TP4c):** never deletes; a server file changed since its last known state is never silently
-  overwritten; a file still changing is not uploaded.
+  overwritten; two jobs never write the same target; a file goes up only after one quiet poll.
 
 ## Workflow
 
