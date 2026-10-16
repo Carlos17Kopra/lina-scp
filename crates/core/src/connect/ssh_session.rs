@@ -1,7 +1,8 @@
 //! Interactive SSH shell session (implements `Session`).
 
-use std::sync::Arc;
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
 
 use russh::client::{self, Msg};
 use russh::{Channel, ChannelMsg, ChannelReadHalf, ChannelWriteHalf, Disconnect};
@@ -12,11 +13,12 @@ use super::classify::{map_russh_error, network_error};
 use super::handler::ClientHandler;
 use crate::error::{CoreError, NetworkKind, Result};
 use crate::session::{OutputSink, Session, SessionEvent, spawn_guarded};
+use crate::tunnel::{TunnelLink, TunnelStream};
 
 /// A shell channel plus the connection(s) that carry it.
 pub struct SshSession {
     writer: ChannelWriteHalf<Msg>,
-    handle: client::Handle<ClientHandler>,
+    handle: Arc<client::Handle<ClientHandler>>,
     /// Keeps the jump host connection (and thus the tunnel) alive.
     jump: Option<client::Handle<ClientHandler>>,
     reader: AbortHandle,
@@ -42,12 +44,57 @@ impl SshSession {
         let ended = Arc::new(AtomicBool::new(false));
         let reader =
             spawn_guarded(forward_output(read_half, sink.clone(), closing.clone(), ended.clone()), sink.clone());
-        Self { writer, handle, jump, reader, info, sink, closing, ended }
+        Self { writer, handle: Arc::new(handle), jump, reader, info, sink, closing, ended }
+    }
+
+    /// This connection for port forwards. It does not keep the connection alive.
+    pub fn link(&self) -> Arc<dyn TunnelLink> {
+        Arc::new(SshLink { handle: Arc::downgrade(&self.handle) })
     }
 
     /// Negotiated algorithms, host key and auth methods of this connection.
     pub fn info(&self) -> &SessionInfo {
         &self.info
+    }
+}
+
+struct SshLink {
+    handle: Weak<client::Handle<ClientHandler>>,
+}
+
+impl SshLink {
+    fn handle(&self) -> Result<Arc<client::Handle<ClientHandler>>> {
+        self.handle
+            .upgrade()
+            .filter(|handle| !handle.is_closed())
+            .ok_or_else(|| network_error(NetworkKind::Other, "nicht verbunden"))
+    }
+}
+
+#[async_trait::async_trait]
+impl TunnelLink for SshLink {
+    async fn open_direct(&self, host: &str, port: u16, origin: SocketAddr) -> Result<TunnelStream> {
+        let channel = self
+            .handle()?
+            .channel_open_direct_tcpip(host, u32::from(port), origin.ip().to_string(), u32::from(origin.port()))
+            .await
+            .map_err(map_russh_error)?;
+        Ok(Box::new(channel.into_stream()))
+    }
+
+    async fn request_remote(&self, host: &str, port: u16) -> Result<u16> {
+        let granted = self.handle()?.tcpip_forward(host, u32::from(port)).await.map_err(|e| match e {
+            russh::Error::RequestDenied => {
+                network_error(NetworkKind::Other, format!("der Server verweigert die Weiterleitung von {host}:{port}"))
+            }
+            other => map_russh_error(other),
+        })?;
+        // The server only names the port when it picked one (port 0).
+        Ok(if port == 0 { u16::try_from(granted).unwrap_or(0) } else { port })
+    }
+
+    async fn cancel_remote(&self, host: &str, port: u16) -> Result<()> {
+        self.handle()?.cancel_tcpip_forward(host, u32::from(port)).await.map_err(map_russh_error)
     }
 }
 

@@ -142,6 +142,7 @@ pub(crate) fn connect_deps_in(env: &ConnectEnv) -> ConnectDeps {
         known_hosts: KnownHosts::new(env.paths.known_hosts()),
         secrets: env.secrets.clone(),
         agent_sock: std::env::var_os("SSH_AUTH_SOCK").map(PathBuf::from),
+        forwarded: None,
     }
 }
 

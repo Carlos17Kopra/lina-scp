@@ -7,7 +7,7 @@
 use std::ops::RangeInclusive;
 
 use crate::error::{CoreError, Result};
-use crate::model::{AuthConfig, Host, HostAuth, LoginProfile, Snippet};
+use crate::model::{AuthConfig, ForwardKind, Host, HostAuth, LoginProfile, PortForward, Snippet};
 
 /// True when `value` can be written into one ssh_config line: no control characters
 /// (including `\n`, `\r`, `\t`) and no `"`.
@@ -106,10 +106,68 @@ pub fn validate_host(host: &Host) -> Result<()> {
         return Err(CoreError::config("Upload-Rechte: Oktal angeben, z. B. 0644"));
     }
     sftp_server_command(host)?;
+    for forward in &host.forwards {
+        parse_forward(forward)?;
+    }
     match &host.auth {
         HostAuth::Custom { auth } => check_auth(auth),
         HostAuth::Profile { .. } => Ok(()),
     }
+}
+
+/// One side of a port forward: host (IPv6 without brackets) and port.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Endpoint {
+    pub host: String,
+    pub port: u16,
+}
+
+/// A checked port-forward rule. `target` is `None` for dynamic (SOCKS) forwards.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForwardSpec {
+    pub kind: ForwardKind,
+    pub bind: Endpoint,
+    pub target: Option<Endpoint>,
+}
+
+/// Parses `[host:]port` (IPv6 in brackets). Without a host, `default_host` is used; `None` makes it required.
+fn endpoint(field: &str, text: &str, default_host: Option<&str>, allow_zero: bool) -> Result<Endpoint> {
+    let invalid = || CoreError::config(format!("{field}: [Adresse:]Port angeben, z. B. 127.0.0.1:8080"));
+    let text = text.trim();
+    let (host, port) = if let Some(rest) = text.strip_prefix('[') {
+        let (host, port) = rest.split_once("]:").ok_or_else(invalid)?;
+        (Some(host), port)
+    } else {
+        match text.rsplit_once(':') {
+            Some((host, port)) => (Some(host), port),
+            None => (None, text),
+        }
+    };
+    let host = match host {
+        Some(host) => host,
+        None => default_host.ok_or_else(invalid)?,
+    };
+    if host.is_empty() || host.len() > 255 || host.chars().any(char::is_whitespace) || !is_safe_value(host) {
+        return Err(invalid());
+    }
+    check_text(field, host)?;
+    let port: u16 = port.parse().map_err(|_| invalid())?;
+    if port == 0 && !allow_zero {
+        return Err(CoreError::config(format!("{field}: Port muss zwischen 1 und 65535 liegen")));
+    }
+    Ok(Endpoint { host: host.to_string(), port })
+}
+
+/// Checks a port-forward rule. Without an address, local listeners bind to loopback only (like OpenSSH without
+/// `GatewayPorts`); a remote forward asks for `localhost` and may use port 0 (the server picks one).
+pub fn parse_forward(forward: &PortForward) -> Result<ForwardSpec> {
+    let (bind, target) = match forward.kind {
+        ForwardKind::Local => (endpoint("Bind-Adresse", &forward.bind, Some("127.0.0.1"), false)?, true),
+        ForwardKind::Dynamic => (endpoint("Bind-Adresse", &forward.bind, Some("127.0.0.1"), false)?, false),
+        ForwardKind::Remote => (endpoint("Bind-Adresse", &forward.bind, Some("localhost"), true)?, true),
+    };
+    let target = if target { Some(endpoint("Ziel", &forward.target, None, false)?) } else { None };
+    Ok(ForwardSpec { kind: forward.kind, bind, target })
 }
 
 /// The host's SFTP server command, trimmed; `None` = the `sftp` subsystem. Run with `exec`, so one line only.
@@ -190,6 +248,52 @@ mod tests {
         for good in ["a", ".hidden", "with space", "ümlaut.txt", "a..b"] {
             assert!(validate_file_name(good).is_ok(), "{good:?} rejected");
         }
+    }
+
+    fn rule(kind: ForwardKind, bind: &str, target: &str) -> PortForward {
+        PortForward { id: uuid::Uuid::nil(), kind, bind: bind.into(), target: target.into(), autostart: false }
+    }
+
+    fn ep(host: &str, port: u16) -> Endpoint {
+        Endpoint { host: host.into(), port }
+    }
+
+    #[test]
+    fn forwards_default_to_loopback_and_take_ipv6_in_brackets() {
+        let local = parse_forward(&rule(ForwardKind::Local, "8080", "localhost:80")).unwrap();
+        assert_eq!((local.bind, local.target), (ep("127.0.0.1", 8080), Some(ep("localhost", 80))));
+        let remote = parse_forward(&rule(ForwardKind::Remote, " 0 ", "[::1]:22")).unwrap();
+        assert_eq!((remote.bind, remote.target), (ep("localhost", 0), Some(ep("::1", 22))));
+        let socks = parse_forward(&rule(ForwardKind::Dynamic, "[::1]:1080", "ignored")).unwrap();
+        assert_eq!((socks.bind, socks.target), (ep("::1", 1080), None));
+        let any = parse_forward(&rule(ForwardKind::Local, "0.0.0.0:8080", "db:5432")).unwrap();
+        assert_eq!(any.bind, ep("0.0.0.0", 8080));
+    }
+
+    #[test]
+    fn broken_forwards_are_rejected() {
+        for (kind, bind, target) in [
+            (ForwardKind::Local, "", "a:1"),
+            (ForwardKind::Local, "0", "a:1"),
+            (ForwardKind::Local, "70000", "a:1"),
+            (ForwardKind::Local, "8080", ""),
+            (ForwardKind::Local, "8080", "a"),
+            (ForwardKind::Local, "8080", "a:0"),
+            (ForwardKind::Local, "8080", ":80"),
+            (ForwardKind::Local, "a b:8080", "a:1"),
+            (ForwardKind::Local, "[::1:8080", "a:1"),
+            (ForwardKind::Remote, "x:y", "a:1"),
+            (ForwardKind::Dynamic, "0", ""),
+            (ForwardKind::Local, "8080", "a'b:1"),
+        ] {
+            assert!(
+                matches!(parse_forward(&rule(kind, bind, target)), Err(CoreError::Config { .. })),
+                "{kind:?} {bind:?} {target:?} accepted"
+            );
+        }
+        let mut host = Host::new("web", "web.example.org");
+        host.forwards.push(rule(ForwardKind::Local, "8080", "nowhere"));
+        assert!(validate_host(&host).is_err());
     }
 
     fn key_auth(path: &str) -> AuthConfig {

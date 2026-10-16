@@ -23,6 +23,8 @@ use tokio::net::TcpStream;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
+use crate::tunnel::ForwardRoutes;
+
 pub use classify::{classify_io, classify_resolve_error, map_russh_error, network_error, sanitize_log_line};
 pub use handler::{ClientHandler, HandlerError, HostKeyAction, decide_host_key};
 pub use prompt::{EmitFn, HostKeyDecision, KbdPrompt, Prompt, PromptAnswer, PromptBroker};
@@ -137,6 +139,8 @@ pub struct ConnectDeps {
     pub known_hosts: KnownHosts,
     pub secrets: Arc<dyn SecretStore>,
     pub agent_sock: Option<PathBuf>,
+    /// Routes for remote port forwards (terminal sessions with tunnels); `None` rejects every forwarded channel.
+    pub forwarded: Option<ForwardRoutes>,
 }
 
 /// Steps shown in the loading screen. `JumpHost` only with a jump host.
@@ -200,6 +204,7 @@ struct Pipeline {
     broker: Arc<PromptBroker>,
     emit: EmitFn,
     cancel: CancellationToken,
+    forwarded: Option<ForwardRoutes>,
 }
 
 /// An authenticated connection to the target (plus jump connection).
@@ -215,6 +220,7 @@ impl Pipeline {
             known_hosts: Arc::new(deps.known_hosts),
             secrets: deps.secrets,
             agent_sock: deps.agent_sock,
+            forwarded: deps.forwarded,
             broker,
             emit,
             cancel,
@@ -309,6 +315,7 @@ impl Pipeline {
         host: &Host,
         stream: Box<dyn Transport>,
         negotiated: InfoSlot,
+        forwarded: Option<ForwardRoutes>,
     ) -> Result<client::Handle<ClientHandler>> {
         let key_seen = Arc::new(Notify::new());
         let handler = ClientHandler::new(
@@ -320,7 +327,8 @@ impl Pipeline {
             self.cancel.clone(),
             key_seen.clone(),
             negotiated,
-        );
+        )
+        .with_forwarded(forwarded);
         // Like OpenSSH: offer the key types known_hosts already holds for this host first, so a
         // host known only by e.g. its ecdsa/rsa key negotiates that type and verifies as Known.
         // A read error only loses the ordering; `check` reports it (fail closed) during kex.
@@ -370,7 +378,7 @@ impl Pipeline {
     async fn connect_jump(&self, jump: &ConnectTarget) -> Result<client::Handle<ClientHandler>> {
         self.log(format!("debug1: Connecting to jump host {}", jump.host.address));
         let stream = self.tcp_connect(&jump.host).await?;
-        let mut handle = self.handshake(&jump.host, Box::new(stream), InfoSlot::default()).await?;
+        let mut handle = self.handshake(&jump.host, Box::new(stream), InfoSlot::default(), None).await?;
         self.authenticate(&mut handle, jump).await?;
         Ok(handle)
     }
@@ -422,7 +430,8 @@ impl Pipeline {
             })
             .await?;
         let negotiated = InfoSlot::default();
-        let mut handle = self.step(Step::HostKey, self.handshake(host, stream, negotiated.clone())).await?;
+        let mut handle =
+            self.step(Step::HostKey, self.handshake(host, stream, negotiated.clone(), self.forwarded.clone())).await?;
         let auth_methods = self.step(Step::Auth, self.authenticate(&mut handle, &req.target)).await?;
         let mut info = negotiated.lock().unwrap_or_else(PoisonError::into_inner).clone();
         info.auth_methods = auth_methods;
@@ -731,6 +740,7 @@ mod pipeline_tests {
             known_hosts: KnownHosts::new(dir.join("known_hosts")),
             secrets: Arc::new(MemorySecretStore::new()),
             agent_sock: None,
+            forwarded: None,
         }
     }
 
