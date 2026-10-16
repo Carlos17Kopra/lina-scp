@@ -209,7 +209,8 @@ impl EditManager {
                 dir: dir.clone(),
                 copy: copy.clone(),
                 remote: Some(stamp(&node)),
-                remote_mode: node.mode.unwrap_or(0) & 0o777,
+                // ponytail: a server that sends no mode gets the common 0644, never 000.
+                remote_mode: node.mode.unwrap_or(0o644) & 0o777,
                 synced: None,
                 hold: None,
                 decision: None,

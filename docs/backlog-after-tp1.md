@@ -145,3 +145,23 @@ fixed before the merge are not listed.
 - `validate_user` is stricter than the host editor (also rejects spaces and empty values); fix its doc comment or
   apply the space rule to `validate_host` too (a behaviour change for existing hosts).
 - Keepalive ≤ 3600 / timeout ≤ 600 apply only to the new-host defaults; the host editor allows larger values.
+
+## Deferred from the TP6a review
+
+- Settings store: `load()` during a pending save shows the loaded state without the pending patches until the save
+  ends (a BlurField being typed in is reset); a save step that starts between `importApply` and the reload sends
+  the pre-import state. Set `settings: shown()` in `load` and run the reload in the save chain.
+- Settings store: pending patches are removed by object identity; saving the same object twice drops both from the
+  optimistic view (all callers pass fresh literals today).
+- `apply_ssh_mode` runs before the settings transaction; a failed transaction leaves the mirror switched.
+- chmod with an unknown mode: an exact change drops setuid/setgid/sticky; a recursive relative change on a folder
+  with an unknown mode does not visit its children.
+- Keep: a failed batch stats every ancestor of every failed entry serially inside the poll loop; cache per folder.
+- Tunnels: a late answer of an older `attach` clears `requesting` (a start in that window requests again; the token
+  check cancels the extra grant); `request_remote` has no timeout.
+- Release workflow: several leftover drafts for one tag are not all removed; a re-run after publishing may turn the
+  release back into a draft (softprops behaviour, unverified). Fail the job when the release is already published.
+- TerminalView: an addon registered by `loadAddon` before `activate` threw is disposed again with the terminal.
+- `pointsTo` without `/.ssh/` in the key path cuts the last character (listed keys always live in `~/.ssh`).
+- Editing a file whose server sends no mode uploads it as 0644 (not 000); not setting a mode at all needs a queue
+  option.
