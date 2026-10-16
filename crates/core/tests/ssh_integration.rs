@@ -735,4 +735,104 @@ mod transfers {
         queue.close().await;
         session.close().await;
     }
+
+    #[tokio::test]
+    #[ignore = "requires docker"]
+    async fn a_frozen_link_reconnects_and_the_upload_finishes_identical() {
+        use linascp_core::connect::{ConnConnector, ConnStatus, PromptBroker, Reconnecting, SftpSession};
+        let c = Container::start(None);
+        let env = Arc::new(Env::new());
+        let mut h = host(c.port, "pwuser", AuthMethod::Password, None);
+        h.keepalive_s = 1;
+        h.timeout_s = 3;
+        env.store_password(&h, "pwpass");
+        // Trust the host key once (interactive), so the non-interactive attempts can connect.
+        let (first, home, _) = sftp(&env, h.clone(), Arc::new(|_| {})).await;
+        first.close().await;
+
+        let (events, record) = recorder();
+        // Freeze the server inside the first progress callback: it runs on the copy path, so the
+        // file cannot finish before the container is paused (a local upload outruns any polling).
+        let frozen = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let emit: linascp_core::transfer::TransferEmit = {
+            let (frozen, id) = (frozen.clone(), c.id.clone());
+            Arc::new(move |e| {
+                if matches!(e, TransferEvent::Progress { .. })
+                    && !frozen.swap(true, std::sync::atomic::Ordering::SeqCst)
+                {
+                    let pause = std::process::Command::new("docker").args(["pause", &id]).output().unwrap();
+                    assert!(pause.status.success(), "{pause:?}");
+                }
+                record(e)
+            })
+        };
+        let queue = TransferQueue::new(Arc::new(LocalSide), TransferOptions { parallel: 1, upload_mode: None }, emit);
+        let statuses: Arc<Mutex<Vec<ConnStatus>>> = Arc::default();
+        let connector: ConnConnector<SftpSession> = {
+            let (env, h) = (env.clone(), h.clone());
+            Arc::new(move |lost, cancel| {
+                let (env, h) = (env.clone(), h.clone());
+                Box::pin(async move {
+                    let broker = Arc::new(PromptBroker::non_interactive());
+                    let (s, _) =
+                        connect_sftp(request(h, None), env.deps(None), broker, Arc::new(|_| {}), lost, cancel).await?;
+                    Ok(Arc::new(s))
+                })
+            })
+        };
+        let rc = Reconnecting::new(
+            connector.clone(),
+            Arc::new(|| true),
+            {
+                let s = statuses.clone();
+                Arc::new(move |st| s.lock().unwrap().push(st))
+            },
+            {
+                let q = queue.clone();
+                Arc::new(move |conn: Option<Arc<SftpSession>>| q.set_remote(conn.map(|c| c as Arc<dyn Side>)))
+            },
+        );
+        let (generation, lost) = rc.begin();
+        let session = connector(lost, CancellationToken::new()).await.expect("connected");
+        rc.attach(generation, session);
+
+        let local = tempfile::tempdir().unwrap();
+        let data: Vec<u8> = (0..(64 * 1024 * 1024)).map(|i| (i % 249) as u8).collect();
+        std::fs::write(local.path().join("big.bin"), &data).unwrap();
+        queue
+            .enqueue(Direction::Upload, vec![local.path().join("big.bin").to_str().unwrap().into()], home.path.clone())
+            .await
+            .unwrap();
+        // Keep it frozen for longer than timeout + keepalive.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !frozen.load(std::sync::atomic::Ordering::SeqCst) {
+            assert!(std::time::Instant::now() < deadline, "no progress: {:?}", events.lock().unwrap());
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+        let _ = std::process::Command::new("docker").args(["unpause", &c.id]).output();
+        wait_batch_done(&events, 1, 120).await;
+        assert!(
+            statuses.lock().unwrap().iter().any(|s| matches!(s, ConnStatus::Reconnected { .. })),
+            "{:?}",
+            statuses.lock().unwrap()
+        );
+        assert!(
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| matches!(e, TransferEvent::Job { job } if job.state == JobState::Paused))
+        );
+        assert_eq!(states(&events), vec![("big.bin".to_string(), JobState::Done)]);
+        let back = tempfile::tempdir().unwrap();
+        queue
+            .enqueue(Direction::Download, vec![format!("{}/big.bin", home.path)], back.path().to_str().unwrap().into())
+            .await
+            .unwrap();
+        wait_batch_done(&events, 2, 120).await;
+        assert!(std::fs::read(back.path().join("big.bin")).unwrap() == data, "content differs after resume");
+        queue.close().await;
+        rc.close().await;
+    }
 }

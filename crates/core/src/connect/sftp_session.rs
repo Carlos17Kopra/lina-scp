@@ -269,6 +269,16 @@ impl SftpSession {
     }
 }
 
+#[async_trait::async_trait]
+impl super::sftp_reconnect::Connection for SftpSession {
+    fn info(&self) -> SessionInfo {
+        self.info.clone()
+    }
+    async fn close(&self) {
+        SftpSession::close(self).await;
+    }
+}
+
 impl Drop for SftpSession {
     fn drop(&mut self) {
         self.watcher.abort();

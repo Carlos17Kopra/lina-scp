@@ -5,6 +5,7 @@ pub mod classify;
 pub mod handler;
 pub mod prompt;
 pub mod reconnect;
+pub mod sftp_reconnect;
 mod sftp_session;
 pub mod ssh_session;
 
@@ -26,6 +27,7 @@ pub use classify::{classify_io, classify_resolve_error, map_russh_error, network
 pub use handler::{ClientHandler, HandlerError, HostKeyAction, decide_host_key};
 pub use prompt::{EmitFn, HostKeyDecision, KbdPrompt, Prompt, PromptAnswer, PromptBroker};
 pub use reconnect::{BACKOFF_SECS, ConnectFuture, Connector, Enabled, MAX_ATTEMPTS, ReconnectingSession, is_fatal};
+pub use sftp_reconnect::{ChangeFn, ConnConnector, ConnFuture, ConnStatus, Connection, Reconnecting, StatusFn};
 pub use sftp_session::{LostFn, SftpSession};
 pub use ssh_session::SshSession;
 
