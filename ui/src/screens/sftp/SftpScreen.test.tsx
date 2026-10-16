@@ -210,7 +210,7 @@ describe("SftpScreen", () => {
     const dialog = screen.getByRole("dialog", { name: "Eigenschaften" });
     await userEvent.click(within(dialog).getByRole("checkbox", { name: "Besitzer: Ausführen" }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Übernehmen" }));
-    expect(api.sftpChmod).toHaveBeenCalledWith("s1", ["/srv/a.sh"], { set: 0o744, clear: 0o033 }, false);
+    expect(api.sftpChmod).toHaveBeenCalledWith("s1", ["/srv/a.sh"], { set: 0o100, clear: 0 }, false);
     await vi.waitFor(() => expect(screen.queryByRole("dialog", { name: "Eigenschaften" })).not.toBeInTheDocument());
     expect(api.sftpList).toHaveBeenCalledWith("s1", "/srv");
   });

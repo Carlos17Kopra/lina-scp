@@ -70,6 +70,9 @@ pub(crate) async fn copy_range(
     }
     // `buffered` runs the pairs concurrently but yields them in order: each yielded pair extends
     // the contiguous prefix.
+    // With a limit, reserve at most about one second ahead: a cancelled copy's reservations stay on the
+    // shared timeline and would hold up every other file of the tab.
+    let window = limits.pacer.as_ref().map_or(IN_FLIGHT, |p| ((p.rate / CHUNK as u64) as usize).clamp(1, IN_FLIGHT));
     let mut pairs = stream::iter((from..size).step_by(CHUNK))
         .map(|offset| async move {
             let _permit = limits.in_flight.acquire().await.map_err(|_| CoreError::Cancelled)?;
@@ -84,7 +87,7 @@ pub(crate) async fn copy_range(
             }
             Ok::<_, CoreError>((offset, read, len))
         })
-        .buffered(IN_FLIGHT);
+        .buffered(window);
     loop {
         let next = tokio::select! {
             biased;
@@ -304,5 +307,40 @@ mod tests {
         let done = copy_range(&*r, &*w, 0, (CHUNK * 4) as u64, &limits, &CancellationToken::new(), &mut |_| {}).await;
         assert_eq!(done.unwrap(), (CHUNK * 4) as u64);
         assert!(start.elapsed() >= std::time::Duration::from_millis(300), "{:?}", start.elapsed());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_cancelled_copy_does_not_hold_the_shared_timeline() {
+        struct Zeros;
+        #[async_trait::async_trait]
+        impl Reader for Zeros {
+            async fn read_at(&self, _: u64, len: usize) -> Result<Vec<u8>> {
+                Ok(vec![0; len])
+            }
+            async fn close(&self) {}
+        }
+        struct Sink;
+        #[async_trait::async_trait]
+        impl Writer for Sink {
+            async fn write_at(&self, _: u64, _: Vec<u8>) -> Result<()> {
+                Ok(())
+            }
+            async fn close(&self) -> Result<()> {
+                Ok(())
+            }
+        }
+        let limits = Limits::new(IN_FLIGHT, Some(CHUNK as u64));
+        let cancel = CancellationToken::new();
+        let stop = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            stop.cancel();
+        });
+        let result = copy_range(&Zeros, &Sink, 0, (CHUNK * 64) as u64, &limits, &cancel, &mut |_| {}).await;
+        assert!(matches!(result, Err((CoreError::Cancelled, _))));
+        // Another file of the tab gets its turn about one block later, not after 32 reserved blocks.
+        let start = tokio::time::Instant::now();
+        limits.pacer.as_ref().unwrap().take(1).await;
+        assert!(start.elapsed() <= std::time::Duration::from_secs(2), "{:?}", start.elapsed());
     }
 }

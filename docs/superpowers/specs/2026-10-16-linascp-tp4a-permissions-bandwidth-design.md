@@ -49,7 +49,11 @@ Nicht enthalten:
   es nicht anklickt. Ein Klick schaltet es auf an, dann aus. Gemischte Bits bleiben je Eintrag, wie sie sind.
   Solange ein Bit gemischt ist, bleibt das Oktalfeld leer. Eine Eingabe dort setzt alle Bits fest.
 - „Übernehmen“ ist aktiv, sobald sich etwas geändert hat. Danach lädt das Panel neu.
-- Ohne bekannten Modus (z. B. kein `permissions` vom Server) starten alle Kästchen gemischt.
+- Ohne bekannten Modus (z. B. kein `permissions` vom Server) starten alle Kästchen gemischt. Ebenso bei einem
+  Symlink: die Liste zeigt den Modus des Links (`0777`), geändert wird aber das Ziel.
+- Gesendet werden nur die angeklickten Bits; alle anderen bleiben je Eintrag. So setzt „Gruppe: Schreiben“ rekursiv
+  nur dieses Bit und macht keine Datei ausführbar. Nach einer Eingabe im Oktalfeld gilt der ganze Modus, ebenso wenn
+  nur „rekursiv“ angehakt und nichts angeklickt wurde (den gezeigten Modus nach unten übernehmen).
 
 ### Regeln
 
@@ -64,9 +68,10 @@ Nicht enthalten:
     Baums berührt wird.
 - Fehler: Ein Eintrag, der nicht geändert werden kann, bricht nicht ab. Am Ende meldet das Panel „N Einträge
   konnten nicht geändert werden“ mit dem ersten Pfad und Grund. Ein Verbindungsverlust bricht ab.
-- Reihenfolge rekursiv: erst die Kinder auflisten, dann die Kinder ändern,
-  zuletzt den Ordner (so geht ein Entzug von `r`/`x` nicht vor dem Abstieg verloren). Schlägt das Auflisten fehl,
-  wird erst der Ordner geändert und dann erneut aufgelistet (so wirkt ein Gewähren von `r`/`x`).
+- Reihenfolge rekursiv: Gewährt der neue Modus dem Besitzer `r` oder `x`, die vorher fehlten, wird erst der Ordner
+  geändert, dann abgestiegen (ein `0644`-Ordner lässt sich auflisten, aber nicht betreten). Sonst erst die Kinder,
+  zuletzt der Ordner (so geht ein Entzug von `r`/`x` nicht vor dem Abstieg verloren). Schlägt das Auflisten fehl,
+  wird erst der Ordner geändert und dann erneut aufgelistet.
 - Lokal gilt dasselbe (`std::fs::set_permissions`, Abstieg mit `symlink_metadata`).
 
 ### Core
@@ -93,7 +98,9 @@ Nicht enthalten:
   das Zurückladen beim Bearbeiten.
 - Umsetzung: `TransferOptions` bekommt `bandwidth: Option<u64>` (Bytes/s). Die Queue hält einen Taktgeber
   (`Pacer`): Jeder Block reserviert vor dem Lesen `len / rate` Sekunden auf einer gemeinsamen Zeitachse und wartet,
-  bis sein Platz dran ist. Kein Burst über einen Block hinaus. Ein Abbruch unterbricht das Warten.
+  bis sein Platz dran ist. Kein Burst über einen Block hinaus. Ein Abbruch unterbricht das Warten. Mit Limit reserviert
+  jede Datei höchstens etwa eine Sekunde im Voraus (`rate / CHUNK` Blöcke, mindestens 1), damit die Reservierungen
+  einer abgebrochenen Datei die anderen nicht aufhalten.
 - Eine Änderung am Host wirkt für neu geöffnete SFTP-Tabs (wie Parallelität und Rechte beim Upload heute).
 
 ## 3. SFTP-Server-Befehl

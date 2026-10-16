@@ -13,7 +13,8 @@ const BITS = Array.from({ length: 9 }, (_, i) => 1 << (8 - i));
 
 function initialBits(entries: readonly Entry[]): Bit[] {
   return BITS.map((bit) => {
-    const set = entries.map((e) => (e.mode === null ? null : (e.mode & bit) !== 0));
+    // A listed symlink carries its own mode (0777), not its target's, which is what a change applies to.
+    const set = entries.map((e) => (e.mode === null || e.kind.type === "symlink" ? null : (e.mode & bit) !== 0));
     if (set.some((s) => s === null)) return "mixed";
     return set.every(Boolean) ? true : set.some(Boolean) ? "mixed" : false;
   });
@@ -25,8 +26,12 @@ function octalOf(bits: readonly Bit[]): string {
   return `0${value.toString(8).padStart(3, "0")}`;
 }
 
-function changeOf(bits: readonly Bit[]): ModeChange {
-  const mask = (want: boolean) => BITS.reduce((sum, bit, i) => (bits[i] === want ? sum | bit : sum), 0);
+/** Only the clicked bits, so a recursive change leaves everything else per entry; the whole shown mode after an
+ * octal entry, or when nothing was clicked (recursive "apply this mode below"). */
+function changeOf(bits: readonly Bit[], initial: readonly Bit[], whole: boolean): ModeChange {
+  const edited = bits.some((b, i) => b !== initial[i]);
+  const counts = (i: number) => whole || !edited || bits[i] !== initial[i];
+  const mask = (want: boolean) => BITS.reduce((sum, bit, i) => (bits[i] === want && counts(i) ? sum | bit : sum), 0);
   return { set: mask(true), clear: mask(false) };
 }
 
@@ -42,6 +47,7 @@ export function PermissionsDialog({ entries, onSubmit, onClose }: {
   const [bits, setBits] = useState(initial);
   const [octal, setOctal] = useState(() => octalOf(initial));
   const [octalError, setOctalError] = useState(false);
+  const [whole, setWhole] = useState(false);
   const [recursive, setRecursive] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,13 +68,14 @@ export function PermissionsDialog({ entries, onSubmit, onClose }: {
     if (valid) {
       const value = parseInt(text, 8);
       setBits(BITS.map((bit) => (value & bit) !== 0));
+      setWhole(true);
     }
   };
   const submit = async () => {
     setBusy(true);
     setError(null);
     try {
-      const report = await onSubmit(changeOf(bits), recursive && hasDir);
+      const report = await onSubmit(changeOf(bits, initial, whole), recursive && hasDir);
       if (report.failed === 0 || !report.first) onClose();
       else setError(texts.failed(report.failed, report.first.path, reasonOf(report.first.error)));
     } catch (e) {

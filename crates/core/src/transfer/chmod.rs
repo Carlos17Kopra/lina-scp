@@ -91,8 +91,16 @@ fn visit<'a>(
         if !(recursive && node.kind == NodeKind::Dir && !node.link) {
             return set_mode(side, &path, mode, failures).await;
         }
-        // Children first, so revoking r/x on the directory does not lock out the descent; when the listing is
-        // refused, granting on the directory first may be what makes it readable.
+        // Granting r/x first makes the descent possible (a 0644 folder lists but cannot be entered); otherwise
+        // children first, so revoking r/x does not lock it out. A refused listing still tries the folder first.
+        // ponytail: judged by the owner bits; a group-only grant falls back to the refused-listing path.
+        if (mode & !node.mode) & 0o500 != 0 {
+            set_mode(side, &path, mode, failures).await?;
+            return match side.children(&path).await {
+                Ok(children) => descend(side, &path, children, change, failures).await,
+                Err(error) => keep(error, &path, failures),
+            };
+        }
         match side.children(&path).await {
             Ok(children) => {
                 descend(side, &path, children, change, failures).await?;
@@ -240,6 +248,20 @@ mod tests {
         set(&top, 0o700);
         assert!(failures.is_empty(), "{failures:?}");
         assert_eq!(mode(&top.join("f")), 0o644);
+    }
+
+    #[tokio::test]
+    async fn repairing_a_dir_with_r_but_no_x_reaches_its_children() {
+        // A non-recursive 0644 on a folder leaves it listable but not traversable.
+        let d = tempfile::tempdir().unwrap();
+        let top = d.path().join("d");
+        std::fs::create_dir(&top).unwrap();
+        std::fs::write(top.join("f"), b"").unwrap();
+        set(&top.join("f"), 0o600);
+        set(&top, 0o600);
+        let failures = chmod(&LocalSide, &[p(&top)], exact(0o644), true).await.unwrap();
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!((mode(&top), mode(&top.join("f"))), (0o755, 0o644));
     }
 
     #[tokio::test]

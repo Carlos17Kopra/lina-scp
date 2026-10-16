@@ -19,7 +19,7 @@ const octal = () => screen.getByRole("textbox", { name: "Oktal" });
 const apply = () => screen.getByRole("button", { name: "Übernehmen" });
 
 describe("PermissionsDialog", () => {
-  it("shows one entry's details and applies exactly the edited bits", async () => {
+  it("shows one entry's details and applies only the edited bits", async () => {
     const submit = vi.fn(async () => ok);
     const close = vi.fn();
     render(<PermissionsDialog entries={[entry("a.txt", 0o100644)]} onSubmit={submit} onClose={close} />);
@@ -34,7 +34,7 @@ describe("PermissionsDialog", () => {
     await userEvent.click(box("Andere: Schreiben"));
     expect(octal()).toHaveValue("0646");
     await userEvent.click(apply());
-    expect(submit).toHaveBeenCalledWith({ set: 0o646, clear: 0o131 }, false);
+    expect(submit).toHaveBeenCalledWith({ set: 0o002, clear: 0 }, false);
     expect(close).toHaveBeenCalled();
   });
 
@@ -48,7 +48,22 @@ describe("PermissionsDialog", () => {
     expect(box("Gruppe: Lesen")).toBeChecked();
     expect(octal()).toHaveValue("");
     await userEvent.click(apply());
-    expect(submit).toHaveBeenCalledWith({ set: 0o640, clear: 0o133 }, false);
+    expect(submit).toHaveBeenCalledWith({ set: 0o040, clear: 0 }, false);
+  });
+
+  it("starts a symlink mixed: its own mode says nothing about the target", () => {
+    render(<PermissionsDialog entries={[entry("l", 0o120777, { type: "symlink", target: "file" })]} onSubmit={async () => ok} onClose={() => {}} />);
+    expect(box("Andere: Schreiben")).toBePartiallyChecked();
+    expect(octal()).toHaveValue("");
+  });
+
+  it("recursively changes only the edited bits, but propagates the whole mode when nothing was edited", async () => {
+    const submit = vi.fn(async () => ok);
+    render(<PermissionsDialog entries={[entry("d", 0o40755, { type: "dir" })]} onSubmit={submit} onClose={() => {}} />);
+    await userEvent.click(screen.getByRole("checkbox", { name: "Auch für enthaltene Dateien und Ordner" }));
+    await userEvent.click(box("Gruppe: Schreiben"));
+    await userEvent.click(apply());
+    expect(submit).toHaveBeenCalledWith({ set: 0o020, clear: 0 }, true);
   });
 
   it("treats an unknown mode as mixed", () => {
