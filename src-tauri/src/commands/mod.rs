@@ -1,3 +1,4 @@
+pub mod bookmarks;
 pub mod connect;
 pub mod hosts;
 pub mod profiles;

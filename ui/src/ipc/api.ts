@@ -6,6 +6,7 @@
 import { Channel } from "@tauri-apps/api/core";
 import { commands } from "./bindings";
 import type {
+  Bookmark,
   CancelTarget,
   Decision,
   Direction,
@@ -32,6 +33,7 @@ import type {
 } from "./bindings";
 
 export type {
+  Bookmark,
   CancelTarget,
   Decision,
   Direction,
@@ -147,6 +149,17 @@ export function secretSet(owner: SecretOwner, kind: SecretKind, value: string): 
 }
 export function secretDelete(owner: SecretOwner, kind: SecretKind): Promise<void> {
   return unwrapVoid(commands.secretDelete(owner, kind));
+}
+
+// Bookmarks (hostId null = local)
+export function bookmarksList(hostId: Id | null): Promise<Bookmark[]> {
+  return unwrap(commands.bookmarksList(hostId));
+}
+export function bookmarkAdd(hostId: Id | null, path: string): Promise<Bookmark> {
+  return unwrap(commands.bookmarkAdd(hostId, path));
+}
+export function bookmarkRemove(id: Id): Promise<void> {
+  return unwrapVoid(commands.bookmarkRemove(id));
 }
 
 // Snippets

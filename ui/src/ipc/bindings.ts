@@ -13,6 +13,10 @@ export const commands = {
 	profilesList: () => typedError<ProfileWithUsage[], CoreError>(__TAURI_INVOKE("profiles_list")),
 	profileSave: (profile: LoginProfile) => typedError<LoginProfile, CoreError>(__TAURI_INVOKE("profile_save", { profile })),
 	profileDelete: (id: string) => typedError<null, CoreError>(__TAURI_INVOKE("profile_delete", { id })),
+	/**  `host_id`: `None` lists the local bookmarks. */
+	bookmarksList: (hostId: string | null) => typedError<Bookmark[], CoreError>(__TAURI_INVOKE("bookmarks_list", { hostId })),
+	bookmarkAdd: (hostId: string | null, path: string) => typedError<Bookmark, CoreError>(__TAURI_INVOKE("bookmark_add", { hostId, path })),
+	bookmarkRemove: (id: string) => typedError<null, CoreError>(__TAURI_INVOKE("bookmark_remove", { id })),
 	snippetsList: () => typedError<Snippet[], CoreError>(__TAURI_INVOKE("snippets_list")),
 	snippetSave: (snippet: Snippet) => typedError<Snippet, CoreError>(__TAURI_INVOKE("snippet_save", { snippet })),
 	snippetDelete: (id: string) => typedError<null, CoreError>(__TAURI_INVOKE("snippet_delete", { id })),
@@ -68,6 +72,15 @@ export type AuthConfig = {
 };
 
 export type AuthMethod = "password" | "key" | "agent" | "keyboardInteractive";
+
+/**  A remembered folder: local (`host_id == None`) or on one host's remote side. */
+export type Bookmark = {
+	id: string,
+	hostId: string | null,
+	path: string,
+	position: number,
+	createdAt: number,
+};
 
 export type CancelTarget = { type: "job"; id: number } | { type: "batch"; id: number };
 
