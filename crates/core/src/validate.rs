@@ -149,6 +149,14 @@ pub fn validate_snippet(snippet: &Snippet) -> Result<()> {
     Ok(())
 }
 
+/// Bookmark folders: absolute, at most 4096 bytes, no control characters. Not normalised.
+pub fn validate_bookmark_path(path: &str) -> Result<()> {
+    if !path.starts_with('/') || path.len() > 4096 || path.chars().any(char::is_control) {
+        return Err(CoreError::config("Ungültiger Pfad für ein Lesezeichen"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,5 +317,15 @@ mod tests {
                 "{name:?} / {command:?}"
             );
         }
+    }
+
+    #[test]
+    fn bookmark_paths_must_be_absolute_and_plain() {
+        assert!(validate_bookmark_path("/").is_ok());
+        assert!(validate_bookmark_path("/srv/www").is_ok());
+        for bad in ["", "x", "rel/x", "/a\u{7}", "/a\nb"] {
+            assert!(validate_bookmark_path(bad).is_err(), "{bad:?}");
+        }
+        assert!(validate_bookmark_path(&format!("/{}", "a".repeat(4096))).is_err());
     }
 }

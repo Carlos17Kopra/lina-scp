@@ -94,7 +94,20 @@ CREATE TABLE snippets (
 CREATE INDEX snippets_host_id ON snippets(host_id);
 "#;
 
-const MIGRATIONS: &[&str] = &[V1, V2, V3];
+/// TP3c: folder bookmarks, local (host_id NULL) or per host. No foreign key: hosts imported from
+/// `~/.ssh/config` are not stored but keep a stable id.
+const V4: &str = r#"
+CREATE TABLE bookmarks (
+    id          TEXT PRIMARY KEY NOT NULL,
+    host_id     TEXT,
+    path        TEXT NOT NULL,
+    position    INTEGER NOT NULL,
+    created_at  INTEGER NOT NULL
+);
+CREATE INDEX bookmarks_host_id ON bookmarks(host_id);
+"#;
+
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4];
 
 /// Latest schema version known to this build.
 pub(crate) const LATEST_VERSION: i64 = MIGRATIONS.len() as i64;
@@ -144,5 +157,23 @@ mod tests {
         assert_eq!(row, (None, None));
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
         assert_eq!(version, LATEST_VERSION);
+    }
+
+    #[test]
+    fn v4_adds_bookmarks_to_a_v3_database() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(V1).unwrap();
+        conn.execute_batch(V2).unwrap();
+        conn.execute_batch(V3).unwrap();
+        conn.execute_batch("PRAGMA user_version = 3").unwrap();
+        run(&mut conn).unwrap();
+        conn.execute(
+            "INSERT INTO bookmarks (id, host_id, path, position, created_at) VALUES ('b', NULL, '/srv', 1, 0)",
+            [],
+        )
+        .unwrap();
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(version, 4);
+        assert_eq!(LATEST_VERSION, 4);
     }
 }
