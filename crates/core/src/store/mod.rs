@@ -284,6 +284,17 @@ impl Store {
         upsert_setting(&self.conn(), key, value)
     }
 
+    /// Upserts several settings in one transaction: all of them or none.
+    pub fn set_settings(&self, settings: &[(&str, &str)]) -> Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        for (key, value) in settings {
+            upsert_setting(&tx, key, value)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     // ---- import ----
 
     /// Upserts everything an import writes in one transaction: all of it or nothing.

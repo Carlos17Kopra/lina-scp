@@ -19,7 +19,7 @@ async fn run<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) 
 }
 
 fn node(meta: &std::fs::Metadata, kind: NodeKind) -> Node {
-    Node { kind, size: meta.len(), mtime: Some(meta.mtime()), mode: meta.mode(), link: false }
+    Node { kind, size: meta.len(), mtime: Some(meta.mtime()), mode: Some(meta.mode()), link: false }
 }
 
 fn stat_sync(path: &str) -> Result<Option<Node>> {
@@ -227,7 +227,7 @@ mod tests {
         side.rename_over(&part, &target).await.unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"abcdefg");
         let node = side.stat(&target).await.unwrap().unwrap();
-        assert_eq!((node.mode & 0o777, node.mtime), (0o640, Some(1_000_000)));
+        assert_eq!((node.mode.unwrap_or(0) & 0o777, node.mtime), (0o640, Some(1_000_000)));
         assert!(side.stat(&part).await.unwrap().is_none());
     }
 

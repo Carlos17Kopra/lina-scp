@@ -174,6 +174,20 @@ async fn local_change_is_uploaded_and_keeps_the_remote_mode() {
 }
 
 #[tokio::test]
+async fn an_unknown_remote_mode_uploads_as_0644_not_000() {
+    let side = FaultySide::new();
+    side.hide_modes();
+    let e = env_with(side);
+    let remote = remote_file(&e, "a.conf", b"old", 0o600);
+    let id = e.mgr.open(&p(&remote)).await.unwrap();
+    save(&e.copy(), b"new content").await;
+    e.wait_state(id, EditState::Changed).await;
+    e.wait_state(id, EditState::Synced).await;
+    assert_eq!(std::fs::read(&remote).unwrap(), b"new content");
+    assert_eq!(mode_of(&remote), 0o644);
+}
+
+#[tokio::test]
 async fn rename_replace_save_is_detected() {
     let e = env();
     let remote = remote_file(&e, "a.conf", b"old", 0o644);

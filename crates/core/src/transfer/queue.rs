@@ -782,7 +782,9 @@ async fn run_dir(inner: &Inner, job: &Job, src: &dyn Side, dst: &dyn Side) -> Ou
             if let Err(error) = dst.mkdir(&job.target).await {
                 return Outcome::Failed(error);
             }
-            if let Err(error) = dst.set_mode(&job.target, inner.options.dir_mode(job.direction, source.mode)).await {
+            if let Err(error) =
+                dst.set_mode(&job.target, inner.options.dir_mode(job.direction, source.mode.unwrap_or(0))).await
+            {
                 return Outcome::Failed(error);
             }
         }
@@ -891,7 +893,7 @@ async fn run_file(
         let closed = writer.close().await;
         let done = copied?;
         closed.map_err(|e| (e, done))?;
-        let mode = snap.file_mode.unwrap_or_else(|| inner.options.file_mode(job.direction, node.mode));
+        let mode = snap.file_mode.unwrap_or_else(|| inner.options.file_mode(job.direction, node.mode.unwrap_or(0)));
         dst.set_mode(&part, mode).await.map_err(|e| (e, done))?;
         if let Some(mtime) = node.mtime {
             dst.set_mtime(&part, mtime).await.map_err(|e| (e, done))?;

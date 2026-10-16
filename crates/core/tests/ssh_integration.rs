@@ -675,7 +675,7 @@ async fn sftp_chmod_is_recursive_and_reports_failures() {
     let exact = ModeChange { set: 0o640, clear: 0o137 };
     let failures = chmod(&s, &[t.clone(), "/etc/passwd".into()], exact, true).await.unwrap();
     assert_eq!(failures.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["/etc/passwd"]);
-    let mode = async |path: &str| s.stat(path).await.unwrap().unwrap().mode & 0o7777;
+    let mode = async |path: &str| s.stat(path).await.unwrap().unwrap().mode.unwrap() & 0o7777;
     assert_eq!((mode(&t).await, mode(&format!("{t}/sub")).await, mode(&format!("{t}/f")).await), (0o750, 0o750, 0o640));
     s.close().await;
 }
@@ -743,6 +743,21 @@ async fn sftp_mkdir_rename_and_errors() {
     assert!(matches!(s.create_file(&d, "new.txt").await, Err(CoreError::Fs { kind: FsKind::AlreadyExists, .. })));
     assert!(matches!(s.create_file(&d, "b").await, Err(CoreError::Fs { kind: FsKind::AlreadyExists, .. })));
     assert!(matches!(s.create_file(&d, "x/y").await, Err(CoreError::Config { .. })));
+    s.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn sftp_marks_non_utf8_names_as_lossy() {
+    let c = Container::start(None);
+    let env = Env::new();
+    let h = host(c.port, "pwuser", AuthMethod::Password, None);
+    env.store_password(&h, "pwpass");
+    let (s, home, _) = sftp(&env, h, no_lost()).await;
+    c.exec(&["sh", "-c", &format!("touch \"{}/$(printf 'bad\\377')\" {}/good", home.path, home.path)]);
+    let entries = s.list(&home.path).await.unwrap().entries;
+    let lossy = |name: &str| entries.iter().find(|e| e.name == name).map(|e| e.name_lossy);
+    assert_eq!((lossy("bad\u{FFFD}"), lossy("good")), (Some(true), Some(false)));
     s.close().await;
 }
 
@@ -941,8 +956,8 @@ mod transfers {
         assert!(states(&events).iter().all(|(_, s)| *s == JobState::Done), "{:?}", states(&events));
         let remote_tree = format!("{}/tree", home.path);
         let node = session.stat(&format!("{remote_tree}/sub/key")).await.unwrap().unwrap();
-        assert_eq!(node.mode & 0o777, 0o644);
-        assert_eq!(session.stat(&remote_tree).await.unwrap().unwrap().mode & 0o777, 0o755);
+        assert_eq!(node.mode.unwrap() & 0o777, 0o644);
+        assert_eq!(session.stat(&remote_tree).await.unwrap().unwrap().mode.unwrap() & 0o777, 0o755);
         assert!(session.stat(&format!("{remote_tree}/big.bin.filepart")).await.unwrap().is_none());
 
         let back = tempfile::tempdir().unwrap();
@@ -1170,7 +1185,7 @@ mod transfers {
         let reader = session.open_read(&path).await.unwrap();
         assert_eq!(reader.read_at(0, 64).await.unwrap(), b"port=8080\n");
         reader.close().await;
-        assert_eq!(session.stat(&path).await.unwrap().unwrap().mode & 0o777, 0o640);
+        assert_eq!(session.stat(&path).await.unwrap().unwrap().mode.unwrap() & 0o777, 0o640);
         assert_eq!(edits.close().await, Vec::<std::path::PathBuf>::new());
         queue.close().await;
         session.close().await;

@@ -27,10 +27,8 @@ fn bundles_deb_and_appimage() {
 #[test]
 fn deb_declares_the_runtime_libraries() {
     let conf = tauri_conf();
-    let depends = strings(&conf["bundle"]["linux"]["deb"]["depends"]);
-    for package in ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libdbus-1-3"] {
-        assert!(depends.contains(&package), "missing deb dependency {package}");
-    }
+    // The bundler adds libwebkit2gtk-4.1-0 and libgtk-3-0 itself; listing them here would put them in twice.
+    assert_eq!(strings(&conf["bundle"]["linux"]["deb"]["depends"]), ["libdbus-1-3"]);
 }
 
 #[test]

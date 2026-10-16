@@ -147,24 +147,29 @@ pub(crate) fn save_settings(state: &AppState, next: Settings) -> Result<Settings
         apply_ssh_mode(state, next.ssh_mode)?;
     }
     let store = &state.store;
-    store.set_setting(THEME, next.theme.as_str())?;
-    store.set_setting(SSH_MODE, next.ssh_mode.as_str())?;
-    store.set_setting(TERMINAL_RENDERER, next.terminal_renderer.as_str())?;
-    store.set_setting(TERMINAL_FONT_SIZE, &next.terminal_font_size.to_string())?;
-    store.set_setting(TERMINAL_SCHEME, &next.terminal_scheme)?;
-    store.set_setting(TERMINAL_SIDEBAR_OPEN, flag_str(next.terminal_sidebar_open))?;
-    store.set_setting(TERMINAL_AUTO_RECONNECT, flag_str(next.auto_reconnect))?;
-    store.set_setting(FIRST_RUN_DONE, flag_str(next.first_run_done))?;
-    store.set_setting(COMPAT_RENDERING, flag_str(next.compat_rendering))?;
-    store.set_setting(EDITOR_COMMAND, editor)?;
-    store.set_setting(TERMINAL_SCROLLBACK, &next.terminal_scrollback.to_string())?;
-    store.set_setting(TERMINAL_CURSOR, next.terminal_cursor.as_str())?;
-    store.set_setting(TERMINAL_CURSOR_BLINK, flag_str(next.terminal_cursor_blink))?;
-    store.set_setting(LOCAL_SHELL, shell)?;
-    store.set_setting(NEW_HOST_USER, user)?;
-    store.set_setting(NEW_HOST_PORT, &next.new_host_port.to_string())?;
-    store.set_setting(NEW_HOST_KEEPALIVE, &next.new_host_keepalive_s.to_string())?;
-    store.set_setting(NEW_HOST_TIMEOUT, &next.new_host_timeout_s.to_string())?;
+    let (font_size, scrollback) = (next.terminal_font_size.to_string(), next.terminal_scrollback.to_string());
+    let (port, keepalive, timeout) =
+        (next.new_host_port.to_string(), next.new_host_keepalive_s.to_string(), next.new_host_timeout_s.to_string());
+    store.set_settings(&[
+        (THEME, next.theme.as_str()),
+        (SSH_MODE, next.ssh_mode.as_str()),
+        (TERMINAL_RENDERER, next.terminal_renderer.as_str()),
+        (TERMINAL_FONT_SIZE, &font_size),
+        (TERMINAL_SCHEME, &next.terminal_scheme),
+        (TERMINAL_SIDEBAR_OPEN, flag_str(next.terminal_sidebar_open)),
+        (TERMINAL_AUTO_RECONNECT, flag_str(next.auto_reconnect)),
+        (FIRST_RUN_DONE, flag_str(next.first_run_done)),
+        (COMPAT_RENDERING, flag_str(next.compat_rendering)),
+        (EDITOR_COMMAND, editor),
+        (TERMINAL_SCROLLBACK, &scrollback),
+        (TERMINAL_CURSOR, next.terminal_cursor.as_str()),
+        (TERMINAL_CURSOR_BLINK, flag_str(next.terminal_cursor_blink)),
+        (LOCAL_SHELL, shell),
+        (NEW_HOST_USER, user),
+        (NEW_HOST_PORT, &port),
+        (NEW_HOST_KEEPALIVE, &keepalive),
+        (NEW_HOST_TIMEOUT, &timeout),
+    ])?;
     load_settings(store)
 }
 

@@ -82,14 +82,18 @@ fn visit<'a>(
             return Ok(());
         }
         let dir_like = matches!(node.kind, NodeKind::Dir | NodeKind::DirLink);
-        let mode = change.apply(node.mode, recursive && dir_like);
+        // Without the server's bits only a change that names all of them can be applied.
+        let Some(old) = node.mode.or((change.set | change.clear == 0o777).then_some(0)) else {
+            return keep(CoreError::fs(FsKind::Other, &path, "permissions unknown"), &path, failures);
+        };
+        let mode = change.apply(old, recursive && dir_like);
         if !(recursive && node.kind == NodeKind::Dir && !node.link) {
             return set_mode(side, &path, mode, failures).await;
         }
         // Granting r/x first makes the descent possible (a 0644 folder lists but cannot be entered); otherwise
         // children first, so revoking r/x does not lock it out. A refused listing still tries the folder first.
         // ponytail: judged by the owner bits; a group-only grant falls back to the refused-listing path.
-        if (mode & !node.mode) & 0o500 != 0 {
+        if (mode & !old) & 0o500 != 0 {
             set_mode(side, &path, mode, failures).await?;
             return match side.children(&path).await {
                 Ok(children) => descend(side, &path, children, change, failures).await,
@@ -163,6 +167,24 @@ mod tests {
         let failures = chmod(&LocalSide, &[p(&a), p(&b)], change, false).await.unwrap();
         assert!(failures.is_empty(), "{failures:?}");
         assert_eq!((mode(&a), mode(&b)), (0o404, 0o444));
+    }
+
+    #[tokio::test]
+    async fn unknown_modes_fail_a_partial_change_but_take_an_exact_one() {
+        let d = tempfile::tempdir().unwrap();
+        let (a, b) = (d.path().join("a"), d.path().join("b"));
+        std::fs::write(&a, b"").unwrap();
+        std::fs::write(&b, b"").unwrap();
+        set(&a, 0o640);
+        set(&b, 0o640);
+        let side = FaultySide::new();
+        side.hide_modes();
+        let failures = chmod(side.as_ref(), &[p(&a)], ModeChange { set: 0o004, clear: 0 }, false).await.unwrap();
+        assert_eq!(failures.iter().map(|f| f.path.clone()).collect::<Vec<_>>(), [p(&a)]);
+        assert_eq!(mode(&a), 0o640);
+        let failures = chmod(side.as_ref(), &[p(&b)], exact(0o600), false).await.unwrap();
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(mode(&b), 0o600);
     }
 
     #[tokio::test]

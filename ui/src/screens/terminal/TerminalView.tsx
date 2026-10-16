@@ -155,16 +155,19 @@ export function TerminalView({ tab, visible, focused = false }: { tab: Tab; visi
       return;
     }
     if (webglRef.current) return;
+    let addon: WebglAddon | undefined;
     try {
-      const addon = new WebglAddon();
-      addon.onContextLoss(() => {
-        addon.dispose();
-        if (webglRef.current === addon) webglRef.current = null;
+      addon = new WebglAddon();
+      const loaded = addon;
+      loaded.onContextLoss(() => {
+        loaded.dispose();
+        if (webglRef.current === loaded) webglRef.current = null;
         setWebglFailed(true);
       });
-      term.loadAddon(addon);
-      webglRef.current = addon;
+      term.loadAddon(loaded);
+      webglRef.current = loaded;
     } catch {
+      addon?.dispose();
       setWebglFailed(true);
     }
   }, [renderer, visible, webglFailed, sessionId]);

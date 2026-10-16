@@ -128,7 +128,13 @@ pub(crate) fn open_local(
         .clone()
         .or_else(|| super::settings::load_settings(&state.store).ok().and_then(|s| s.local_shell));
     let session = match configured {
-        Some(shell) => LocalPtySession::spawn_shell(&shell, cols, rows, sink)?,
+        Some(shell) => {
+            // A shell deleted since it was saved: say where it comes from.
+            linascp_core::validate::validate_local_shell(&shell).map_err(|_| {
+                CoreError::config(format!("Shell aus den Einstellungen ({shell}) ist keine ausführbare Datei"))
+            })?;
+            LocalPtySession::spawn_shell(&shell, cols, rows, sink)?
+        }
         None => LocalPtySession::spawn(cols, rows, sink)?,
     };
     register(state, id, Arc::new(session), pump.clone());
@@ -411,6 +417,22 @@ mod tests {
         }
         close(&state, id).await.unwrap();
         assert!(found, "the configured shell ran");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_missing_shell_from_the_settings_is_named_in_the_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = AppState::for_tests(dir.path());
+        state.local_shell = None;
+        let shell = dir.path().join("gone").display().to_string();
+        state.store.set_setting(linascp_core::store::LOCAL_SHELL, &shell).unwrap();
+        let (pump, _bytes) = collecting_pump();
+        let (send, _events) = collecting_events();
+        let error = open_local(&state, 80, 24, pump, send).unwrap_err();
+        assert!(
+            matches!(&error, CoreError::Config { message } if message.contains(&shell) && message.contains("Einstellungen")),
+            "{error:?}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

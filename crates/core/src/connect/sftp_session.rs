@@ -171,8 +171,8 @@ impl SftpSession {
                 mtime: attrs.mtime.map(i64::from),
                 mode: attrs.permissions,
                 owner,
+                name_lossy: file.filename.contains('\u{FFFD}'),
                 name: file.filename,
-                name_lossy: false,
             });
         }
         Ok(Listing { path, entries })
@@ -361,7 +361,7 @@ fn node_of(attrs: &FileAttributes, kind: NodeKind) -> Node {
         kind,
         size: attrs.size.unwrap_or(0),
         mtime: attrs.mtime.map(i64::from),
-        mode: attrs.permissions.unwrap_or(0),
+        mode: attrs.permissions,
         link: false,
     }
 }

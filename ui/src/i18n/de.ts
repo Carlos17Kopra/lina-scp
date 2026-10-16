@@ -669,6 +669,7 @@ export const t = {
     profile: (name: string) => `Profil ${name}`,
     copy: "Öffentlichen Schlüssel kopieren",
     copied: "Öffentlicher Schlüssel kopiert",
+    copyFailed: "Kopieren fehlgeschlagen: Zwischenablage nicht verfügbar",
     copyId: "Auf Host eintragen …",
     generate: {
       title: "Neuer Schlüssel",

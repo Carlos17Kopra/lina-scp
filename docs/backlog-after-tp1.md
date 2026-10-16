@@ -12,9 +12,9 @@ fixed before the merge are not listed.
 ## Behaviour / UX
 
 - Hosts imported from ssh-config without `IdentityFile` only try the agent; OpenSSH also tries the default `~/.ssh/id_*` files.
-- `has_secret` is not updated when a secret is saved from a connect prompt.
+- `has_secret` is not updated when a secret is saved from (or a stale password removed after) a connect prompt; it
+  only drives the editor's „gespeichert“ placeholder.
 - A startup failure (e.g. the DB schema is newer than the build) only goes to stderr.
-- A stale stored password is never cleared after a successful retype (fail2ban risk).
 - `rejected_methods` actually holds the server's remaining methods (UI label).
 - Jump direct-tcpip errors are always classified as `Other`; agent transport errors are reported as Auth.
 - Fingerprint row in host details is a placeholder (`—`).
@@ -29,13 +29,10 @@ fixed before the merge are not listed.
   - An edit typed during `saveGroup` is not persisted if the first save succeeds.
 - Connect overlay: focus can drop to `body` after a dialog closes without a view change.
 - In `tauri dev`, the StrictMode double mount can swallow the first prompt of a new terminal (production builds are unaffected).
-- WebGL addon not disposed when `loadAddon` throws.
 - Middle-click paste is also forwarded to mouse-tracking apps.
 - Select-to-copy and middle-click use CLIPBOARD, not PRIMARY (a WebKitGTK limitation, accepted for TP1).
-- FirstRunDialog `finish()` is not guarded against a double Escape.
 - A long import path has no overflow handling.
 - The first-run effect can replace an already open modal.
-- Two concurrent settings saves can revert to a stale value.
 - Duplicate load-failure toasts.
 - Toast actions are unreachable by keyboard while a dialog is open (Dialog focus guard).
 - Component a11y polish:
@@ -46,8 +43,8 @@ fixed before the merge are not listed.
 - `sync_mirror` and `settings_set` do a small amount of blocking I/O on the async runtime. Wrap them in `spawn_blocking`.
 
 - TP2a terminal sidebar (from the branch review):
-  - Fast A+/A− or scheme clicks: optimistic settings saves can finish out of order or revert to a stale value;
-    in host scope a quick double click loses a step until `hostSave` + reload resolve. Serialize saves.
+  - In host scope a quick A+/A− double click loses a step until `hostSave` + reload resolve (global settings
+    saves are serialized since TP6a).
   - The scheme radiogroup has no roving tabindex / arrow keys (10 tab stops).
   - Every xterm resize calls `updateTab`, re-rendering all terminal tabs while the window is dragged.
 - TP2b snippets (from the branch review):
@@ -66,15 +63,11 @@ fixed before the merge are not listed.
   - A pane connect whose pane disappeared ends silently (session closed, no notice).
   - The terminal-reply filter for broadcast is a pattern match; a modified F3 (`ESC[1;2R`) is not broadcast either.
 - TP2d auto-reconnect (from the branch review):
-  - "Jetzt versuchen" right after a backoff wait ended stores a `Notify` permit that can skip the first wait of a
-    later round; use one `Notify` per round.
   - `stop_reconnect`/`reconnect_now` and inner events still share the state lock with the app sink, so they wait while
     output flow control is paused (input and resize no longer do).
 
 ## Packaging / CI
 
-- deb `Depends` lists `libwebkit2gtk-4.1-0`/`libgtk-3-0` twice, because the bundler appends its own; the package name is `lina-scp`.
-- Re-running the release workflow for the same tag can create a second draft release.
 - The README apt/backports commands were not verified on a clean system.
 
 ## Tests / code quality
@@ -100,19 +93,16 @@ fixed before the merge are not listed.
 
 - SFTP connect: a `Lost` event that arrives before `runSftp` binds the session id is dropped (window < 1 s).
 - `attachSession` does not bump the remote pane token: an in-flight navigate on the old session can paint its error on the reconnected pane.
-- Remote non-UTF-8 names are decoded lossily by russh-sftp but not marked `nameLossy` (`file.filename.contains('\u{FFFD}')`).
 - Non-`fs` errors show the raw English core message in the pane error row and `NameDialog`; reuse `errorTitle` for `network`.
 - Unreadable `remote_start`: the connect error page shows the raw server message without the path.
 - Context menu: no outside-click close, no keyboard focus; it opens (and "Öffnen"/"Neu laden" fire) on the greyed-out lost pane; double-click too.
 - Unused strings `t.sftp.loading`, `empty`, `up`, `title`; the pane shows no loading/empty state.
-- `NameDialog`: double Enter submits twice.
 - Local rename reports every error at the new path, also a vanished source.
 - Cancelling a new SFTP connect started from the SFTP picker returns to Hosts instead of SFTP.
 - Local path field: no `~` expansion; relative paths resolve against the process cwd.
 
 ## TP4a review (deferred minors)
 
-- `chmod` on a remote entry without `permissions` in its attributes starts from mode 0: the "mixed" bits are cleared instead of kept.
 - The SFTP server command uses `exec(false, …)`: a refused exec only shows as the generic "sudo ohne -n oder NOPASSWD?" init error; a server-side `ForceCommand internal-sftp` silently replaces the command.
 - `PermissionsDialog` keeps its initial state after a partially failed apply while the pane reloads underneath.
 - An invalid `ModeChange` mask is `CoreError::Config`, not a dedicated validation error.
@@ -129,12 +119,11 @@ fixed before the merge are not listed.
 
 ## Deferred from the TP4c review
 
-- A remote folder that is a file, or was deleted on the server after the start, still counts as a folder: every
-  later change becomes a failed job (no automatic retry).
 - A new local folder with one file that never stops changing (a log) is never uploaded, not even its finished
   siblings.
 - Local symlinks are skipped silently; the dialog hint could say so.
 - „Abbrechen“ in the keep dialog stays enabled while `keepStart` runs; the bar then appears anyway.
+- A remote keep target folder that is a file (not deleted) still counts as a folder; every change below it fails.
 - Dir links on the server are followed one level deep only.
 - The keep stop test waits with fixed sleeps (100/150 ms).
 - No Tauri-level test that a failing `keep_start` leaves the running one alone (needs a connected SftpEntry).
@@ -146,22 +135,33 @@ fixed before the merge are not listed.
   very fast tab close the listeners stay up until it finishes.
 - Incoming `forwarded-tcpip` channels are matched on the exact listen address we asked for (OpenSSH echoes it);
   other servers may answer with a different spelling and get rejected.
-- A second „Starten“ while a remote forward is still being requested sends a second `tcpip-forward`; with a fixed
-  port it can fail until the first grant is cancelled.
 
 ## Deferred from the TP5b review
 
-- „Verwendet von“ matches `~/…` key paths by suffix (the UI does not know `$HOME`): `~/id_rsa` also matches
-  `/home/x/.ssh/id_rsa`. Resolve `~` in core.
-- „Öffentlicher Schlüssel kopiert“ shows even when the clipboard write failed (`copyText` swallows the error).
 - The key comment limit (255) counts bytes, not characters.
 
 ## Deferred from the TP5c review
 
 - `validate_user` is stricter than the host editor (also rejects spaces and empty values); fix its doc comment or
   apply the space rule to `validate_host` too (a behaviour change for existing hosts).
-- `save_settings` writes ~18 keys without a transaction; a SQLite error midway leaves a partial save (and the mirror
-  already switched). Add a store `set_settings(&[(k, v)])` in one transaction.
-- A configured local shell that was deleted later fails with portable-pty's "cannot spawn shell"; prefix the error
-  with "Shell aus den Einstellungen: {path}" so it points at the setting.
 - Keepalive ≤ 3600 / timeout ≤ 600 apply only to the new-host defaults; the host editor allows larger values.
+
+## Deferred from the TP6a review
+
+- Settings store: `load()` during a pending save shows the loaded state without the pending patches until the save
+  ends (a BlurField being typed in is reset); a save step that starts between `importApply` and the reload sends
+  the pre-import state. Set `settings: shown()` in `load` and run the reload in the save chain.
+- Settings store: pending patches are removed by object identity; saving the same object twice drops both from the
+  optimistic view (all callers pass fresh literals today).
+- `apply_ssh_mode` runs before the settings transaction; a failed transaction leaves the mirror switched.
+- chmod with an unknown mode: an exact change drops setuid/setgid/sticky; a recursive relative change on a folder
+  with an unknown mode does not visit its children.
+- Keep: a failed batch stats every ancestor of every failed entry serially inside the poll loop; cache per folder.
+- Tunnels: a late answer of an older `attach` clears `requesting` (a start in that window requests again; the token
+  check cancels the extra grant); `request_remote` has no timeout.
+- Release workflow: several leftover drafts for one tag are not all removed; a re-run after publishing may turn the
+  release back into a draft (softprops behaviour, unverified). Fail the job when the release is already published.
+- TerminalView: an addon registered by `loadAddon` before `activate` threw is disposed again with the terminal.
+- `pointsTo` without `/.ssh/` in the key path cuts the last character (listed keys always live in `~/.ssh`).
+- Editing a file whose server sends no mode uploads it as 0644 (not 000); not setting a mode at all needs a queue
+  option.

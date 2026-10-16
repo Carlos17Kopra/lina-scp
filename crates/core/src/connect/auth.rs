@@ -181,6 +181,18 @@ impl AuthContext<'_> {
         }
     }
 
+    /// Remove a stored secret the server rejected (best effort): retrying it on every connect risks a ban.
+    async fn delete_secret(&self, kind: SecretKind) {
+        let secrets = self.secrets.clone();
+        let owner = self.owner;
+        let result = tokio::task::spawn_blocking(move || secrets.delete(owner, kind))
+            .await
+            .unwrap_or_else(|e| Err(CoreError::Internal { message: e.to_string() }));
+        if let Err(e) = result {
+            self.log(format!("debug1: could not remove secret from keyring: {e}"));
+        }
+    }
+
     /// Ask for a password/passphrase; a cancelled prompt aborts the connect.
     async fn ask_secret(&self, prompt: Prompt) -> Result<(SecretString, bool)> {
         match self.broker.ask_cancellable(self.emit, prompt, self.cancel).await {
@@ -241,6 +253,12 @@ pub async fn authenticate(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -
 
 async fn password_flow(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -> Result<MethodOutcome> {
     let mut stored = ctx.stored_secret(SecretKind::Password).await;
+    // A different typed password that works after the stored one failed means the stored one is stale. Only a
+    // host's own: a profile's password serves other hosts (and users) too.
+    let old = match ctx.owner {
+        SecretOwner::Host(_) => stored.as_ref().map(|s| Zeroizing::new(s.expose_secret().to_string())),
+        SecretOwner::Profile(_) => None,
+    };
     let mut remaining = Vec::new();
     for attempt in 0..MAX_ATTEMPTS {
         let (password, save) = match stored.take() {
@@ -254,6 +272,8 @@ async fn password_flow(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -> R
             AuthOutcome::Success => {
                 if save {
                     ctx.save_secret(SecretKind::Password, password).await;
+                } else if attempt > 0 && old.as_ref().is_some_and(|old| old.as_str() != password.expose_secret()) {
+                    ctx.delete_secret(SecretKind::Password).await;
                 }
                 return Ok(MethodOutcome::Done);
             }
@@ -261,6 +281,8 @@ async fn password_flow(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -> R
                 // The password itself was accepted.
                 if save {
                     ctx.save_secret(SecretKind::Password, password).await;
+                } else if attempt > 0 && old.as_ref().is_some_and(|old| old.as_str() != password.expose_secret()) {
+                    ctx.delete_secret(SecretKind::Password).await;
                 }
                 return Ok(MethodOutcome::Partial(remaining));
             }
@@ -671,6 +693,33 @@ NKGOvMLy4gKjk9jA==
         );
         let saved = h.secrets.get(h.owner, SecretKind::Password).unwrap().unwrap();
         assert_eq!(saved.expose_secret(), "typed");
+    }
+
+    #[tokio::test]
+    async fn a_rejected_stored_password_is_removed_after_a_typed_one_works() {
+        let h = Harness::new(vec![secret("typed", false)]);
+        h.secrets.set(h.owner, SecretKind::Password, &SecretString::from("old".to_string())).unwrap();
+        let rejected = AuthOutcome::Rejected { remaining: vec!["password".into()] };
+        let mut fake =
+            FakeAuth { password_results: VecDeque::from([rejected, AuthOutcome::Success]), ..Default::default() };
+        authenticate(&mut fake, &h.ctx(AuthMethod::Password, None)).await.unwrap();
+        assert_eq!(fake.passwords_seen, vec!["old", "typed"]);
+        assert!(h.secrets.get(h.owner, SecretKind::Password).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_profile_password_or_the_same_typed_one_is_kept() {
+        let rejected = || AuthOutcome::Rejected { remaining: vec!["password".into()] };
+        for (owner, typed) in
+            [(SecretOwner::Profile(uuid::Uuid::new_v4()), "other"), (SecretOwner::Host(uuid::Uuid::new_v4()), "old")]
+        {
+            let h = Harness { owner, ..Harness::new(vec![secret(typed, false)]) };
+            h.secrets.set(h.owner, SecretKind::Password, &SecretString::from("old".to_string())).unwrap();
+            let mut fake =
+                FakeAuth { password_results: VecDeque::from([rejected(), AuthOutcome::Success]), ..Default::default() };
+            authenticate(&mut fake, &h.ctx(AuthMethod::Password, None)).await.unwrap();
+            assert!(h.secrets.get(h.owner, SecretKind::Password).unwrap().is_some(), "{owner:?} {typed}");
+        }
     }
 
     #[tokio::test]

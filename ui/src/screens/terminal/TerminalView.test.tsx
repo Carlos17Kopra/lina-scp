@@ -82,6 +82,7 @@ const fakes = vi.hoisted(() => {
   class FakeWebgl {
     static instances: FakeWebgl[] = [];
     static failNext = false;
+    static failActivate = false;
     disposed = false;
     contextLoss = new Emitter<void>();
     onContextLoss = this.contextLoss.event;
@@ -92,7 +93,12 @@ const fakes = vi.hoisted(() => {
       }
       FakeWebgl.instances.push(this);
     }
-    activate() {}
+    activate() {
+      if (FakeWebgl.failActivate) {
+        FakeWebgl.failActivate = false;
+        throw new Error("no WebGL2 context");
+      }
+    }
     dispose() {
       this.disposed = true;
     }
@@ -149,6 +155,7 @@ beforeEach(() => {
   fakes.FakeTerminal.instances = [];
   fakes.FakeWebgl.instances = [];
   fakes.FakeWebgl.failNext = false;
+  fakes.FakeWebgl.failActivate = false;
   vi.stubGlobal("ResizeObserver", FakeResizeObserver);
   Object.defineProperty(navigator, "clipboard", { value: webviewClipboard, configurable: true });
   useSettingsStore.setState(useSettingsStore.getInitialState(), true);
@@ -261,6 +268,12 @@ describe("TerminalView", () => {
     fakes.FakeWebgl.failNext = true;
     render(<TerminalView tab={tab} visible />);
     expect(fakes.FakeWebgl.instances).toHaveLength(0);
+  });
+
+  it("disposes the WebGL addon when loading it fails", () => {
+    fakes.FakeWebgl.failActivate = true;
+    render(<TerminalView tab={tab} visible />);
+    expect(fakes.FakeWebgl.instances[0]?.disposed).toBe(true);
   });
 
   it("applies font size and theme changes", () => {
