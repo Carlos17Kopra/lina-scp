@@ -52,7 +52,7 @@ export const commands = {
 	syncCancel: (sessionId: string) => typedError<null, CoreError>(__TAURI_INVOKE("sync_cancel", { sessionId })),
 	syncEnqueue: (sessionId: string, direction: Direction, localDir: string, remoteDir: string, items: SyncItem[], exclude: string[]) => typedError<number[], CoreError>(__TAURI_INVOKE("sync_enqueue", { sessionId, direction, localDir, remoteDir, items, exclude })),
 	/**  Remote deletes are permanent; the preview announced them in red. */
-	syncDelete: (sessionId: string, side: PaneSide, baseDir: string, items: SyncItem[]) => typedError<SyncDeleteReport, CoreError>(__TAURI_INVOKE("sync_delete", { sessionId, side, baseDir, items })),
+	syncDelete: (sessionId: string, side: PaneSide, baseDir: string, items: SyncItem[], exclude: string[]) => typedError<SyncDeleteReport, CoreError>(__TAURI_INVOKE("sync_delete", { sessionId, side, baseDir, items, exclude })),
 	sftpRename: (sessionId: string, dir: string, from: string, to: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_rename", { sessionId, dir, from, to })),
 	sftpDelete: (sessionId: string, dir: string, names: string[]) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_delete", { sessionId, dir, names })),
 	/**
@@ -160,6 +160,19 @@ export type Difference = {
 	status: DiffStatus,
 	local: NodeInfo | null,
 	remote: NodeInfo | null,
+	/**  For a directory on one side only. */
+	contents: DirContents | null,
+};
+
+/**  Everything below a directory that exists on one side only. */
+export type DirContents = {
+	/**  Files and directories, sorted by path. */
+	entries: TreeEntry[],
+	/**
+	 *  Something below was left out (excluded, link, special file, unusable name): deleting the directory would
+	 *  remove what the preview never showed.
+	 */
+	hidden: boolean,
 };
 
 export type Direction = "upload" | "download";
@@ -501,11 +514,12 @@ export type SyncDeleteReport = {
 
 /**
  *  One planned entry: its path relative to the start directories, and the target as the compare saw it
- *  (`None` for a directory, or when the target did not exist).
+ *  (`None` for a directory, or when the target did not exist). Deleting a directory needs its `tree`.
  */
 export type SyncItem = {
 	rel: string,
 	expected: FileStamp | null,
+	tree: TreeEntry[] | null,
 };
 
 export type TerminalRenderer = "auto" | "webgl" | "dom";
@@ -521,6 +535,14 @@ export type TransferEvent =
 { kind: "conflict"; jobId: number; source: FileStamp; target: FileStamp } | 
 /**  Every job of the batch reached a final state. */
 { kind: "batchDone"; batchId: number; targetDir: string; direction: Direction };
+
+export type TreeEntry = {
+	/**  Relative to the directory the tree belongs to. */
+	rel: string,
+	dir: boolean,
+	size: number,
+	mtime: number | null,
+};
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

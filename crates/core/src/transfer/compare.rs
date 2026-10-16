@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use futures::{StreamExt, stream};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use super::side::{Node, NodeKind, Side};
@@ -37,6 +37,27 @@ pub struct NodeInfo {
     pub mtime: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TreeEntry {
+    /// Relative to the directory the tree belongs to.
+    pub rel: String,
+    pub dir: bool,
+    pub size: u64,
+    pub mtime: Option<i64>,
+}
+
+/// Everything below a directory that exists on one side only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DirContents {
+    /// Files and directories, sorted by path.
+    pub entries: Vec<TreeEntry>,
+    /// Something below was left out (excluded, link, special file, unusable name): deleting the directory would
+    /// remove what the preview never showed.
+    pub hidden: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Difference {
@@ -45,6 +66,8 @@ pub struct Difference {
     pub status: DiffStatus,
     pub local: Option<NodeInfo>,
     pub remote: Option<NodeInfo>,
+    /// For a directory on one side only.
+    pub contents: Option<DirContents>,
 }
 
 /// `*` (any run) and `?` (one char) against a whole name.
@@ -74,16 +97,17 @@ fn info(node: &Node) -> NodeInfo {
     NodeInfo { dir: node.kind == NodeKind::Dir, size: node.size, mtime: node.mtime }
 }
 
-/// Usable children of `dir` by name. Any error (also a refused listing) aborts the comparison: an unreadable
-/// directory must never look empty.
-async fn entries(side: &dyn Side, dir: String, exclude: &[String]) -> Result<BTreeMap<String, Node>> {
-    let names: Vec<String> = side
-        .children(&dir)
-        .await?
+/// Usable children of `dir` by name, and whether any were left out. Any error (also a refused listing) aborts the
+/// comparison: an unreadable directory must never look empty.
+async fn entries(side: &dyn Side, dir: String, exclude: &[String]) -> Result<(BTreeMap<String, Node>, bool)> {
+    let children = side.children(&dir).await?;
+    let total = children.len();
+    let names: Vec<String> = children
         .into_iter()
         .filter(|c| !c.lossy && validate_file_name(&c.name).is_ok() && !exclude.iter().any(|p| matches(p, &c.name)))
         .map(|c| c.name)
         .collect();
+    let left_out = names.len() < total;
     let nodes: Vec<Result<Option<Node>>> = stream::iter(names.clone())
         .map(|name| {
             let path = join(&dir, &name);
@@ -99,7 +123,41 @@ async fn entries(side: &dyn Side, dir: String, exclude: &[String]) -> Result<BTr
             out.insert(name, node);
         }
     }
-    Ok(out)
+    Ok((out, left_out))
+}
+
+/// The whole tree below `dir` (links and special files are not followed and mark it `hidden`).
+pub(crate) async fn walk(
+    side: &dyn Side,
+    dir: &str,
+    exclude: &[String],
+    cancel: &CancellationToken,
+) -> Result<DirContents> {
+    let (mut entries_out, mut hidden) = (Vec::new(), false);
+    let mut dirs = VecDeque::from([String::new()]);
+    while let Some(rel) = dirs.pop_front() {
+        if cancel.is_cancelled() {
+            return Err(CoreError::Cancelled);
+        }
+        let (map, left_out) =
+            entries(side, if rel.is_empty() { dir.to_string() } else { join(dir, &rel) }, exclude).await?;
+        hidden |= left_out;
+        for (name, node) in map {
+            let child = if rel.is_empty() { name } else { format!("{rel}/{name}") };
+            match node.kind {
+                NodeKind::File | NodeKind::Dir => {
+                    let is_dir = node.kind == NodeKind::Dir;
+                    if is_dir {
+                        dirs.push_back(child.clone());
+                    }
+                    entries_out.push(TreeEntry { rel: child, dir: is_dir, size: node.size, mtime: node.mtime });
+                }
+                _ => hidden = true,
+            }
+        }
+    }
+    entries_out.sort_by(|a, b| a.rel.cmp(&b.rel));
+    Ok(DirContents { entries: entries_out, hidden })
 }
 
 fn compare_files(local: &Node, remote: &Node) -> Option<DiffStatus> {
@@ -129,7 +187,7 @@ pub async fn compare(
             return Err(CoreError::Cancelled);
         }
         let at = |base: &str| if rel.is_empty() { base.to_string() } else { join(base, &rel) };
-        let (l, r) =
+        let ((l, _), (r, _)) =
             tokio::try_join!(entries(local, at(local_dir), exclude), entries(remote, at(remote_dir), exclude))?;
         let names: BTreeSet<&String> = l.keys().chain(r.keys()).collect();
         for name in names {
@@ -154,7 +212,16 @@ pub async fn compare(
                 (None, None) => None,
             };
             if let Some(status) = status {
-                out.push(Difference { rel: child, status, local: a.map(info), remote: b.map(info) });
+                let contents = match (a, b) {
+                    (Some(n), None) if n.kind == NodeKind::Dir => {
+                        Some(walk(local, &join(local_dir, &child), exclude, cancel).await?)
+                    }
+                    (None, Some(n)) if n.kind == NodeKind::Dir => {
+                        Some(walk(remote, &join(remote_dir, &child), exclude, cancel).await?)
+                    }
+                    _ => None,
+                };
+                out.push(Difference { rel: child, status, local: a.map(info), remote: b.map(info), contents });
             }
         }
     }
@@ -262,6 +329,27 @@ mod tests {
         assert_eq!(diffs[0].remote, Some(NodeInfo { dir: false, size: 1, mtime: Some(3000) }));
         assert_eq!((diffs[1].rel.as_str(), diffs[1].status), ("a/new", DiffStatus::OnlyLocal));
         assert!(diffs[1].local.unwrap().dir && diffs[1].remote.is_none());
+        let contents = diffs[1].contents.as_ref().unwrap();
+        let rels: Vec<_> = contents.entries.iter().map(|e| e.rel.as_str()).collect();
+        assert_eq!((rels, contents.hidden), (vec!["x", "y"], false));
+        assert!(diffs[0].contents.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_one_sided_dir_with_excluded_or_link_entries_is_marked_hidden() {
+        let t = trees();
+        file(&t.r.join("uploads/a/photo.jpg"), b"x", 1000);
+        file(&t.r.join("uploads/.env"), b"x", 1000);
+        file(&t.r.join("other/f"), b"x", 1000);
+        std::os::unix::fs::symlink("/etc", t.r.join("other/link")).unwrap();
+        let exclude = vec![".env".to_string()];
+        let diffs =
+            compare(&LocalSide, &LocalSide, &p(&t.l), &p(&t.r), &exclude, &CancellationToken::new()).await.unwrap();
+        let by = |rel: &str| diffs.iter().find(|d| d.rel == rel).unwrap().contents.clone().unwrap();
+        let uploads = by("uploads");
+        assert!(uploads.hidden);
+        assert_eq!(uploads.entries.iter().map(|e| e.rel.as_str()).collect::<Vec<_>>(), ["a", "a/photo.jpg"]);
+        assert!(by("other").hidden);
     }
 
     #[tokio::test]

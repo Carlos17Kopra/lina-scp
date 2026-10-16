@@ -25,8 +25,13 @@ pub enum PaneSide {
 }
 
 /// Local deletes go to the trash.
-pub(crate) async fn delete_local_inner(trash: PathBuf, base: String, items: Vec<SyncItem>) -> Result<SyncDeleteReport> {
-    delete_unchanged(&LocalSide, &base, items, |dir: String, name: String| {
+pub(crate) async fn delete_local_inner(
+    trash: PathBuf,
+    base: String,
+    items: Vec<SyncItem>,
+    exclude: Vec<String>,
+) -> Result<SyncDeleteReport> {
+    delete_unchanged(&LocalSide, &base, items, &exclude, |dir: String, name: String| {
         let trash = trash.clone();
         blocking(move || local::trash(&trash, &dir, &[name]))
     })
@@ -85,12 +90,13 @@ pub async fn sync_delete(
     side: PaneSide,
     base_dir: String,
     items: Vec<SyncItem>,
+    exclude: Vec<String>,
 ) -> Result<SyncDeleteReport> {
     match side {
-        PaneSide::Local => delete_local_inner(state.paths.trash_dir(), base_dir, items).await,
+        PaneSide::Local => delete_local_inner(state.paths.trash_dir(), base_dir, items, exclude).await,
         PaneSide::Remote => {
             let session = lookup(&state, session_id)?.conn.current()?;
-            delete_unchanged(&*session, &base_dir, items, |dir: String, name: String| {
+            delete_unchanged(&*session, &base_dir, items, &exclude, |dir: String, name: String| {
                 let session = session.clone();
                 async move { session.delete(&dir, &[name]).await }
             })
@@ -117,11 +123,12 @@ mod tests {
             Some(FileStamp { size: meta.len(), mtime: Some(meta.mtime()) })
         };
         let items = vec![
-            SyncItem { rel: "old".into(), expected: stamp("old") },
-            SyncItem { rel: "edited".into(), expected: stamp("edited") },
+            SyncItem { rel: "old".into(), expected: stamp("old"), tree: None },
+            SyncItem { rel: "edited".into(), expected: stamp("edited"), tree: None },
         ];
         std::fs::write(base.join("edited"), b"edited meanwhile").unwrap();
-        let report = delete_local_inner(trash.clone(), base.to_string_lossy().into_owned(), items).await.unwrap();
+        let report =
+            delete_local_inner(trash.clone(), base.to_string_lossy().into_owned(), items, Vec::new()).await.unwrap();
         assert_eq!((report.deleted, report.skipped, report.failed), (1, 1, 0));
         assert!(trash.join("files/old").exists() && base.join("edited").exists());
     }

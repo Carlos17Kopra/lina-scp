@@ -3,8 +3,10 @@
 use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 
 use super::chmod::PathFailure;
+use super::compare::{TreeEntry, walk};
 use super::side::{NodeKind, Side};
 use super::{BatchId, Direction, FileStamp, TransferQueue};
 use crate::error::{CoreError, Result};
@@ -12,12 +14,13 @@ use crate::sftp::join;
 use crate::validate::validate_file_name;
 
 /// One planned entry: its path relative to the start directories, and the target as the compare saw it
-/// (`None` for a directory, or when the target did not exist).
+/// (`None` for a directory, or when the target did not exist). Deleting a directory needs its `tree`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncItem {
     pub rel: String,
     pub expected: Option<FileStamp>,
+    pub tree: Option<Vec<TreeEntry>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
@@ -73,11 +76,13 @@ pub async fn enqueue_sync(
 }
 
 /// Deletes each item below `base` that is still as the compare saw it: a file with the expected stamp, a
-/// directory that is still one. `delete(dir, name)` does the removal (remote: permanent, local: trash).
+/// directory whose whole tree (walked with the same `exclude`) is still exactly `tree` with nothing left out.
+/// `delete(dir, name)` does the removal (remote: permanent, local: trash).
 pub async fn delete_unchanged<F>(
     side: &dyn Side,
     base: &str,
     items: Vec<SyncItem>,
+    exclude: &[String],
     delete: impl Fn(String, String) -> F,
 ) -> Result<SyncDeleteReport>
 where
@@ -88,11 +93,22 @@ where
         let (parent, name) = split_rel(&item.rel)?;
         let path = join(base, &item.rel);
         let unchanged = match side.stat(&path).await {
-            Ok(Some(node)) => match item.expected {
-                Some(stamp) => node.kind == NodeKind::File && stamp == FileStamp { size: node.size, mtime: node.mtime },
-                None => node.kind == NodeKind::Dir && !node.link,
+            Ok(Some(node)) => match (item.expected, &item.tree) {
+                (Some(stamp), _) => {
+                    Ok(node.kind == NodeKind::File && stamp == FileStamp { size: node.size, mtime: node.mtime })
+                }
+                (None, Some(tree)) if node.kind == NodeKind::Dir && !node.link => {
+                    walk(side, &path, exclude, &CancellationToken::new())
+                        .await
+                        .map(|now| !now.hidden && now.entries == *tree)
+                }
+                (None, _) => Ok(false),
             },
-            Ok(None) => false,
+            Ok(None) => Ok(false),
+            Err(error) => Err(error),
+        };
+        let unchanged = match unchanged {
+            Ok(unchanged) => unchanged,
             Err(error @ CoreError::Network { .. }) => return Err(error),
             Err(error) => {
                 report.failed += 1;
@@ -120,9 +136,10 @@ where
 mod tests {
     use super::*;
     use crate::transfer::test_support::{Recorder, p};
-    use crate::transfer::{JobState, LocalSide, TransferOptions};
+    use crate::transfer::{JobState, LocalSide, TransferOptions, TreeEntry};
     use std::os::unix::fs::MetadataExt;
     use std::sync::Arc;
+    use tokio_util::sync::CancellationToken;
 
     fn stamp(path: &std::path::Path) -> FileStamp {
         let meta = std::fs::metadata(path).unwrap();
@@ -130,7 +147,48 @@ mod tests {
     }
 
     fn item(rel: &str, expected: Option<FileStamp>) -> SyncItem {
-        SyncItem { rel: rel.into(), expected }
+        SyncItem { rel: rel.into(), expected, tree: None }
+    }
+
+    async fn tree_of(path: &std::path::Path, exclude: &[String]) -> Vec<TreeEntry> {
+        crate::transfer::compare::walk(&LocalSide, &p(path), exclude, &CancellationToken::new()).await.unwrap().entries
+    }
+
+    fn dir_item(rel: &str, tree: Vec<TreeEntry>) -> SyncItem {
+        SyncItem { rel: rel.into(), expected: None, tree: Some(tree) }
+    }
+
+    async fn delete_local(base: &std::path::Path, items: Vec<SyncItem>, exclude: &[String]) -> SyncDeleteReport {
+        delete_unchanged(&LocalSide, &p(base), items, exclude, |dir: String, name: String| async move {
+            crate::sftp::local::delete(&dir, &[name])
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_dir_is_deleted_only_while_its_tree_is_exactly_what_the_compare_saw() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path();
+        for dir in ["same", "grew", "edited", "excluded", "no_tree"] {
+            std::fs::create_dir_all(base.join(dir).join("sub")).unwrap();
+            std::fs::write(base.join(dir).join("sub/f"), b"x").unwrap();
+        }
+        std::fs::write(base.join("excluded/.env"), b"secret").unwrap();
+        let exclude = vec![".env".to_string()];
+        let mut items = Vec::new();
+        for dir in ["same", "grew", "edited", "excluded"] {
+            items.push(dir_item(dir, tree_of(&base.join(dir), &exclude).await));
+        }
+        items.push(item("no_tree", None));
+        std::fs::write(base.join("grew/new"), b"written after the compare").unwrap();
+        std::fs::write(base.join("edited/sub/f"), b"changed").unwrap();
+        let report = delete_local(base, items, &exclude).await;
+        assert_eq!((report.deleted, report.skipped, report.failed), (1, 4, 0));
+        assert!(!base.join("same").exists());
+        for kept in ["grew/new", "edited/sub/f", "excluded/.env", "no_tree/sub/f"] {
+            assert!(base.join(kept).exists(), "{kept}");
+        }
     }
 
     #[test]
@@ -206,14 +264,9 @@ mod tests {
             item("now_dir", Some(now_dir)),
             item("gone", None),
         ];
-        let base_s = p(base);
-        let report = delete_unchanged(&LocalSide, &base_s, items, |dir: String, name: String| async move {
-            crate::sftp::local::delete(&dir, &[name])
-        })
-        .await
-        .unwrap();
-        assert_eq!((report.deleted, report.skipped, report.failed), (2, 3, 0));
-        assert!(!base.join("same").exists() && !base.join("dir").exists());
+        let report = delete_local(base, items, &[]).await;
+        assert_eq!((report.deleted, report.skipped, report.failed), (1, 4, 0));
+        assert!(!base.join("same").exists() && base.join("dir").exists(), "a dir without its tree stays");
         assert!(base.join("changed").exists() && base.join("now_dir").is_dir());
     }
 }

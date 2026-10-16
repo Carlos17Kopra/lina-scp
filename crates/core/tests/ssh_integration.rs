@@ -756,8 +756,10 @@ mod transfers {
             emit,
         );
         queue.set_remote(Some(session.clone()));
-        let items =
-            vec![SyncItem { rel: "img".into(), expected: None }, SyncItem { rel: "index.html".into(), expected: None }];
+        let items = vec![
+            SyncItem { rel: "img".into(), expected: None, tree: None },
+            SyncItem { rel: "index.html".into(), expected: None, tree: None },
+        ];
         enqueue_sync(&queue, Direction::Upload, &local_dir, &remote, items, &[]).await.unwrap();
         wait_batch_done(&events, 1, 60).await;
         let after = compare(&LocalSide, &*session, &local_dir, &remote, &[], &cancel).await.unwrap();

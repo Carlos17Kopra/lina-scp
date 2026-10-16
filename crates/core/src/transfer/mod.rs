@@ -11,7 +11,7 @@ mod sync;
 pub(crate) mod test_support;
 
 pub use chmod::{ModeChange, PathFailure, chmod};
-pub use compare::{DiffStatus, Difference, NodeInfo, compare};
+pub use compare::{DiffStatus, Difference, DirContents, NodeInfo, TreeEntry, compare};
 pub use local_side::LocalSide;
 pub use queue::{TransferEmit, TransferQueue};
 pub use side::{Child, Node, NodeKind, Reader, Side, Writer};
