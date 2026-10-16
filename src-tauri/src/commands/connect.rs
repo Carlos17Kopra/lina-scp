@@ -28,7 +28,7 @@ pub(crate) fn find_host(state: &AppState, id: Id) -> Result<Host> {
     find_host_in(&state.connect_env(), id)
 }
 
-fn find_host_in(env: &ConnectEnv, id: Id) -> Result<Host> {
+pub(crate) fn find_host_in(env: &ConnectEnv, id: Id) -> Result<Host> {
     env.merged_hosts()?
         .into_iter()
         .find(|h| h.id == id)
@@ -50,7 +50,7 @@ pub(crate) fn build_request(state: &AppState, host: Host, cols: u16, rows: u16) 
     build_request_in(&state.connect_env(), host, cols, rows)
 }
 
-fn build_request_in(env: &ConnectEnv, host: Host, cols: u16, rows: u16) -> Result<ConnectRequest> {
+pub(crate) fn build_request_in(env: &ConnectEnv, host: Host, cols: u16, rows: u16) -> Result<ConnectRequest> {
     let jump = match host.jump_host_id {
         Some(jump_id) => {
             let jump_host = find_host_in(env, jump_id).map_err(|_| CoreError::Config {
@@ -137,7 +137,7 @@ pub(crate) fn connect_deps(state: &AppState) -> ConnectDeps {
     connect_deps_in(&state.connect_env())
 }
 
-fn connect_deps_in(env: &ConnectEnv) -> ConnectDeps {
+pub(crate) fn connect_deps_in(env: &ConnectEnv) -> ConnectDeps {
     ConnectDeps {
         known_hosts: KnownHosts::new(env.paths.known_hosts()),
         secrets: env.secrets.clone(),

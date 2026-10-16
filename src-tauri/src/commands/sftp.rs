@@ -2,19 +2,27 @@
 
 use std::sync::Arc;
 
-use linascp_core::connect::{ConnectEvent, EmitFn, LostFn, SessionInfo, SftpSession, connect_sftp as run_pipeline};
+use linascp_core::connect::{
+    ConnConnector, ConnStatus, ConnectEvent, EmitFn, PromptBroker, Reconnecting, SessionInfo, SftpSession,
+    connect_sftp as run_pipeline,
+};
 use linascp_core::error::{CoreError, Result};
 use linascp_core::model::Id;
 use linascp_core::session::SessionId;
 use linascp_core::sftp::{Listing, local};
+use linascp_core::transfer::{LocalSide, Side, TransferEvent, TransferOptions, TransferQueue};
 use serde::Serialize;
 use tauri::State;
 use tauri::ipc::Channel;
 use uuid::Uuid;
 
 use super::blocking;
-use super::connect::{build_request, channel_emit, connect_deps, fail, find_host, register_connect};
-use crate::state::AppState;
+use super::connect::{
+    build_request, build_request_in, channel_emit, connect_deps, connect_deps_in, fail, find_host, find_host_in,
+    register_connect,
+};
+use super::settings::auto_reconnect_enabled;
+use crate::state::{AppState, ConnectEnv};
 use crate::util::lock;
 
 #[derive(Debug, Clone, Serialize, specta::Type)]
@@ -27,22 +35,107 @@ pub struct SftpConnected {
 }
 
 #[derive(Debug, Clone, Serialize, specta::Type)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum SftpEvent {
-    Lost { error: CoreError },
+    Reconnecting {
+        attempt: u32,
+        max_attempts: u32,
+        retry_in_ms: u32,
+        reason: CoreError,
+    },
+    Reconnected {
+        info: SessionInfo,
+    },
+    /// Reconnecting gave up (or is off); `connect_sftp` with this session id re-attaches.
+    Lost {
+        error: CoreError,
+    },
+    Transfer {
+        event: TransferEvent,
+    },
 }
 
+pub(crate) type SftpEmit = Arc<dyn Fn(SftpEvent) + Send + Sync>;
+
+/// One SFTP tab: the self-healing connection and its transfer queue.
+pub struct SftpEntry {
+    pub conn: Reconnecting<SftpSession>,
+    pub queue: TransferQueue,
+}
+
+fn status_event(status: ConnStatus) -> SftpEvent {
+    match status {
+        ConnStatus::Reconnecting { attempt, max_attempts, retry_in, reason } => SftpEvent::Reconnecting {
+            attempt,
+            max_attempts,
+            retry_in_ms: u32::try_from(retry_in.as_millis()).unwrap_or(u32::MAX),
+            reason,
+        },
+        ConnStatus::Reconnected { info } => SftpEvent::Reconnected { info },
+        ConnStatus::Lost { error } => SftpEvent::Lost { error },
+    }
+}
+
+/// Reconnect attempts: pipeline without prompts; a refused prompt is `InputRequired`.
+fn sftp_connector(env: ConnectEnv, host_id: Id) -> ConnConnector<SftpSession> {
+    Arc::new(move |on_lost, cancel| {
+        let env = env.clone();
+        Box::pin(async move {
+            let host = find_host_in(&env, host_id)?;
+            let request = build_request_in(&env, host, 80, 24)?;
+            let broker = Arc::new(PromptBroker::non_interactive());
+            let quiet: EmitFn = Arc::new(|_| {});
+            match run_pipeline(request, connect_deps_in(&env), broker.clone(), quiet, on_lost, cancel).await {
+                Ok((session, _)) => Ok(Arc::new(session)),
+                Err(_) if broker.refused_input() => Err(CoreError::InputRequired),
+                Err(error) => Err(error),
+            }
+        })
+    })
+}
+
+fn new_entry(state: &AppState, host: &linascp_core::model::Host, sftp_emit: SftpEmit) -> Arc<SftpEntry> {
+    let queue = {
+        let emit = sftp_emit.clone();
+        TransferQueue::new(
+            Arc::new(LocalSide),
+            TransferOptions::from_settings(&host.sftp),
+            Arc::new(move |event| emit(SftpEvent::Transfer { event })),
+        )
+    };
+    let store = state.store.clone();
+    let conn = Reconnecting::new(
+        sftp_connector(state.connect_env(), host.id),
+        Arc::new(move || auto_reconnect_enabled(&store)),
+        Arc::new(move |status| sftp_emit(status_event(status))),
+        {
+            let queue = queue.clone();
+            Arc::new(move |session: Option<Arc<SftpSession>>| queue.set_remote(session.map(|s| s as Arc<dyn Side>)))
+        },
+    );
+    Arc::new(SftpEntry { conn, queue })
+}
+
+/// `existing`: re-attach a fresh, interactive connection to that tab's session (queue survives).
 pub(crate) async fn connect_sftp_inner(
     state: &AppState,
     connect_id: Uuid,
     host_id: Id,
+    existing: Option<SessionId>,
     emit: EmitFn,
-    on_lost: LostFn,
+    sftp_emit: SftpEmit,
 ) -> Result<SftpConnected> {
     let guard = register_connect(state, connect_id);
     let host = match find_host(state, host_id) {
         Ok(host) => host,
         Err(error) => return fail(&emit, error),
+    };
+    let (session_id, entry) = match existing {
+        Some(id) => match lookup(state, id) {
+            Ok(entry) => (id, entry),
+            Err(error) => return fail(&emit, error),
+        },
+        None => (Uuid::new_v4(), new_entry(state, &host, sftp_emit)),
     };
     let request = match build_request(state, host, 80, 24) {
         Ok(request) => request,
@@ -52,31 +145,45 @@ pub(crate) async fn connect_sftp_inner(
         return fail(&emit, CoreError::Cancelled);
     }
     let cancel = guard.token();
+    let (generation, on_lost) = entry.conn.begin();
     let result =
         run_pipeline(request, connect_deps(state), state.broker.clone(), emit.clone(), on_lost, cancel.clone()).await;
     drop(guard);
     match result {
         Ok((session, _)) if cancel.is_cancelled() => {
             session.close().await;
+            if existing.is_some() {
+                entry.conn.abandon(generation, CoreError::Cancelled);
+            }
             fail(&emit, CoreError::Cancelled)
         }
         Ok((session, listing)) => {
-            let session_id = Uuid::new_v4();
             let connected =
                 SftpConnected { session_id, info: session.info().clone(), version: session.version(), listing };
-            lock(&state.sftp).insert(session_id, Arc::new(session));
+            entry.conn.attach(generation, Arc::new(session));
+            lock(&state.sftp).insert(session_id, entry);
             emit(ConnectEvent::Connected { session_id });
             Ok(connected)
         }
-        Err(error) => Err(error),
+        Err(error) => {
+            // A failed first connect has no tab yet: only a re-attach reports `Lost` again.
+            if existing.is_some() {
+                entry.conn.abandon(generation, error.clone());
+            }
+            Err(error)
+        }
     }
 }
 
-fn session(state: &AppState, id: SessionId) -> Result<Arc<SftpSession>> {
+pub(crate) fn lookup(state: &AppState, id: SessionId) -> Result<Arc<SftpEntry>> {
     lock(&state.sftp)
         .get(&id)
         .cloned()
         .ok_or_else(|| CoreError::Internal { message: format!("unknown sftp session {id}") })
+}
+
+fn session(state: &AppState, id: SessionId) -> Result<Arc<SftpSession>> {
+    lookup(state, id)?.conn.current()
 }
 
 pub(crate) async fn sftp_list_inner(state: &AppState, id: SessionId, path: String) -> Result<Listing> {
@@ -110,15 +217,16 @@ pub async fn connect_sftp(
     state: State<'_, AppState>,
     connect_id: Uuid,
     host_id: Id,
+    session_id: Option<SessionId>,
     events: Channel<ConnectEvent>,
     sftp_events: Channel<SftpEvent>,
 ) -> Result<SftpConnected> {
-    let on_lost: LostFn = Arc::new(move |error| {
-        if let Err(e) = sftp_events.send(SftpEvent::Lost { error }) {
+    let sftp_emit: SftpEmit = Arc::new(move |event| {
+        if let Err(e) = sftp_events.send(event) {
             tracing::debug!(error = %e, "sftp event dropped: channel closed");
         }
     });
-    connect_sftp_inner(&state, connect_id, host_id, channel_emit(events), on_lost).await
+    connect_sftp_inner(&state, connect_id, host_id, session_id, channel_emit(events), sftp_emit).await
 }
 
 #[tauri::command]
@@ -161,8 +269,9 @@ pub async fn sftp_delete(
 #[specta::specta]
 pub async fn sftp_close(state: State<'_, AppState>, session_id: SessionId) -> Result<()> {
     let removed = lock(&state.sftp).remove(&session_id);
-    if let Some(session) = removed {
-        session.close().await;
+    if let Some(entry) = removed {
+        entry.queue.close().await;
+        entry.conn.close().await;
     }
     Ok(())
 }
@@ -243,6 +352,10 @@ mod tests {
         assert_eq!(local_home_inner(&state, None).unwrap(), state.paths.home.to_string_lossy());
     }
 
+    fn quiet_sftp() -> SftpEmit {
+        Arc::new(|_| {})
+    }
+
     #[tokio::test]
     async fn connect_sftp_for_a_missing_host_emits_exactly_one_failed() {
         let (_d, state) = setup();
@@ -251,9 +364,40 @@ mod tests {
             let events = events.clone();
             Arc::new(move |e| events.lock().unwrap().push(e))
         };
-        let result = connect_sftp_inner(&state, Uuid::new_v4(), Uuid::new_v4(), emit, Arc::new(|_| {})).await;
+        let result = connect_sftp_inner(&state, Uuid::new_v4(), Uuid::new_v4(), None, emit, quiet_sftp()).await;
         assert!(result.is_err());
         let events = events.lock().unwrap();
         assert_eq!(events.iter().filter(|e| matches!(e, ConnectEvent::Failed { .. })).count(), 1);
+    }
+
+    #[tokio::test]
+    async fn reattaching_to_an_unknown_session_fails_once() {
+        let (_d, state) = setup();
+        let host = crate::commands::hosts::save_host(&state, linascp_core::model::Host::new("h", "h.example")).unwrap();
+        let events: Arc<StdMutex<Vec<ConnectEvent>>> = Arc::default();
+        let emit: EmitFn = {
+            let events = events.clone();
+            Arc::new(move |e| events.lock().unwrap().push(e))
+        };
+        let result =
+            connect_sftp_inner(&state, Uuid::new_v4(), host.id, Some(Uuid::new_v4()), emit, quiet_sftp()).await;
+        assert!(result.is_err());
+        assert_eq!(events.lock().unwrap().iter().filter(|e| matches!(e, ConnectEvent::Failed { .. })).count(), 1);
+    }
+
+    #[test]
+    fn sftp_events_serialize_for_the_ui() {
+        let event =
+            SftpEvent::Reconnecting { attempt: 2, max_attempts: 8, retry_in_ms: 2000, reason: CoreError::Cancelled };
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            serde_json::json!({ "kind": "reconnecting", "attempt": 2, "maxAttempts": 8, "retryInMs": 2000, "reason": { "type": "cancelled" } })
+        );
+        let event =
+            SftpEvent::Transfer { event: linascp_core::transfer::TransferEvent::Progress { job_id: 1, done: 2 } };
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            serde_json::json!({ "kind": "transfer", "event": { "kind": "progress", "jobId": 1, "done": 2 } })
+        );
     }
 }

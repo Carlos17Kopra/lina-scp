@@ -5,6 +5,7 @@ import { makeHost, makeSessionInfo } from "../test/fixtures";
 import { useConnectStore } from "./connect";
 import { useHostsStore } from "./hosts";
 import { useSftpStore } from "./sftp";
+import { useTransfersStore } from "./transfers";
 
 vi.mock("../ipc/api");
 
@@ -14,6 +15,7 @@ const connected = (sessionId = "s1", path = "/home/u", names = ["a", "b", "c"]):
   sessionId, info: makeSessionInfo(), version: 3, listing: listing(path, names),
 });
 const tab = () => useSftpStore.getState().tabs[0]!;
+const openWebTab = () => useSftpStore.getState().openTab("t1", "h1", connected("s1"));
 
 beforeEach(() => {
   vi.mocked(api.localHome).mockResolvedValue("/home/me");
@@ -21,6 +23,7 @@ beforeEach(() => {
   vi.mocked(api.sftpList).mockImplementation(async (_s, path) => listing(path, ["x"]));
   vi.mocked(api.sftpClose).mockResolvedValue();
   useSftpStore.setState(useSftpStore.getInitialState(), true);
+  useTransfersStore.setState(useTransfersStore.getInitialState(), true);
   useHostsStore.setState({ ...useHostsStore.getInitialState(), hosts: [makeHost({ id: "h1", name: "web" })] }, true);
 });
 
@@ -88,17 +91,52 @@ describe("useSftpStore", () => {
     await expect(useSftpStore.getState().rename("t1", "remote", "a", "b")).rejects.toEqual(exists);
   });
 
-  it("marks only the bound session as lost and reconnects into the same tab", async () => {
-    const start = vi.fn(async () => undefined);
-    useConnectStore.setState({ ...useConnectStore.getInitialState(), start }, true);
-    useSftpStore.getState().openTab("t1", "h1", connected("s1"));
-    useSftpStore.getState().markLost("t1", "other", { type: "cancelled" });
-    expect(tab().status).toBe("connected");
-    useSftpStore.getState().markLost("t1", "s1", { type: "network", kind: "other", message: "lost" });
-    expect(tab().status).toBe("lost");
+  it("tracks reconnecting, reconnected and lost from SFTP events and reloads both panes", async () => {
+    openWebTab(); // existing helper of this file that opens tab "t1" with session "s1"; create it if missing
+    const sftp = useSftpStore.getState();
+    sftp.onEvent("t1", "s1", { kind: "reconnecting", attempt: 2, maxAttempts: 8, retryInMs: 4000, reason: { type: "cancelled" } });
+    let tab = useSftpStore.getState().tabs[0]!;
+    expect(tab.status).toBe("reconnecting");
+    expect(tab.reconnect?.attempt).toBe(2);
+    vi.mocked(api.sftpList).mockClear();
+    vi.mocked(api.localList).mockClear();
+    sftp.onEvent("t1", "s1", { kind: "reconnected", info: tab.info });
+    tab = useSftpStore.getState().tabs[0]!;
+    expect(tab.status).toBe("connected");
+    expect(tab.reconnect).toBeUndefined();
+    await vi.waitFor(() => expect(api.sftpList).toHaveBeenCalled());
+    expect(api.localList).toHaveBeenCalled();
+    sftp.onEvent("t1", "s1", { kind: "lost", error: { type: "inputRequired" } });
+    expect(useSftpStore.getState().tabs[0]!.status).toBe("lost");
+  });
+
+  it("ignores events of another session and forwards transfer events", () => {
+    openWebTab();
+    useSftpStore.getState().onEvent("t1", "other", { kind: "lost", error: { type: "cancelled" } });
+    expect(useSftpStore.getState().tabs[0]!.status).toBe("connected");
+    useSftpStore.getState().onEvent("t1", "s1", { kind: "transfer", event: { kind: "progress", jobId: 1, done: 5 } });
+    expect(useTransfersStore.getState().byTab.t1).toBeDefined();
+  });
+
+  it("reconnect re-attaches through the connect flow with the tab's session id", () => {
+    openWebTab();
+    const start = vi.spyOn(useConnectStore.getState(), "start").mockResolvedValue();
     useSftpStore.getState().reconnect("t1");
-    expect(start).toHaveBeenCalledWith("h1", "sftp", { sftpTabId: "t1" });
+    expect(start).toHaveBeenCalledWith(expect.any(String), "sftp", { sftpTabId: "t1" });
+    expect(api.sftpClose).not.toHaveBeenCalled();
+  });
+
+  it("closing a tab drops its transfers", () => {
+    openWebTab();
+    useTransfersStore.getState().onEvent("t1", { kind: "progress", jobId: 1, done: 1 });
+    useSftpStore.getState().closeTab("t1");
+    expect(useTransfersStore.getState().byTab.t1).toBeUndefined();
+  });
+
+  it("attachSession switches to the new session and returns to the last path", async () => {
+    openWebTab();
     await useSftpStore.getState().navigate("t1", "remote", "/home/u/deep");
+    useSftpStore.getState().onEvent("t1", "s1", { kind: "lost", error: { type: "cancelled" } });
     expect(useSftpStore.getState().attachSession("t1", connected("s2", "/home/u"))).toBe(true);
     expect(tab().status).toBe("connected");
     expect(tab().sessionId).toBe("s2");

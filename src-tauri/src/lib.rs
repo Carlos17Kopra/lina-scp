@@ -5,7 +5,7 @@ pub mod startup;
 pub mod state;
 mod util;
 
-use commands::{connect, hosts, profiles, secrets, sessions, settings, sftp, snippets, transfer};
+use commands::{connect, hosts, profiles, secrets, sessions, settings, sftp, sftp_transfers, snippets, transfer};
 
 /// Where the generated TypeScript bindings live (committed to git).
 pub const BINDINGS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../ui/src/ipc/bindings.ts");
@@ -46,6 +46,13 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             sftp::local_rename,
             sftp::local_delete,
             sftp::local_trash,
+            sftp_transfers::transfer_enqueue,
+            sftp_transfers::transfer_resolve,
+            sftp_transfers::transfer_cancel,
+            sftp_transfers::transfer_retry,
+            sftp_transfers::transfer_clear,
+            sftp_transfers::sftp_reconnect_now,
+            sftp_transfers::sftp_stop_reconnect,
             sessions::session_open_local,
             sessions::session_write,
             sessions::session_resize,
@@ -103,6 +110,11 @@ mod tests {
         assert!(ts.contains("hostsList: () =>"));
         assert!(ts.contains("export type CoreError ="));
         assert!(ts.contains("export type Settings ="));
+        assert!(ts.contains(
+            "transferEnqueue: (sessionId: string, direction: Direction, sources: string[], targetDir: string)"
+        ));
+        assert!(ts.contains("export type TransferEvent ="));
+        assert!(ts.contains("autoReconnect: boolean"));
         assert!(ts.contains("export type SecretOwner ="));
         assert!(ts.contains("sessionAck: (sessionId: string, bytes: number)"));
         assert!(ts.contains("output: Channel<ArrayBuffer>"));

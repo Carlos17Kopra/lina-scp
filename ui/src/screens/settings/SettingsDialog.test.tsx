@@ -69,8 +69,8 @@ describe("SettingsDialog", () => {
     expect(api.settingsSet).toHaveBeenLastCalledWith(expect.objectContaining({ terminalScheme: "nord" }));
     await userEvent.click(screen.getByRole("checkbox", { name: "Kompatibilitäts-Rendering (wirkt nach Neustart)" }));
     expect(api.settingsSet).toHaveBeenLastCalledWith(expect.objectContaining({ compatRendering: true }));
-    await userEvent.click(screen.getByRole("checkbox", { name: "Abgebrochene SSH-Verbindungen automatisch wiederherstellen" }));
-    expect(api.settingsSet).toHaveBeenLastCalledWith(expect.objectContaining({ terminalAutoReconnect: false }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Automatisch neu verbinden (SSH und SFTP)" }));
+    expect(api.settingsSet).toHaveBeenLastCalledWith(expect.objectContaining({ autoReconnect: false }));
   });
 
   it("opens export and import", async () => {

@@ -5,6 +5,7 @@ pub mod classify;
 pub mod handler;
 pub mod prompt;
 pub mod reconnect;
+pub mod sftp_reconnect;
 mod sftp_session;
 pub mod ssh_session;
 
@@ -26,6 +27,7 @@ pub use classify::{classify_io, classify_resolve_error, map_russh_error, network
 pub use handler::{ClientHandler, HandlerError, HostKeyAction, decide_host_key};
 pub use prompt::{EmitFn, HostKeyDecision, KbdPrompt, Prompt, PromptAnswer, PromptBroker};
 pub use reconnect::{BACKOFF_SECS, ConnectFuture, Connector, Enabled, MAX_ATTEMPTS, ReconnectingSession, is_fatal};
+pub use sftp_reconnect::{ChangeFn, ConnConnector, ConnFuture, ConnStatus, Connection, Reconnecting, StatusFn};
 pub use sftp_session::{LostFn, SftpSession};
 pub use ssh_session::SshSession;
 
@@ -487,17 +489,18 @@ impl Pipeline {
                 }
                 let version = raw.init().await.map_err(|e| sftp_session::map_sftp_error(e, ""))?;
                 self.log(format!("debug1: SFTP protocol version {}", version.version));
-                Ok((raw, version.version))
+                let posix_rename = version.extensions.contains_key("posix-rename@openssh.com");
+                Ok((raw, version.version, posix_rename))
             })
             .await;
-        let (raw, version) = match opened {
+        let (raw, version, posix_rename) = match opened {
             Ok(opened) => opened,
             Err(error) => {
                 disconnect(Established { handle, jump, info }).await;
                 return Err(error);
             }
         };
-        let session = SftpSession::start(raw, version, handle, jump, info, on_lost);
+        let session = SftpSession::start(raw, version, posix_rename, handle, jump, info, on_lost);
         let listing = self
             .step(Step::Directory, async {
                 let start = match host.sftp.remote_start.as_deref().map(str::trim).filter(|s| !s.is_empty()) {

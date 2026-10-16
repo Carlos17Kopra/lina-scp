@@ -6,6 +6,9 @@
 import { Channel } from "@tauri-apps/api/core";
 import { commands } from "./bindings";
 import type {
+  CancelTarget,
+  Decision,
+  Direction,
   ConnectedSession,
   ConnectEvent,
   CoreError,
@@ -29,6 +32,15 @@ import type {
 } from "./bindings";
 
 export type {
+  CancelTarget,
+  Decision,
+  Direction,
+  FileStamp,
+  Job,
+  JobKind,
+  JobNote,
+  JobState,
+  TransferEvent,
   ConnectedSession,
   AuthConfig,
   AuthMethod,
@@ -182,12 +194,34 @@ export function connectTest(connectId: Id, host: Host, events: Channel<ConnectEv
 
 // SFTP commander
 export function connectSftp(
-  connectId: Id,
+  connectId: string,
   hostId: Id,
+  sessionId: SessionId | null,
   events: Channel<ConnectEvent>,
   sftpEvents: Channel<SftpEvent>,
 ): Promise<SftpConnected> {
-  return unwrap(commands.connectSftp(connectId, hostId, events, sftpEvents));
+  return unwrap(commands.connectSftp(connectId, hostId, sessionId, events, sftpEvents));
+}
+export function transferEnqueue(sessionId: SessionId, direction: Direction, sources: string[], targetDir: string): Promise<number> {
+  return unwrap(commands.transferEnqueue(sessionId, direction, sources, targetDir));
+}
+export function transferResolve(sessionId: SessionId, jobId: number, decision: Decision, applyToAll: boolean): Promise<void> {
+  return unwrapVoid(commands.transferResolve(sessionId, jobId, decision, applyToAll));
+}
+export function transferCancel(sessionId: SessionId, target: CancelTarget): Promise<void> {
+  return unwrapVoid(commands.transferCancel(sessionId, target));
+}
+export function transferRetry(sessionId: SessionId, jobId: number): Promise<void> {
+  return unwrapVoid(commands.transferRetry(sessionId, jobId));
+}
+export function transferClear(sessionId: SessionId): Promise<void> {
+  return unwrapVoid(commands.transferClear(sessionId));
+}
+export function sftpReconnectNow(sessionId: SessionId): Promise<void> {
+  return unwrapVoid(commands.sftpReconnectNow(sessionId));
+}
+export function sftpStopReconnect(sessionId: SessionId): Promise<void> {
+  return unwrapVoid(commands.sftpStopReconnect(sessionId));
 }
 export function sftpList(sessionId: SessionId, path: string): Promise<Listing> {
   return unwrap(commands.sftpList(sessionId, path));

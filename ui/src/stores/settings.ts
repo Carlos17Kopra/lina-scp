@@ -9,7 +9,7 @@ export const DEFAULT_SETTINGS: Settings = {
   terminalFontSize: 14,
   terminalScheme: "auto",
   terminalSidebarOpen: false,
-  terminalAutoReconnect: true,
+  autoReconnect: true,
   firstRunDone: false,
   compatRendering: false,
 };

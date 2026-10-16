@@ -5,6 +5,7 @@ import * as api from "../../ipc/api";
 import { useConnectStore } from "../../stores/connect";
 import { useHostsStore } from "../../stores/hosts";
 import { useSftpStore } from "../../stores/sftp";
+import { useTransfersStore } from "../../stores/transfers";
 import { makeHost, makeSessionInfo } from "../../test/fixtures";
 import { SftpScreen } from "./SftpScreen";
 
@@ -19,6 +20,7 @@ beforeEach(() => {
   vi.mocked(api.sftpClose).mockResolvedValue();
   useConnectStore.setState({ ...useConnectStore.getInitialState(), start }, true);
   useSftpStore.setState(useSftpStore.getInitialState(), true);
+  useTransfersStore.setState(useTransfersStore.getInitialState(), true);
   useHostsStore.setState({
     ...useHostsStore.getInitialState(),
     hosts: [
@@ -28,11 +30,16 @@ beforeEach(() => {
   }, true);
 });
 
-const openTab = () =>
-  useSftpStore.getState().openTab("t1", "h1", {
-    sessionId: "s1", info: makeSessionInfo({ cipher: "chacha20-poly1305@openssh.com" }), version: 3,
+const openTab = (tabId = "t1", sessionId = "s1") =>
+  useSftpStore.getState().openTab(tabId, "h1", {
+    sessionId, info: makeSessionInfo({ cipher: "chacha20-poly1305@openssh.com" }), version: 3,
     listing: { path: "/srv", entries: [] },
   });
+/** t1 active, t2 in the background. */
+const openTwoTabs = () => {
+  openTab("t2", "s2");
+  openTab("t1", "s1");
+};
 
 describe("SftpScreen", () => {
   it("offers only SFTP hosts when no session is open", async () => {
@@ -52,7 +59,7 @@ describe("SftpScreen", () => {
 
   it("shows the lost banner and reconnects", async () => {
     openTab();
-    useSftpStore.getState().markLost("t1", "s1", { type: "network", kind: "other", message: "connection lost" });
+    useSftpStore.getState().onEvent("t1", "s1", { kind: "lost", error: { type: "network", kind: "other", message: "connection lost" } });
     render(<SftpScreen />);
     expect(screen.getByText("Verbindung verloren")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Neu verbinden" }));
@@ -90,5 +97,53 @@ describe("SftpScreen", () => {
     render(<SftpScreen />);
     await userEvent.click(screen.getByRole("button", { name: "web schließen" }));
     expect(api.sftpClose).toHaveBeenCalledWith("s1");
+  });
+
+  it("the toolbar transfer button uploads from the local pane", async () => {
+    vi.mocked(api.localList).mockResolvedValue({ path: "/l", entries: [{ name: "a.txt", kind: { type: "file" }, size: 1, mtime: 0, mode: 0o100644, owner: "u", nameLossy: false }] });
+    vi.mocked(api.transferEnqueue).mockResolvedValue(1);
+    openTab();
+    await vi.waitFor(() => expect(useSftpStore.getState().tabs[0]!.panes.local.entries).toHaveLength(1));
+    useSftpStore.getState().select("t1", "local", { selection: ["a.txt"], cursor: "a.txt", anchor: "a.txt" });
+    useSftpStore.getState().setActivePane("t1", "local");
+    render(<SftpScreen />);
+    await userEvent.click(screen.getByRole("button", { name: "Hochladen" }));
+    expect(api.transferEnqueue).toHaveBeenCalledWith("s1", "upload", ["/l/a.txt"], "/srv");
+  });
+
+  it("transfer triggers are off while the session is not connected", () => {
+    openTab();
+    useSftpStore.getState().onEvent("t1", "s1", { kind: "lost", error: { type: "cancelled" } });
+    render(<SftpScreen />);
+    expect(screen.getByRole("button", { name: "Herunterladen" })).toBeDisabled();
+  });
+
+  it("shows the reconnect bar while reconnecting and calls sftpReconnectNow", async () => {
+    openTab();
+    useSftpStore.getState().onEvent("t1", "s1", { kind: "reconnecting", attempt: 1, maxAttempts: 8, retryInMs: 1000, reason: { type: "cancelled" } });
+    render(<SftpScreen />);
+    await userEvent.click(await screen.findByRole("button", { name: "Jetzt versuchen" }));
+    expect(api.sftpReconnectNow).toHaveBeenCalledWith("s1");
+    expect(screen.getByRole("button", { name: "Herunterladen" })).toBeDisabled();
+  });
+
+  it("asks before closing a tab with open transfers", async () => {
+    openTab();
+    useTransfersStore.getState().onEvent("t1", { kind: "job", job: { id: 1, batchId: 1, direction: "upload", source: "/a", target: "/b", rel: "a", kind: "file", size: 1, done: 0, state: "running", note: null, error: null } });
+    render(<SftpScreen />);
+    await userEvent.click(screen.getByRole("button", { name: "web schließen" }));
+    expect(screen.getByRole("alertdialog", { name: "Übertragungen offen" })).toBeInTheDocument();
+    expect(api.sftpClose).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Schließen" }));
+    expect(api.sftpClose).toHaveBeenCalledWith("s1");
+  });
+
+  it("marks another tab that waits for a conflict decision and shows the dialog only in its own tab", () => {
+    openTwoTabs();
+    useTransfersStore.getState().onEvent("t2", { kind: "job", job: { id: 1, batchId: 1, direction: "upload", source: "/a", target: "/srv/a", rel: "a", kind: "file", size: 1, done: 0, state: "waitingDecision", note: null, error: null } });
+    useTransfersStore.getState().onEvent("t2", { kind: "conflict", jobId: 1, source: { size: 1, mtime: 1 }, target: { size: 1, mtime: 1 } });
+    render(<SftpScreen />);
+    expect(screen.getByRole("tab", { name: /Wartet auf eine Entscheidung/ })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Datei existiert bereits" })).not.toBeInTheDocument();
   });
 });

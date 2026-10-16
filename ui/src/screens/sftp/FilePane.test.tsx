@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../ipc/api";
@@ -14,11 +14,13 @@ const f = (name: string, type: "file" | "dir" = "file", extra: Partial<Entry> = 
 });
 
 const onCommand = vi.fn();
+const onTransfer = vi.fn();
 
 beforeEach(() => {
   onCommand.mockClear();
+  onTransfer.mockClear();
   vi.mocked(api.localHome).mockResolvedValue("/l");
-  vi.mocked(api.localList).mockResolvedValue({ path: "/l", entries: [] });
+  vi.mocked(api.localList).mockResolvedValue({ path: "/l", entries: [f("a.txt")] });
   vi.mocked(api.sftpList).mockImplementation(async (_s, path) => ({ path, entries: [f("inner")] }));
   useSftpStore.setState(useSftpStore.getInitialState(), true);
   useSftpStore.getState().openTab("t1", "h1", {
@@ -28,16 +30,24 @@ beforeEach(() => {
 });
 
 const pane = () => useSftpStore.getState().tabs[0]!.panes.remote;
+const localLoaded = () => vi.waitFor(() => expect(useSftpStore.getState().tabs[0]!.panes.local.entries).toHaveLength(1));
+const renderBothPanes = () =>
+  render(
+    <>
+      <FilePane tabId="t1" side="local" onCommand={onCommand} onTransfer={onTransfer} />
+      <FilePane tabId="t1" side="remote" onCommand={onCommand} onTransfer={onTransfer} />
+    </>,
+  );
 const rowNames = () => screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("gridcell")[0]!.textContent);
 
 describe("FilePane", () => {
   it("lists .. and folders first, hides dot files", () => {
-    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} />);
+    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} onTransfer={onTransfer} />);
     expect(rowNames()).toEqual(["..", "A-dir", "b.txt", "bad?"]);
   });
 
   it("opens folders with Enter and goes up with Backspace", async () => {
-    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} />);
+    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} onTransfer={onTransfer} />);
     const grid = screen.getByRole("grid");
     grid.focus();
     await userEvent.keyboard("{ArrowDown}{ArrowDown}{Enter}");
@@ -47,7 +57,7 @@ describe("FilePane", () => {
   });
 
   it("selects with Shift+arrows and Ctrl+A, and sends commands for the targets", async () => {
-    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} />);
+    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} onTransfer={onTransfer} />);
     screen.getByRole("grid").focus();
     await userEvent.keyboard("{ArrowDown}{ArrowDown}{Shift>}{ArrowDown}{/Shift}");
     expect(pane().selection).toEqual(["A-dir", "b.txt"]);
@@ -60,7 +70,7 @@ describe("FilePane", () => {
   });
 
   it("F2 renames exactly one entry and ignores lossy names", async () => {
-    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} />);
+    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} onTransfer={onTransfer} />);
     screen.getByRole("grid").focus();
     await userEvent.keyboard("{End}{F2}");
     expect(onCommand).not.toHaveBeenCalled();
@@ -69,7 +79,7 @@ describe("FilePane", () => {
   });
 
   it("toggles hidden files with Ctrl+H and jumps by typing", async () => {
-    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} />);
+    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} onTransfer={onTransfer} />);
     screen.getByRole("grid").focus();
     await userEvent.keyboard("{Control>}h{/Control}");
     expect(rowNames()).toContain(".env");
@@ -80,8 +90,8 @@ describe("FilePane", () => {
   it("Tab moves focus to the other pane's grid", async () => {
     render(
       <>
-        <FilePane tabId="t1" side="local" onCommand={onCommand} />
-        <FilePane tabId="t1" side="remote" onCommand={onCommand} />
+        <FilePane tabId="t1" side="local" onCommand={onCommand} onTransfer={onTransfer} />
+        <FilePane tabId="t1" side="remote" onCommand={onCommand} onTransfer={onTransfer} />
       </>,
     );
     screen.getByRole("grid", { name: "Remote" }).focus();
@@ -91,13 +101,13 @@ describe("FilePane", () => {
   });
 
   it("sorts by clicking a column header", async () => {
-    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} />);
+    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} onTransfer={onTransfer} />);
     await userEvent.click(screen.getByRole("columnheader", { name: /Name/ }));
     expect(pane().sort).toEqual({ key: "name", dir: "desc" });
   });
 
   it("navigates via breadcrumbs and the path field", async () => {
-    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} />);
+    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} onTransfer={onTransfer} />);
     await userEvent.click(screen.getByRole("button", { name: "srv" }));
     expect(api.sftpList).toHaveBeenLastCalledWith("s1", "/srv");
     screen.getByRole("grid").focus();
@@ -109,7 +119,7 @@ describe("FilePane", () => {
   });
 
   it("keys inside the path field stay with the field", async () => {
-    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} />);
+    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} onTransfer={onTransfer} />);
     screen.getByRole("grid").focus();
     await userEvent.keyboard("{Control>}l{/Control}");
     const field = screen.getByRole("textbox", { name: "Pfad" });
@@ -121,13 +131,13 @@ describe("FilePane", () => {
 
   it("shows a navigation error above the table", async () => {
     vi.mocked(api.sftpList).mockRejectedValueOnce({ type: "fs", kind: "permissionDenied", path: "/root", message: "denied" });
-    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} />);
+    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} onTransfer={onTransfer} />);
     await useSftpStore.getState().navigate("t1", "remote", "/root");
     expect(await screen.findByRole("alert")).toHaveTextContent("Keine Berechtigung");
   });
 
   it("tells the user to delete permanently when the trash is on another drive", async () => {
-    render(<FilePane tabId="t1" side="local" onCommand={onCommand} />);
+    render(<FilePane tabId="t1" side="local" onCommand={onCommand} onTransfer={onTransfer} />);
     await vi.waitFor(() => expect(useSftpStore.getState().tabs[0]!.panes.local.path).toBe("/l"));
     vi.mocked(api.localTrash).mockRejectedValueOnce({ type: "fs", kind: "crossDevice", path: "/l/x", message: "EXDEV" });
     await useSftpStore.getState().remove("t1", "local", ["x"], "trash");
@@ -135,10 +145,53 @@ describe("FilePane", () => {
   });
 
   it("right-click selects the row and opens a context menu", async () => {
-    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} />);
+    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} onTransfer={onTransfer} />);
     await userEvent.pointer({ keys: "[MouseRight]", target: screen.getByText("b.txt") });
     expect(pane().selection).toEqual(["b.txt"]);
     await userEvent.click(screen.getByRole("menuitem", { name: "Löschen" }));
     expect(onCommand).toHaveBeenLastCalledWith("delete", ["b.txt"]);
+  });
+
+  it("F5 transfers the selection to the other pane", async () => {
+    render(<FilePane tabId="t1" side="remote" onCommand={onCommand} onTransfer={onTransfer} />);
+    screen.getByRole("grid").focus();
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}{F5}");
+    expect(onTransfer).toHaveBeenCalledWith(["b.txt"], "local", null);
+  });
+
+  it("offers Hochladen in the local and Herunterladen in the remote context menu", async () => {
+    renderBothPanes();
+    await localLoaded();
+    await userEvent.pointer({ keys: "[MouseRight]", target: screen.getByText("a.txt") });
+    await userEvent.click(screen.getByRole("menuitem", { name: "Hochladen" }));
+    expect(onTransfer).toHaveBeenLastCalledWith(["a.txt"], "remote", null);
+    await userEvent.pointer({ keys: "[MouseRight]", target: screen.getByText("b.txt") });
+    await userEvent.click(screen.getByRole("menuitem", { name: "Herunterladen" }));
+    expect(onTransfer).toHaveBeenLastCalledWith(["b.txt"], "local", null);
+  });
+
+  it("dragging rows onto the other pane's folder transfers into that folder", async () => {
+    renderBothPanes();
+    await localLoaded();
+    const row = within(screen.getByRole("region", { name: "Lokal" })).getByText("a.txt");
+    const target = within(screen.getByRole("region", { name: "Remote" })).getByText("A-dir");
+    document.elementFromPoint = vi.fn(() => target);
+    fireEvent.pointerDown(row, { button: 0, clientX: 10, clientY: 10, pointerId: 1 });
+    fireEvent.pointerMove(document, { clientX: 300, clientY: 40, pointerId: 1 });
+    fireEvent.pointerUp(document, { clientX: 300, clientY: 40, pointerId: 1 });
+    expect(onTransfer).toHaveBeenCalledWith(["a.txt"], "remote", "A-dir");
+  });
+
+  it("a drop into the same pane or a short click is not a transfer", async () => {
+    renderBothPanes();
+    await localLoaded();
+    const row = within(screen.getByRole("region", { name: "Lokal" })).getByText("a.txt");
+    document.elementFromPoint = vi.fn(() => row);
+    fireEvent.pointerDown(row, { button: 0, clientX: 10, clientY: 10, pointerId: 1 });
+    fireEvent.pointerMove(document, { clientX: 300, clientY: 40, pointerId: 1 });
+    fireEvent.pointerUp(document, { clientX: 300, clientY: 40, pointerId: 1 });
+    fireEvent.pointerDown(row, { button: 0, clientX: 10, clientY: 10, pointerId: 1 });
+    fireEvent.pointerUp(document, { clientX: 12, clientY: 11, pointerId: 1 });
+    expect(onTransfer).not.toHaveBeenCalled();
   });
 });

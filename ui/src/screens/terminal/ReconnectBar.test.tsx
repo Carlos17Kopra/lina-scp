@@ -1,33 +1,23 @@
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as api from "../../ipc/api";
-import type { Tab } from "../../stores/sessions";
 import { ReconnectBar } from "./ReconnectBar";
 
-vi.mock("../../ipc/api");
-
-const reason = { type: "network", kind: "other", message: "connection lost" } as const;
-const tab = (retryAt: number): Tab => ({
-  id: "p",
-  title: "web",
-  kind: "ssh",
-  sessionId: "s-1",
-  status: "reconnecting",
-  reconnect: { attempt: 3, maxAttempts: 8, retryAt, reason },
-});
+const onNow = vi.fn();
+const onStop = vi.fn();
+const bar = (retryAt: number) => <ReconnectBar state={{ attempt: 3, maxAttempts: 8, retryAt }} onNow={onNow} onStop={onStop} />;
 
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   vi.setSystemTime(100_000);
-  vi.mocked(api.sessionReconnectNow).mockResolvedValue(undefined);
-  vi.mocked(api.sessionReconnectStop).mockResolvedValue(undefined);
+  onNow.mockClear();
+  onStop.mockClear();
 });
 afterEach(() => vi.useRealTimers());
 
 describe("ReconnectBar", () => {
   it("counts down to the next attempt and then shows that it connects", () => {
-    const { container } = render(<ReconnectBar tab={tab(104_000)} />);
+    const { container } = render(bar(104_000));
     expect(container).toHaveTextContent("Verbindung unterbrochen · Versuch 3 von 8 in 4 s");
     act(() => vi.advanceTimersByTime(1000));
     expect(container).toHaveTextContent("in 3 s");
@@ -39,10 +29,10 @@ describe("ReconnectBar", () => {
 
   it("retries now and stops", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    render(<ReconnectBar tab={tab(104_000)} />);
+    render(bar(104_000));
     await user.click(screen.getByRole("button", { name: "Jetzt versuchen" }));
-    expect(api.sessionReconnectNow).toHaveBeenCalledWith("s-1");
+    expect(onNow).toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Abbrechen" }));
-    expect(api.sessionReconnectStop).toHaveBeenCalledWith("s-1");
+    expect(onStop).toHaveBeenCalled();
   });
 });

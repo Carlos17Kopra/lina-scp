@@ -12,6 +12,7 @@ pub mod session;
 pub mod sftp;
 pub mod sshconfig;
 pub mod store;
+pub mod transfer;
 pub mod validate;
 
 pub use error::{CoreError, FsKind, NetworkKind, Result};
