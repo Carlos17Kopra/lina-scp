@@ -66,6 +66,8 @@ export type {
   Difference,
   DiffStatus,
   NodeInfo,
+  DirContents,
+  TreeEntry,
   PaneSide,
   SyncDeleteReport,
   SyncItem,
