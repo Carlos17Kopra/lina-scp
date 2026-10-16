@@ -23,6 +23,8 @@ export function NameDialog({ mode, initial = "", onSubmit, onClose }: {
   const [value, setValue] = useState(initial);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // State lags a fast second Enter; the ref does not.
+  const inFlight = useRef(false);
 
   useEffect(() => {
     const dot = initial.lastIndexOf(".");
@@ -30,6 +32,7 @@ export function NameDialog({ mode, initial = "", onSubmit, onClose }: {
   }, [initial]);
 
   const submit = async () => {
+    if (inFlight.current) return;
     const invalid = validateName(value);
     if (invalid) {
       setError(invalid);
@@ -40,6 +43,7 @@ export function NameDialog({ mode, initial = "", onSubmit, onClose }: {
       return;
     }
     setBusy(true);
+    inFlight.current = true;
     try {
       await onSubmit(value);
       onClose();
@@ -47,6 +51,7 @@ export function NameDialog({ mode, initial = "", onSubmit, onClose }: {
       if (isCoreError(e) && e.type === "fs" && e.kind === "alreadyExists") setError(t.sftp.nameErrors.exists);
       else setError(isCoreError(e) && "message" in e ? e.message : t.sftp.failed);
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   };

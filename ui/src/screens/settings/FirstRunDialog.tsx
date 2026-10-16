@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button, Dialog, OptionCards, useToast } from "../../components";
 import { t } from "../../i18n/de";
 import type { SshMode } from "../../ipc/api";
@@ -19,8 +19,12 @@ export function FirstRunDialog() {
   const toast = useToast();
   const [mode, setMode] = useState<SshMode>("integrate");
   const [saving, setSaving] = useState(false);
+  // State lags a fast second Escape; the ref does not.
+  const inFlight = useRef(false);
 
   const finish = async (sshMode: SshMode) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setSaving(true);
     try {
       await save({ sshMode, firstRunDone: true });
@@ -28,6 +32,7 @@ export function FirstRunDialog() {
     } catch (error) {
       toast.show({ tone: "red", message: t.shell.saveFailed, details: errorDetails(error) });
     } finally {
+      inFlight.current = false;
       setSaving(false);
     }
   };

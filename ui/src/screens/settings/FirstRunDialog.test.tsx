@@ -50,6 +50,13 @@ describe("FirstRunDialog", () => {
     expect(api.settingsSet).toHaveBeenCalledWith(expect.objectContaining({ sshMode: "integrate", firstRunDone: true }));
   });
 
+  it("saves once on a double Escape", async () => {
+    vi.mocked(api.settingsSet).mockImplementation(() => new Promise(() => {}));
+    renderDialog();
+    await userEvent.keyboard("{Escape}{Escape}");
+    expect(api.settingsSet).toHaveBeenCalledTimes(1);
+  });
+
   it("stays open when saving fails", async () => {
     vi.mocked(api.settingsSet).mockRejectedValue({ type: "store", message: "locked" });
     renderDialog();
