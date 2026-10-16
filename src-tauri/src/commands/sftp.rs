@@ -263,6 +263,17 @@ pub async fn sftp_mkdir(state: State<'_, AppState>, session_id: SessionId, dir: 
 
 #[tauri::command]
 #[specta::specta]
+pub async fn sftp_create_file(
+    state: State<'_, AppState>,
+    session_id: SessionId,
+    dir: String,
+    name: String,
+) -> Result<()> {
+    session(&state, session_id)?.create_file(&dir, &name).await
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn sftp_rename(
     state: State<'_, AppState>,
     session_id: SessionId,
@@ -313,6 +324,12 @@ pub async fn local_home(state: State<'_, AppState>, host_id: Option<Id>) -> Resu
 #[specta::specta]
 pub async fn local_mkdir(dir: String, name: String) -> Result<()> {
     local_mkdir_inner(dir, name).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn local_create_file(dir: String, name: String) -> Result<()> {
+    blocking(move || local::create_file(&dir, &name)).await
 }
 
 #[tauri::command]

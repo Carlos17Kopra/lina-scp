@@ -530,6 +530,10 @@ async fn sftp_mkdir_rename_and_errors() {
     assert!(names.contains(&"c".into()) && names.contains(&"b".into()) && !names.contains(&"a".into()));
     assert!(matches!(s.list("/root").await, Err(CoreError::Fs { kind: FsKind::PermissionDenied, .. })));
     assert!(matches!(s.mkdir(&d, "x/y").await, Err(CoreError::Config { .. })));
+    s.create_file(&d, "new.txt").await.unwrap();
+    assert!(matches!(s.create_file(&d, "new.txt").await, Err(CoreError::Fs { kind: FsKind::AlreadyExists, .. })));
+    assert!(matches!(s.create_file(&d, "b").await, Err(CoreError::Fs { kind: FsKind::AlreadyExists, .. })));
+    assert!(matches!(s.create_file(&d, "x/y").await, Err(CoreError::Config { .. })));
     s.close().await;
 }
 
@@ -842,7 +846,7 @@ mod transfers {
         use linascp_core::edit::{EditEvent, EditManager, EditState, Launcher};
         struct Remember(Mutex<Option<std::path::PathBuf>>);
         impl Launcher for Remember {
-            fn open(&self, path: &std::path::Path) -> Result<()> {
+            fn open(&self, path: &std::path::Path, _app: Option<&str>) -> Result<()> {
                 *self.0.lock().unwrap() = Some(path.to_path_buf());
                 Ok(())
             }

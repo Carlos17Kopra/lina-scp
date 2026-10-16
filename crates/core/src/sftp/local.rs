@@ -106,6 +106,13 @@ pub fn mkdir(dir: &str, name: &str) -> Result<()> {
     fs::DirBuilder::new().mode(0o755).create(&path).map_err(|e| io_error(e, &path))
 }
 
+/// Creates an empty file; an existing name is never touched.
+pub fn create_file(dir: &str, name: &str) -> Result<()> {
+    validate_file_name(name)?;
+    let path = join(dir, name);
+    OpenOptions::new().write(true).create_new(true).mode(0o644).open(&path).map(drop).map_err(|e| io_error(e, &path))
+}
+
 /// Same-directory rename that never replaces an existing target (`RENAME_NOREPLACE`).
 pub fn rename(dir: &str, from: &str, to: &str) -> Result<()> {
     validate_file_name(from)?;
@@ -276,6 +283,20 @@ mod tests {
         mkdir(&d, "new").unwrap();
         assert!(std::path::Path::new(&format!("{d}/new")).is_dir());
         assert!(matches!(mkdir(&d, "new"), Err(CoreError::Fs { kind: FsKind::AlreadyExists, .. })));
+    }
+
+    #[test]
+    fn create_file_makes_an_empty_file_and_never_overwrites() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_t, d) = tmp();
+        std::fs::write(format!("{d}/old.txt"), "keep").unwrap();
+        create_file(&d, "new.txt").unwrap();
+        let meta = std::fs::metadata(format!("{d}/new.txt")).unwrap();
+        assert_eq!(meta.len(), 0);
+        assert_eq!(meta.permissions().mode() & 0o111, 0, "never executable");
+        assert!(matches!(create_file(&d, "old.txt"), Err(CoreError::Fs { kind: FsKind::AlreadyExists, .. })));
+        assert_eq!(std::fs::read_to_string(format!("{d}/old.txt")).unwrap(), "keep");
+        assert!(matches!(create_file(&d, "a/b"), Err(CoreError::Config { .. })));
     }
 
     #[test]

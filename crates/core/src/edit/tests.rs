@@ -10,12 +10,14 @@ use crate::transfer::{LocalSide, Side, TransferEvent, TransferOptions};
 #[derive(Default)]
 struct FakeLauncher {
     calls: Mutex<Vec<PathBuf>>,
+    apps: Mutex<Vec<Option<String>>>,
     fail: AtomicBool,
 }
 
 impl Launcher for FakeLauncher {
-    fn open(&self, path: &Path) -> Result<()> {
+    fn open(&self, path: &Path, app: Option<&str>) -> Result<()> {
         self.calls.lock().unwrap().push(path.to_path_buf());
+        self.apps.lock().unwrap().push(app.map(str::to_string));
         if self.fail.load(Ordering::SeqCst) {
             return Err(CoreError::config("no text editor found"));
         }
@@ -139,6 +141,23 @@ async fn opening_the_same_file_again_only_relaunches() {
     assert_eq!(e.launches(), 2);
     let downloads = e.transfers.events().iter().filter(|ev| matches!(ev, TransferEvent::BatchDone { .. })).count();
     assert_eq!(downloads, 1);
+}
+
+#[tokio::test]
+async fn the_chosen_app_opens_the_copy_and_is_kept_for_reopen() {
+    let e = env();
+    let remote = remote_file(&e, "a.png", b"x", 0o644);
+    let id = e.mgr.open_with(&p(&remote), Some("viewer.desktop".into())).await.unwrap();
+    e.mgr.reopen(id).unwrap();
+    e.mgr.open_with(&p(&remote), Some("gimp.desktop".into())).await.unwrap();
+    e.mgr.reopen(id).unwrap();
+    e.mgr.open(&p(&remote)).await.unwrap();
+    let apps = e.launcher.apps.lock().unwrap().clone();
+    let apps: Vec<_> = apps.iter().map(Option::as_deref).collect();
+    assert_eq!(
+        apps,
+        [Some("viewer.desktop"), Some("viewer.desktop"), Some("gimp.desktop"), Some("gimp.desktop"), None]
+    );
 }
 
 #[tokio::test]

@@ -54,9 +54,10 @@ pub enum EditEvent {
     File { file: EditFile },
 }
 
-/// Opens a file in the user's editor (implemented outside the core).
+/// Opens a file in the user's editor, or in `app` (a desktop id) when one was chosen
+/// (implemented outside the core).
 pub trait Launcher: Send + Sync {
-    fn open(&self, path: &Path) -> Result<()>;
+    fn open(&self, path: &Path, app: Option<&str>) -> Result<()>;
 }
 
 pub type EditEmit = Arc<dyn Fn(EditEvent) + Send + Sync>;
@@ -109,6 +110,8 @@ struct FileState {
     decision: Option<bool>,
     decided: Arc<Notify>,
     watch: Option<AbortHandle>,
+    /// The app of the last open; `reopen` uses it again.
+    app: Option<String>,
 }
 
 impl FileState {
@@ -152,6 +155,11 @@ impl EditManager {
     /// Downloads the file (once per canonical path), starts watching the copy and opens the editor.
     /// A launcher error is returned after the watch started: `reopen` can try again.
     pub async fn open(&self, remote_path: &str) -> Result<EditId> {
+        self.open_with(remote_path, None).await
+    }
+
+    /// `open` in `app` instead of the editor; `reopen` keeps using it.
+    pub async fn open_with(&self, remote_path: &str, app: Option<String>) -> Result<EditId> {
         let inner = &self.inner;
         let remote = inner.queue.remote().ok_or_else(|| network_error(NetworkKind::Other, "not connected"))?;
         let real = remote.realpath(remote_path).await?;
@@ -164,6 +172,11 @@ impl EditManager {
             .iter()
             .find(|(_, f)| f.file.remote_path == real)
             .map(|(id, f)| (*id, f.copy.clone(), f.file.state, f.synced.is_some()));
+        if let Some((id, ..)) = existing
+            && let Some(file) = inner.lock().get_mut(&id)
+        {
+            file.app = app.clone();
+        }
         let mut reuse = None;
         match existing {
             // The first `open` launches the editor once the copy exists.
@@ -174,7 +187,7 @@ impl EditManager {
                 reuse = Some(id);
             }
             Some((id, copy, _, _)) => {
-                inner.launcher.open(&copy)?;
+                inner.launcher.open(&copy, app.as_deref())?;
                 return Ok(id);
             }
             None => {}
@@ -202,6 +215,7 @@ impl EditManager {
                 decision: None,
                 decided: Arc::new(Notify::new()),
                 watch: None,
+                app: app.clone(),
             },
         );
 
@@ -224,7 +238,8 @@ impl EditManager {
             f.watch = Some(watch);
             f.file.state = EditState::Synced;
         });
-        inner.launcher.open(&copy)?;
+        let app = inner.lock().get(&id).and_then(|f| f.app.clone());
+        inner.launcher.open(&copy, app.as_deref())?;
         Ok(id)
     }
 
@@ -241,8 +256,9 @@ impl EditManager {
     }
 
     pub fn reopen(&self, id: EditId) -> Result<()> {
-        let copy = self.inner.lock().get(&id).map(|f| f.copy.clone()).ok_or_else(|| unknown(id))?;
-        self.inner.launcher.open(&copy)
+        let (copy, app) =
+            self.inner.lock().get(&id).map(|f| (f.copy.clone(), f.app.clone())).ok_or_else(|| unknown(id))?;
+        self.inner.launcher.open(&copy, app.as_deref())
     }
 
     /// Stops watching. The copy is deleted unless it holds changes the server does not have;

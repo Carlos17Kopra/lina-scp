@@ -8,16 +8,22 @@ use linascp_core::session::SessionId;
 use tauri::State;
 
 use super::sftp_transfers::entry;
-use crate::editor::SystemLauncher;
+use crate::dto::{OpenApp, OpenWithApps};
+use crate::editor::{SystemLauncher, apps_for, resolve_app};
 use crate::state::AppState;
 
 pub(crate) fn with_edits<T>(state: &AppState, id: SessionId, f: impl FnOnce(&EditManager) -> Result<T>) -> Result<T> {
     f(&entry(state, id)?.edits)
 }
 
-pub(crate) async fn open(state: &AppState, id: SessionId, path: String) -> Result<EditId> {
+fn file_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or_default()
+}
+
+pub(crate) async fn open(state: &AppState, id: SessionId, path: String, how: OpenApp) -> Result<EditId> {
     let edits = entry(state, id)?.edits.clone();
-    edits.open(&path).await
+    let app = resolve_app(&state.store, file_name(&path), &how)?;
+    edits.open_with(&path, app).await
 }
 
 pub(crate) async fn stop(state: &AppState, id: SessionId, edit_id: EditId) -> Result<Option<String>> {
@@ -26,7 +32,8 @@ pub(crate) async fn stop(state: &AppState, id: SessionId, edit_id: EditId) -> Re
 }
 
 /// A local file opens in place: no copy, no watch.
-pub(crate) fn local_edit_inner(state: &AppState, path: String) -> Result<()> {
+pub(crate) fn local_edit_inner(state: &AppState, path: String, how: OpenApp) -> Result<()> {
+    let app = resolve_app(&state.store, file_name(&path), &how)?;
     let path = Path::new(&path);
     if !path.is_absolute() {
         return Err(CoreError::config("path must be absolute"));
@@ -34,20 +41,32 @@ pub(crate) fn local_edit_inner(state: &AppState, path: String) -> Result<()> {
     if !std::fs::metadata(path)?.is_file() {
         return Err(CoreError::fs(linascp_core::error::FsKind::Other, path.to_string_lossy(), "not a file"));
     }
-    SystemLauncher::new(state.store.clone()).open(path)
+    SystemLauncher::new(state.store.clone()).open(path, app.as_deref())
 }
 
 /// Downloads a remote file, opens it in the editor and uploads every save.
 #[tauri::command]
 #[specta::specta]
-pub async fn edit_open(state: State<'_, AppState>, session_id: SessionId, path: String) -> Result<EditId> {
-    open(&state, session_id, path).await
+pub async fn edit_open(
+    state: State<'_, AppState>,
+    session_id: SessionId,
+    path: String,
+    how: OpenApp,
+) -> Result<EditId> {
+    open(&state, session_id, path, how).await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn local_edit(state: State<'_, AppState>, path: String) -> Result<()> {
-    local_edit_inner(&state, path)
+pub async fn local_edit(state: State<'_, AppState>, path: String, how: OpenApp) -> Result<()> {
+    local_edit_inner(&state, path, how)
+}
+
+/// The apps offered by "Öffnen mit" for a file name.
+#[tauri::command]
+#[specta::specta]
+pub async fn open_with_apps(state: State<'_, AppState>, name: String) -> Result<OpenWithApps> {
+    apps_for(&state.store, &name)
 }
 
 #[tauri::command]
@@ -83,7 +102,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = AppState::for_tests(dir.path());
         let id = uuid::Uuid::new_v4();
-        assert!(open(&state, id, "/etc/hosts".into()).await.is_err());
+        assert!(open(&state, id, "/etc/hosts".into(), OpenApp::Editor).await.is_err());
         assert!(with_edits(&state, id, |e| e.resolve(1, true)).is_err());
         assert!(with_edits(&state, id, |e| e.reopen(1)).is_err());
         assert!(stop(&state, id, 1).await.is_err());
@@ -93,9 +112,9 @@ mod tests {
     fn local_edit_rejects_relative_and_missing_paths() {
         let dir = tempfile::tempdir().unwrap();
         let state = AppState::for_tests(dir.path());
-        assert!(matches!(local_edit_inner(&state, "rel.txt".into()), Err(CoreError::Config { .. })));
+        assert!(matches!(local_edit_inner(&state, "rel.txt".into(), OpenApp::Editor), Err(CoreError::Config { .. })));
         let missing = dir.path().join("missing.txt");
-        assert!(local_edit_inner(&state, missing.to_str().unwrap().into()).is_err());
-        assert!(local_edit_inner(&state, dir.path().to_str().unwrap().into()).is_err(), "a directory");
+        assert!(local_edit_inner(&state, missing.to_str().unwrap().into(), OpenApp::Editor).is_err());
+        assert!(local_edit_inner(&state, dir.path().to_str().unwrap().into(), OpenApp::Editor).is_err(), "a directory");
     }
 }

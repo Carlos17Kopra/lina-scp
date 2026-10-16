@@ -112,6 +112,34 @@ impl Default for Settings {
     }
 }
 
+/// Which program opens a file from the SFTP panes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum OpenApp {
+    /// "Bearbeiten": the editor setting, else the `text/plain` default.
+    Editor,
+    /// "Öffnen": the app remembered for the file type, else the editor.
+    Default,
+    /// "Öffnen mit": a desktop id; `remember` makes it the default for the type (in LinaSCP only).
+    App { id: String, remember: bool },
+}
+
+#[derive(Debug, Clone, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AppChoice {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenWithApps {
+    /// Readable name of the file type, e.g. "PNG-Bild".
+    pub type_name: String,
+    pub apps: Vec<AppChoice>,
+    pub remembered: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileWithUsage {
