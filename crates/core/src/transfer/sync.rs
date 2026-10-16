@@ -73,12 +73,15 @@ pub async fn enqueue_sync(
 
 /// Deletes each item below `base` that is still as the compare saw it: a file with the expected stamp, a
 /// directory that is still one. `delete(dir, name)` does the removal (remote: permanent, local: trash).
-pub async fn delete_unchanged(
+pub async fn delete_unchanged<F>(
     side: &dyn Side,
     base: &str,
     items: Vec<SyncItem>,
-    delete: impl AsyncFn(String, String) -> Result<()>,
-) -> Result<SyncDeleteReport> {
+    delete: impl Fn(String, String) -> F,
+) -> Result<SyncDeleteReport>
+where
+    F: Future<Output = Result<()>>,
+{
     let mut report = SyncDeleteReport { deleted: 0, skipped: 0, failed: 0, first: None };
     for item in items {
         let (parent, name) = split_rel(&item.rel)?;
@@ -184,7 +187,7 @@ mod tests {
             item("gone", None),
         ];
         let base_s = p(base);
-        let report = delete_unchanged(&LocalSide, &base_s, items, async |dir: String, name: String| {
+        let report = delete_unchanged(&LocalSide, &base_s, items, |dir: String, name: String| async move {
             crate::sftp::local::delete(&dir, &[name])
         })
         .await

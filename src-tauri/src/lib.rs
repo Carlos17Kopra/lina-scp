@@ -7,8 +7,8 @@ pub mod state;
 mod util;
 
 use commands::{
-    bookmarks, connect, hosts, profiles, secrets, sessions, settings, sftp, sftp_edit, sftp_transfers, snippets,
-    transfer,
+    bookmarks, connect, hosts, profiles, secrets, sessions, settings, sftp, sftp_edit, sftp_sync, sftp_transfers,
+    snippets, transfer,
 };
 
 /// Where the generated TypeScript bindings live (committed to git).
@@ -52,6 +52,10 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             sftp::sftp_mkdir,
             sftp::sftp_create_file,
             sftp::sftp_chmod,
+            sftp_sync::sync_compare,
+            sftp_sync::sync_cancel,
+            sftp_sync::sync_enqueue,
+            sftp_sync::sync_delete,
             sftp::sftp_rename,
             sftp::sftp_delete,
             sftp::sftp_close,

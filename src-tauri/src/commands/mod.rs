@@ -7,6 +7,7 @@ pub mod sessions;
 pub mod settings;
 pub mod sftp;
 pub mod sftp_edit;
+pub mod sftp_sync;
 pub mod sftp_transfers;
 pub mod snippets;
 pub mod transfer;

@@ -719,6 +719,54 @@ mod transfers {
 
     #[tokio::test]
     #[ignore = "requires docker"]
+    async fn compare_then_sync_up_leaves_both_sides_equal() {
+        use linascp_core::transfer::{DiffStatus, SyncItem, compare, enqueue_sync};
+        use tokio_util::sync::CancellationToken;
+        let c = Container::start(None);
+        let env = Env::new();
+        let h = host(c.port, "pwuser", AuthMethod::Password, None);
+        env.store_password(&h, "pwpass");
+        let (session, home, _) = sftp(&env, h, no_lost()).await;
+        let session = Arc::new(session);
+        session.mkdir(&home.path, "site").await.unwrap();
+        let remote = format!("{}/site", home.path);
+        session.mkdir(&remote, "css").await.unwrap();
+        session.create_file(&format!("{remote}/css"), "old.css").await.unwrap();
+        let local = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(local.path().join("css")).unwrap();
+        std::fs::create_dir_all(local.path().join("img")).unwrap();
+        std::fs::write(local.path().join("index.html"), b"<h1>hi</h1>").unwrap();
+        std::fs::write(local.path().join("img/logo.png"), b"png").unwrap();
+        let local_dir = local.path().to_str().unwrap().to_string();
+        let cancel = CancellationToken::new();
+        let diffs = compare(&LocalSide, &*session, &local_dir, &remote, &[], &cancel).await.unwrap();
+        let got: Vec<_> = diffs.iter().map(|d| (d.rel.as_str(), d.status)).collect();
+        assert_eq!(
+            got,
+            [
+                ("css/old.css", DiffStatus::OnlyRemote),
+                ("img", DiffStatus::OnlyLocal),
+                ("index.html", DiffStatus::OnlyLocal)
+            ]
+        );
+        let (events, emit) = recorder();
+        let queue = TransferQueue::new(
+            Arc::new(LocalSide),
+            TransferOptions { parallel: 2, upload_mode: None, bandwidth: None },
+            emit,
+        );
+        queue.set_remote(Some(session.clone()));
+        let items =
+            vec![SyncItem { rel: "img".into(), expected: None }, SyncItem { rel: "index.html".into(), expected: None }];
+        enqueue_sync(&queue, Direction::Upload, &local_dir, &remote, items).await.unwrap();
+        wait_batch_done(&events, 1, 60).await;
+        let after = compare(&LocalSide, &*session, &local_dir, &remote, &[], &cancel).await.unwrap();
+        assert_eq!(after.iter().map(|d| d.rel.as_str()).collect::<Vec<_>>(), ["css/old.css"]);
+        session.close().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires docker"]
     async fn upload_and_download_a_tree_with_modes_and_mtime() {
         let c = Container::start(None);
         let env = Env::new();

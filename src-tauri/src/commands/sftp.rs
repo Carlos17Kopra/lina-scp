@@ -70,6 +70,8 @@ pub struct SftpEntry {
     pub conn: Reconnecting<SftpSession>,
     pub queue: TransferQueue,
     pub edits: EditManager,
+    /// The running compare of this tab (TP4b), cancelled by a new one or `sync_cancel`.
+    pub compare: std::sync::Mutex<Option<tokio_util::sync::CancellationToken>>,
 }
 
 /// How often edited copies are checked for a save.
@@ -135,7 +137,7 @@ fn new_entry(state: &AppState, host: &linascp_core::model::Host, sftp_emit: Sftp
             Arc::new(move |session: Option<Arc<SftpSession>>| queue.set_remote(session.map(|s| s as Arc<dyn Side>)))
         },
     );
-    Arc::new(SftpEntry { conn, queue, edits })
+    Arc::new(SftpEntry { conn, queue, edits, compare: Default::default() })
 }
 
 /// `existing`: re-attach a fresh, interactive connection to that tab's session (queue survives).
