@@ -26,7 +26,7 @@ export const commands = {
 	connectCancel: (connectId: string) => typedError<null, CoreError>(__TAURI_INVOKE("connect_cancel", { connectId })),
 	/**  "Verbindung testen": pipeline for an (unsaved) host up to Auth, then disconnect (core `test_connection`). */
 	connectTest: (connectId: string, host: Host, events: Channel<ConnectEvent>) => typedError<null, CoreError>(__TAURI_INVOKE("connect_test", { connectId, host, events })),
-	connectSftp: (connectId: string, hostId: string, events: Channel<ConnectEvent>, sftpEvents: Channel<SftpEvent>) => typedError<SftpConnected, CoreError>(__TAURI_INVOKE("connect_sftp", { connectId, hostId, events, sftpEvents })),
+	connectSftp: (connectId: string, hostId: string, sessionId: string | null, events: Channel<ConnectEvent>, sftpEvents: Channel<SftpEvent>) => typedError<SftpConnected, CoreError>(__TAURI_INVOKE("connect_sftp", { connectId, hostId, sessionId, events, sftpEvents })),
 	sftpList: (sessionId: string, path: string) => typedError<Listing, CoreError>(__TAURI_INVOKE("sftp_list", { sessionId, path })),
 	sftpMkdir: (sessionId: string, dir: string, name: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_mkdir", { sessionId, dir, name })),
 	sftpRename: (sessionId: string, dir: string, from: string, to: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_rename", { sessionId, dir, from, to })),
@@ -39,6 +39,13 @@ export const commands = {
 	localRename: (dir: string, from: string, to: string) => typedError<null, CoreError>(__TAURI_INVOKE("local_rename", { dir, from, to })),
 	localDelete: (dir: string, names: string[]) => typedError<null, CoreError>(__TAURI_INVOKE("local_delete", { dir, names })),
 	localTrash: (dir: string, names: string[]) => typedError<null, CoreError>(__TAURI_INVOKE("local_trash", { dir, names })),
+	transferEnqueue: (sessionId: string, direction: Direction, sources: string[], targetDir: string) => typedError<number, CoreError>(__TAURI_INVOKE("transfer_enqueue", { sessionId, direction, sources, targetDir })),
+	transferResolve: (sessionId: string, jobId: number, decision: Decision, applyToAll: boolean) => typedError<null, CoreError>(__TAURI_INVOKE("transfer_resolve", { sessionId, jobId, decision, applyToAll })),
+	transferCancel: (sessionId: string, target: CancelTarget) => typedError<null, CoreError>(__TAURI_INVOKE("transfer_cancel", { sessionId, target })),
+	transferRetry: (sessionId: string, jobId: number) => typedError<null, CoreError>(__TAURI_INVOKE("transfer_retry", { sessionId, jobId })),
+	transferClear: (sessionId: string) => typedError<null, CoreError>(__TAURI_INVOKE("transfer_clear", { sessionId })),
+	sftpReconnectNow: (sessionId: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_reconnect_now", { sessionId })),
+	sftpStopReconnect: (sessionId: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_stop_reconnect", { sessionId })),
 	sessionOpenLocal: (cols: number, rows: number, output: Channel<ArrayBuffer>, sessionEvents: Channel<SessionEventDto>) => typedError<string, CoreError>(__TAURI_INVOKE("session_open_local", { cols, rows, output, sessionEvents })),
 	sessionWrite: (sessionId: string, data: number[]) => typedError<null, CoreError>(__TAURI_INVOKE("session_write", { sessionId, data })),
 	sessionResize: (sessionId: string, cols: number, rows: number) => typedError<null, CoreError>(__TAURI_INVOKE("session_resize", { sessionId, cols, rows })),
@@ -62,6 +69,8 @@ export type AuthConfig = {
 
 export type AuthMethod = "password" | "key" | "agent" | "keyboardInteractive";
 
+export type CancelTarget = { type: "job"; id: number } | { type: "batch"; id: number };
+
 export type Conflict = "sameId" | "sameName";
 
 export type ConnectEvent = { kind: "steps"; steps: Step[] } | { kind: "stepStarted"; step: Step } | { kind: "stepDone"; step: Step } | { kind: "stepFailed"; step: Step; error: CoreError } | 
@@ -84,6 +93,12 @@ export type ConnectedSession = {
 export type CoreError = { type: "network"; kind: NetworkKind; message: string } | { type: "hostKeyRejected"; message: string } | { type: "auth"; rejectedMethods: string[]; message: string } | { type: "keyring"; message: string } | { type: "store"; message: string } | { type: "config"; message: string } | { type: "io"; message: string } | { type: "fs"; kind: FsKind; path: string; message: string } | { type: "cancelled" } | 
 /**  A reconnect attempt would have needed user input (password, passphrase, 2FA, host key). */
 { type: "inputRequired" } | { type: "internal"; message: string };
+
+export type Decision = "overwrite" | "skip" | 
+/**  Overwrite only when the source has a newer mtime. */
+"newer" | "cancelBatch";
+
+export type Direction = "upload" | "download";
 
 export type Entry = {
 	name: string,
@@ -110,6 +125,11 @@ export type EnvVar = {
 export type ExportReport = {
 	/**  Key paths (as configured) whose files were missing or unreadable and are not embedded. */
 	skippedKeys: string[],
+};
+
+export type FileStamp = {
+	size: number,
+	mtime: number | null,
 };
 
 export type ForwardKind = "local" | "remote" | "dynamic";
@@ -193,6 +213,34 @@ export type ImportReport = {
 };
 
 export type ItemKind = "host" | "profile" | "group" | "snippet";
+
+export type Job = {
+	id: number,
+	batchId: number,
+	direction: Direction,
+	/**  Absolute path on the source side. */
+	source: string,
+	/**  Absolute path on the target side. */
+	target: string,
+	/**  Path relative to the batch, for display. */
+	rel: string,
+	kind: JobKind,
+	size: number,
+	/**  Bytes confirmed written (contiguous from 0). */
+	done: number,
+	state: JobState,
+	note: JobNote | null,
+	error: CoreError | null,
+};
+
+export type JobKind = "file" | "dir";
+
+/**  Why a job was skipped without a decision. */
+export type JobNote = "dirLink" | "brokenLink" | "special";
+
+export type JobState = "queued" | "running" | "waitingDecision" | 
+/**  The connection is gone; resumes after a reconnect. */
+"paused" | "done" | "skipped" | "failed" | "cancelled";
 
 export type KbdPrompt = {
 	text: string,
@@ -282,7 +330,7 @@ export type Settings = {
 	terminalFontSize: number,
 	terminalScheme: string,
 	terminalSidebarOpen: boolean,
-	terminalAutoReconnect: boolean,
+	autoReconnect: boolean,
 	firstRunDone: boolean,
 	compatRendering: boolean,
 };
@@ -294,7 +342,9 @@ export type SftpConnected = {
 	listing: Listing,
 };
 
-export type SftpEvent = { kind: "lost"; error: CoreError };
+export type SftpEvent = { kind: "reconnecting"; attempt: number; maxAttempts: number; retryInMs: number; reason: CoreError } | { kind: "reconnected"; info: SessionInfo } | 
+/**  Reconnecting gave up (or is off); `connect_sftp` with this session id re-attaches. */
+{ kind: "lost"; error: CoreError } | { kind: "transfer"; event: TransferEvent };
 
 export type SftpSettings = {
 	remoteStart: string | null,
@@ -323,6 +373,16 @@ export type Step = "jumpHost" | "tcp" | "hostKey" | "auth" | "channel" | "shell"
 export type TerminalRenderer = "auto" | "webgl" | "dom";
 
 export type Theme = "dark" | "light";
+
+export type TransferEvent = 
+/**  Full job on creation and on every state change. */
+{ kind: "job"; job: Job } | 
+/**  Throttled byte progress of a running file. */
+{ kind: "progress"; jobId: number; done: number } | 
+/**  The target exists; answer with `TransferQueue::resolve`. */
+{ kind: "conflict"; jobId: number; source: FileStamp; target: FileStamp } | 
+/**  Every job of the batch reached a final state. */
+{ kind: "batchDone"; batchId: number; targetDir: string; direction: Direction };
 
 export type TransferMode = "binary" | "text" | "auto";
 

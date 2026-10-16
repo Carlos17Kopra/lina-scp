@@ -42,8 +42,7 @@ pub(crate) fn load_settings(store: &Store) -> Result<Settings> {
             .filter(|id| is_valid_terminal_scheme(id))
             .unwrap_or(d.terminal_scheme),
         terminal_sidebar_open: parse_flag(store.get_setting(TERMINAL_SIDEBAR_OPEN)?).unwrap_or(d.terminal_sidebar_open),
-        terminal_auto_reconnect: parse_flag(store.get_setting(TERMINAL_AUTO_RECONNECT)?)
-            .unwrap_or(d.terminal_auto_reconnect),
+        auto_reconnect: parse_flag(store.get_setting(TERMINAL_AUTO_RECONNECT)?).unwrap_or(d.auto_reconnect),
         first_run_done: parse_flag(store.get_setting(FIRST_RUN_DONE)?).unwrap_or(d.first_run_done),
         compat_rendering: parse_flag(store.get_setting(COMPAT_RENDERING)?).unwrap_or(d.compat_rendering),
     })
@@ -51,7 +50,7 @@ pub(crate) fn load_settings(store: &Store) -> Result<Settings> {
 
 /// Read when a connection is lost; a store error keeps the default (on).
 pub(crate) fn auto_reconnect_enabled(store: &Store) -> bool {
-    load_settings(store).map(|settings| settings.terminal_auto_reconnect).unwrap_or(true)
+    load_settings(store).map(|settings| settings.auto_reconnect).unwrap_or(true)
 }
 
 fn mirror(state: &AppState) -> Mirror {
@@ -88,7 +87,7 @@ pub(crate) fn save_settings(state: &AppState, next: Settings) -> Result<Settings
     store.set_setting(TERMINAL_FONT_SIZE, &next.terminal_font_size.to_string())?;
     store.set_setting(TERMINAL_SCHEME, &next.terminal_scheme)?;
     store.set_setting(TERMINAL_SIDEBAR_OPEN, flag_str(next.terminal_sidebar_open))?;
-    store.set_setting(TERMINAL_AUTO_RECONNECT, flag_str(next.terminal_auto_reconnect))?;
+    store.set_setting(TERMINAL_AUTO_RECONNECT, flag_str(next.auto_reconnect))?;
     store.set_setting(FIRST_RUN_DONE, flag_str(next.first_run_done))?;
     store.set_setting(COMPAT_RENDERING, flag_str(next.compat_rendering))?;
     load_settings(store)
@@ -145,7 +144,7 @@ mod tests {
             terminal_font_size: 16,
             terminal_scheme: "nord".into(),
             terminal_sidebar_open: true,
-            terminal_auto_reconnect: false,
+            auto_reconnect: false,
             first_run_done: true,
             compat_rendering: true,
         };
@@ -158,9 +157,9 @@ mod tests {
     #[test]
     fn auto_reconnect_defaults_on_and_roundtrips() {
         let (_dir, state) = setup();
-        assert!(load_settings(&state.store).unwrap().terminal_auto_reconnect);
-        let next = Settings { terminal_auto_reconnect: false, ..load_settings(&state.store).unwrap() };
-        assert!(!save_settings(&state, next).unwrap().terminal_auto_reconnect);
+        assert!(load_settings(&state.store).unwrap().auto_reconnect);
+        let next = Settings { auto_reconnect: false, ..load_settings(&state.store).unwrap() };
+        assert!(!save_settings(&state, next).unwrap().auto_reconnect);
         assert!(!auto_reconnect_enabled(&state.store));
     }
 
@@ -218,5 +217,12 @@ mod tests {
         let content = std::fs::read_to_string(mirror_file(&state)).unwrap();
         assert!(content.contains("alpha-01"));
         assert!(content.contains("beta-02"));
+    }
+    #[test]
+    fn auto_reconnect_reads_the_old_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = crate::state::AppState::for_tests(dir.path());
+        state.store.set_setting(TERMINAL_AUTO_RECONNECT, "false").unwrap();
+        assert!(!load_settings(&state.store).unwrap().auto_reconnect);
     }
 }

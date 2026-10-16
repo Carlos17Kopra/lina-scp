@@ -182,8 +182,15 @@ impl TransferQueue {
             names.push(base_name(source)?);
         }
         let src = self.inner.source_side(direction)?;
-        let nodes: Vec<Result<Option<Node>>> =
-            stream::iter(&sources).map(|s| src.stat(s)).buffered(STAT_CONCURRENCY).collect().await;
+        // Owned paths: a closure over `&String` makes the future non-`Send` for Tauri commands.
+        let nodes: Vec<Result<Option<Node>>> = stream::iter(sources.clone())
+            .map(|s| {
+                let src = src.clone();
+                async move { src.stat(&s).await }
+            })
+            .buffered(STAT_CONCURRENCY)
+            .collect()
+            .await;
         let mut st = self.inner.lock();
         let batch_id = st.next_id;
         st.next_id += 1;
