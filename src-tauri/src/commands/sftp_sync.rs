@@ -70,9 +70,10 @@ pub async fn sync_enqueue(
     local_dir: String,
     remote_dir: String,
     items: Vec<SyncItem>,
+    exclude: Vec<String>,
 ) -> Result<Vec<BatchId>> {
     let entry = lookup(&state, session_id)?;
-    enqueue_sync(&entry.queue, direction, &local_dir, &remote_dir, items).await
+    enqueue_sync(&entry.queue, direction, &local_dir, &remote_dir, items, &exclude).await
 }
 
 /// Remote deletes are permanent; the preview announced them in red.

@@ -42,13 +42,14 @@ fn under(base: &str, rel: &str) -> String {
     if rel.is_empty() { base.to_string() } else { join(base, rel) }
 }
 
-/// Queues the transfers, one batch per target directory.
+/// Queues the transfers, one batch per target directory. `exclude` also applies inside transferred directories.
 pub async fn enqueue_sync(
     queue: &TransferQueue,
     direction: Direction,
     local_dir: &str,
     remote_dir: &str,
     items: Vec<SyncItem>,
+    exclude: &[String],
 ) -> Result<Vec<BatchId>> {
     let (src_base, dst_base) = match direction {
         Direction::Upload => (local_dir, remote_dir),
@@ -66,7 +67,7 @@ pub async fn enqueue_sync(
         let expected: HashMap<String, FileStamp> =
             entries.iter().filter_map(|(name, stamp)| stamp.map(|s| (join(&target_dir, name), s))).collect();
         let sources = entries.iter().map(|(name, _)| join(&source_dir, name)).collect();
-        batches.push(queue.enqueue_expecting(direction, sources, target_dir, expected).await?);
+        batches.push(queue.enqueue_expecting(direction, sources, target_dir, expected, exclude.to_vec()).await?);
     }
     Ok(batches)
 }
@@ -156,14 +157,33 @@ mod tests {
         let queue = TransferQueue::new(Arc::new(LocalSide), options, rec.emit());
         queue.set_remote(Some(Arc::new(LocalSide)));
         let items = vec![item("top", None), item("sub/f", Some(stamp(&r.join("sub/f"))))];
-        let batches = enqueue_sync(&queue, Direction::Upload, &p(&l), &p(&r), items).await.unwrap();
+        let batches = enqueue_sync(&queue, Direction::Upload, &p(&l), &p(&r), items, &[]).await.unwrap();
         assert_eq!(batches.len(), 2);
         rec.wait_all_final().await;
         assert!(rec.jobs().values().all(|j| j.state == JobState::Done), "{:?}", rec.jobs());
         assert_eq!(std::fs::read(r.join("top")).unwrap(), b"new");
         assert_eq!(std::fs::read(r.join("sub/f")).unwrap(), b"new");
-        let bad = enqueue_sync(&queue, Direction::Upload, &p(&l), &p(&r), vec![item("../x", None)]).await;
+        let bad = enqueue_sync(&queue, Direction::Upload, &p(&l), &p(&r), vec![item("../x", None)], &[]).await;
         assert!(matches!(bad, Err(CoreError::Config { .. })));
+    }
+
+    #[tokio::test]
+    async fn excluded_names_stay_behind_inside_a_transferred_dir() {
+        let d = tempfile::tempdir().unwrap();
+        let (l, r) = (d.path().join("l"), d.path().join("r"));
+        std::fs::create_dir_all(l.join("newapp/node_modules/m")).unwrap();
+        std::fs::create_dir_all(&r).unwrap();
+        std::fs::write(l.join("newapp/a"), b"a").unwrap();
+        std::fs::write(l.join("newapp/node_modules/m/x"), b"x").unwrap();
+        let rec = Recorder::default();
+        let options = TransferOptions { parallel: 2, upload_mode: None, bandwidth: None };
+        let queue = TransferQueue::new(Arc::new(LocalSide), options, rec.emit());
+        queue.set_remote(Some(Arc::new(LocalSide)));
+        let exclude = vec!["node_modules".to_string()];
+        enqueue_sync(&queue, Direction::Upload, &p(&l), &p(&r), vec![item("newapp", None)], &exclude).await.unwrap();
+        rec.wait_all_final().await;
+        assert!(r.join("newapp/a").exists());
+        assert!(!r.join("newapp/node_modules").exists());
     }
 
     #[tokio::test]

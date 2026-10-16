@@ -9,6 +9,7 @@ use futures::{StreamExt, stream};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
+use super::compare::matches;
 use super::copy::{IN_FLIGHT, Limits, copy_range};
 use super::side::{Node, NodeKind, Side};
 use super::{
@@ -50,6 +51,8 @@ struct Batch {
     done_sent: bool,
     /// Target path -> stamp a compare saw: overwritten without asking while it is still exactly that (sync).
     expected: HashMap<String, FileStamp>,
+    /// Name patterns left out when a directory job lists its children (sync).
+    exclude: Vec<String>,
 }
 
 struct State {
@@ -220,7 +223,7 @@ impl TransferQueue {
         target_dir: String,
         options: EnqueueOptions,
     ) -> Result<BatchId> {
-        self.enqueue_inner(direction, sources, target_dir, options, HashMap::new()).await
+        self.enqueue_inner(direction, sources, target_dir, options, HashMap::new(), Vec::new()).await
     }
 
     /// Sync: a target whose stamp is still the one in `expected` is overwritten without asking; any other existing
@@ -231,8 +234,9 @@ impl TransferQueue {
         sources: Vec<String>,
         target_dir: String,
         expected: HashMap<String, FileStamp>,
+        exclude: Vec<String>,
     ) -> Result<BatchId> {
-        self.enqueue_inner(direction, sources, target_dir, EnqueueOptions::default(), expected).await
+        self.enqueue_inner(direction, sources, target_dir, EnqueueOptions::default(), expected, exclude).await
     }
 
     async fn enqueue_inner(
@@ -242,6 +246,7 @@ impl TransferQueue {
         target_dir: String,
         options: EnqueueOptions,
         expected: HashMap<String, FileStamp>,
+        exclude: Vec<String>,
     ) -> Result<BatchId> {
         if self.inner.lock().closed {
             return Err(CoreError::internal("transfer queue is closed"));
@@ -278,6 +283,7 @@ impl TransferQueue {
                 retryable: options == EnqueueOptions::default(),
                 done_sent: false,
                 expected,
+                exclude,
             },
         );
         let mut jobs = Vec::new();
@@ -782,10 +788,12 @@ async fn run_dir(inner: &Inner, job: &Job, src: &dyn Side, dst: &dyn Side) -> Ou
         }
         Err(error) => return Outcome::Failed(error),
     }
-    let children = match src.children(&job.source).await {
+    let mut children = match src.children(&job.source).await {
         Ok(children) => children,
         Err(error) => return Outcome::Failed(error),
     };
+    let exclude = inner.lock().batches.get(&job.batch_id).map(|b| b.exclude.clone()).unwrap_or_default();
+    children.retain(|c| !exclude.iter().any(|pattern| matches(pattern, &c.name)));
     // ponytail: one stat per child; the SFTP readdir attrs would save the round trips for big dirs.
     let stats: Vec<_> = stream::iter(children)
         .map(|child| async move {
@@ -1175,7 +1183,7 @@ mod tests {
         std::fs::write(e.local.join("c"), b"c").unwrap();
         std::fs::write(e.remote.join("c"), b"appeared").unwrap();
         let sources = ["a", "b", "c"].iter().map(|n| p(&e.local.join(n))).collect();
-        e.queue.enqueue_expecting(Direction::Upload, sources, p(&e.remote), expected).await.unwrap();
+        e.queue.enqueue_expecting(Direction::Upload, sources, p(&e.remote), expected, Vec::new()).await.unwrap();
         e.rec
             .wait("b and c ask", |r| r.jobs().values().filter(|j| j.state == JobState::WaitingDecision).count() == 2)
             .await;
@@ -1387,7 +1395,7 @@ mod tests {
         let expected = HashMap::from([(p(&e.remote.join("big")), seen)]);
         faulty.fail_writes_after(3 * 1024 * 1024);
         e.queue
-            .enqueue_expecting(Direction::Upload, vec![p(&e.local.join("big"))], p(&e.remote), expected)
+            .enqueue_expecting(Direction::Upload, vec![p(&e.local.join("big"))], p(&e.remote), expected, Vec::new())
             .await
             .unwrap();
         e.rec.wait("paused", |r| r.job_by_rel("big").state == JobState::Paused).await;

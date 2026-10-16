@@ -50,7 +50,7 @@ export const commands = {
 	/**  One compare per session at a time: a new one cancels the previous. */
 	syncCompare: (sessionId: string, localDir: string, remoteDir: string, exclude: string[]) => typedError<Difference[], CoreError>(__TAURI_INVOKE("sync_compare", { sessionId, localDir, remoteDir, exclude })),
 	syncCancel: (sessionId: string) => typedError<null, CoreError>(__TAURI_INVOKE("sync_cancel", { sessionId })),
-	syncEnqueue: (sessionId: string, direction: Direction, localDir: string, remoteDir: string, items: SyncItem[]) => typedError<number[], CoreError>(__TAURI_INVOKE("sync_enqueue", { sessionId, direction, localDir, remoteDir, items })),
+	syncEnqueue: (sessionId: string, direction: Direction, localDir: string, remoteDir: string, items: SyncItem[], exclude: string[]) => typedError<number[], CoreError>(__TAURI_INVOKE("sync_enqueue", { sessionId, direction, localDir, remoteDir, items, exclude })),
 	/**  Remote deletes are permanent; the preview announced them in red. */
 	syncDelete: (sessionId: string, side: PaneSide, baseDir: string, items: SyncItem[]) => typedError<SyncDeleteReport, CoreError>(__TAURI_INVOKE("sync_delete", { sessionId, side, baseDir, items })),
 	sftpRename: (sessionId: string, dir: string, from: string, to: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_rename", { sessionId, dir, from, to })),

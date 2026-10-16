@@ -48,7 +48,7 @@ pub struct Difference {
 }
 
 /// `*` (any run) and `?` (one char) against a whole name.
-fn matches(pattern: &str, name: &str) -> bool {
+pub(crate) fn matches(pattern: &str, name: &str) -> bool {
     let (p, n): (Vec<char>, Vec<char>) = (pattern.chars().collect(), name.chars().collect());
     let (mut pi, mut ni, mut star, mut mark) = (0, 0, None, 0);
     while ni < n.len() {
