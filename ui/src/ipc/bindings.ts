@@ -47,6 +47,12 @@ export const commands = {
 	sftpMkdir: (sessionId: string, dir: string, name: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_mkdir", { sessionId, dir, name })),
 	sftpCreateFile: (sessionId: string, dir: string, name: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_create_file", { sessionId, dir, name })),
 	sftpChmod: (sessionId: string, paths: string[], change: ModeChange, recursive: boolean) => typedError<ChmodReport, CoreError>(__TAURI_INVOKE("sftp_chmod", { sessionId, paths, change, recursive })),
+	/**  One compare per session at a time: a new one cancels the previous. */
+	syncCompare: (sessionId: string, localDir: string, remoteDir: string, exclude: string[]) => typedError<Difference[], CoreError>(__TAURI_INVOKE("sync_compare", { sessionId, localDir, remoteDir, exclude })),
+	syncCancel: (sessionId: string) => typedError<null, CoreError>(__TAURI_INVOKE("sync_cancel", { sessionId })),
+	syncEnqueue: (sessionId: string, direction: Direction, localDir: string, remoteDir: string, items: SyncItem[], exclude: string[]) => typedError<number[], CoreError>(__TAURI_INVOKE("sync_enqueue", { sessionId, direction, localDir, remoteDir, items, exclude })),
+	/**  Remote deletes are permanent; the preview announced them in red. */
+	syncDelete: (sessionId: string, side: PaneSide, baseDir: string, items: SyncItem[], exclude: string[]) => typedError<SyncDeleteReport, CoreError>(__TAURI_INVOKE("sync_delete", { sessionId, side, baseDir, items, exclude })),
 	sftpRename: (sessionId: string, dir: string, from: string, to: string) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_rename", { sessionId, dir, from, to })),
 	sftpDelete: (sessionId: string, dir: string, names: string[]) => typedError<null, CoreError>(__TAURI_INVOKE("sftp_delete", { sessionId, dir, names })),
 	/**
@@ -103,15 +109,10 @@ export type Bookmark = {
 
 export type CancelTarget = { type: "job"; id: number } | { type: "batch"; id: number };
 
-export type ChmodFailure = {
-	path: string,
-	error: CoreError,
-};
-
 /**  Outcome of a permission change: how many entries failed and the first of them. */
 export type ChmodReport = {
 	failed: number,
-	first: ChmodFailure | null,
+	first: PathFailure | null,
 };
 
 /**  The app picked in the system's "Open with" dialog. */
@@ -146,6 +147,33 @@ export type CoreError = { type: "network"; kind: NetworkKind; message: string } 
 export type Decision = "overwrite" | "skip" | 
 /**  Overwrite only when the source has a newer mtime. */
 "newer" | "cancelBatch";
+
+export type DiffStatus = "onlyLocal" | "onlyRemote" | "localNewer" | "remoteNewer" | 
+/**  Same modification time, different size. */
+"sizeDiffers" | 
+/**  A file on one side, a directory on the other. */
+"typeMismatch";
+
+export type Difference = {
+	/**  Relative to both start directories, `/`-separated. */
+	rel: string,
+	status: DiffStatus,
+	local: NodeInfo | null,
+	remote: NodeInfo | null,
+	/**  For a directory on one side only. */
+	contents: DirContents | null,
+};
+
+/**  Everything below a directory that exists on one side only. */
+export type DirContents = {
+	/**  Files and directories, sorted by path. */
+	entries: TreeEntry[],
+	/**
+	 *  Something below was left out (excluded, link, special file, unusable name): deleting the directory would
+	 *  remove what the preview never showed.
+	 */
+	hidden: boolean,
+};
 
 export type Direction = "upload" | "download";
 
@@ -351,6 +379,12 @@ export type ModeChange = {
 /**  Classification of network failures, used by the UI to pick the error screen. */
 export type NetworkKind = "timeout" | "refused" | "dns" | "other";
 
+export type NodeInfo = {
+	dir: boolean,
+	size: number,
+	mtime: number | null,
+};
+
 /**  Which program opens a file from the SFTP panes. */
 export type OpenApp = 
 /**  "Bearbeiten": the editor setting, else the `text/plain` default. */
@@ -359,6 +393,13 @@ export type OpenApp =
 { kind: "default" } | 
 /**  "Öffnen mit": a desktop id; `remember` makes it the default for the type (in LinaSCP only). */
 { kind: "app"; id: string; remember: boolean };
+
+export type PaneSide = "local" | "remote";
+
+export type PathFailure = {
+	path: string,
+	error: CoreError,
+};
 
 export type PortForward = {
 	id: string,
@@ -463,6 +504,24 @@ export type SshMode = "integrate" | "mirror";
 
 export type Step = "jumpHost" | "tcp" | "hostKey" | "auth" | "channel" | "shell" | "subsystem" | "directory";
 
+export type SyncDeleteReport = {
+	deleted: number,
+	/**  Changed or gone since the compare: left alone. */
+	skipped: number,
+	failed: number,
+	first: PathFailure | null,
+};
+
+/**
+ *  One planned entry: its path relative to the start directories, and the target as the compare saw it
+ *  (`None` for a directory, or when the target did not exist). Deleting a directory needs its `tree`.
+ */
+export type SyncItem = {
+	rel: string,
+	expected: FileStamp | null,
+	tree: TreeEntry[] | null,
+};
+
 export type TerminalRenderer = "auto" | "webgl" | "dom";
 
 export type Theme = "dark" | "light";
@@ -476,6 +535,14 @@ export type TransferEvent =
 { kind: "conflict"; jobId: number; source: FileStamp; target: FileStamp } | 
 /**  Every job of the batch reached a final state. */
 { kind: "batchDone"; batchId: number; targetDir: string; direction: Direction };
+
+export type TreeEntry = {
+	/**  Relative to the directory the tree belongs to. */
+	rel: string,
+	dir: boolean,
+	size: number,
+	mtime: number | null,
+};
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

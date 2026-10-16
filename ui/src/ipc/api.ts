@@ -7,6 +7,10 @@ import { Channel } from "@tauri-apps/api/core";
 import { commands } from "./bindings";
 import type {
   Bookmark,
+  Difference,
+  SyncDeleteReport,
+  SyncItem,
+  PaneSide,
   ChmodReport,
   ChosenApp,
   CancelTarget,
@@ -59,7 +63,15 @@ export type {
   ConnectEvent,
   CoreError,
   Entry,
-  ChmodFailure,
+  Difference,
+  DiffStatus,
+  NodeInfo,
+  DirContents,
+  TreeEntry,
+  PaneSide,
+  SyncDeleteReport,
+  SyncItem,
+  PathFailure,
   ChmodReport,
   EntryKind,
   EnvVar,
@@ -265,6 +277,18 @@ export function sftpClose(sessionId: SessionId): Promise<string[]> {
 }
 export function sftpChmod(sessionId: SessionId, paths: string[], change: ModeChange, recursive: boolean): Promise<ChmodReport> {
   return unwrap(commands.sftpChmod(sessionId, paths, change, recursive));
+}
+export function syncCompare(sessionId: SessionId, localDir: string, remoteDir: string, exclude: string[]): Promise<Difference[]> {
+  return unwrap(commands.syncCompare(sessionId, localDir, remoteDir, exclude));
+}
+export function syncCancel(sessionId: SessionId): Promise<void> {
+  return unwrapVoid(commands.syncCancel(sessionId));
+}
+export function syncEnqueue(sessionId: SessionId, direction: Direction, localDir: string, remoteDir: string, items: SyncItem[], exclude: string[]): Promise<number[]> {
+  return unwrap(commands.syncEnqueue(sessionId, direction, localDir, remoteDir, items, exclude));
+}
+export function syncDelete(sessionId: SessionId, side: PaneSide, baseDir: string, items: SyncItem[], exclude: string[]): Promise<SyncDeleteReport> {
+  return unwrap(commands.syncDelete(sessionId, side, baseDir, items, exclude));
 }
 export function sftpCreateFile(sessionId: SessionId, dir: string, name: string): Promise<void> {
   return unwrapVoid(commands.sftpCreateFile(sessionId, dir, name));

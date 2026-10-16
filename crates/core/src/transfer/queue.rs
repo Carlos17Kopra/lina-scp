@@ -9,6 +9,7 @@ use futures::{StreamExt, stream};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
+use super::compare::matches;
 use super::copy::{IN_FLIGHT, Limits, copy_range};
 use super::side::{Node, NodeKind, Side};
 use super::{
@@ -48,6 +49,10 @@ struct Batch {
     file_mode: Option<u32>,
     retryable: bool,
     done_sent: bool,
+    /// Target path -> stamp a compare saw: overwritten without asking while it is still exactly that (sync).
+    expected: HashMap<String, FileStamp>,
+    /// Name patterns left out when a directory job lists its children (sync).
+    exclude: Vec<String>,
 }
 
 struct State {
@@ -218,6 +223,31 @@ impl TransferQueue {
         target_dir: String,
         options: EnqueueOptions,
     ) -> Result<BatchId> {
+        self.enqueue_inner(direction, sources, target_dir, options, HashMap::new(), Vec::new()).await
+    }
+
+    /// Sync: a target whose stamp is still the one in `expected` is overwritten without asking; any other existing
+    /// target (changed since the compare, or appeared since) opens the conflict dialog as usual.
+    pub async fn enqueue_expecting(
+        &self,
+        direction: Direction,
+        sources: Vec<String>,
+        target_dir: String,
+        expected: HashMap<String, FileStamp>,
+        exclude: Vec<String>,
+    ) -> Result<BatchId> {
+        self.enqueue_inner(direction, sources, target_dir, EnqueueOptions::default(), expected, exclude).await
+    }
+
+    async fn enqueue_inner(
+        &self,
+        direction: Direction,
+        sources: Vec<String>,
+        target_dir: String,
+        options: EnqueueOptions,
+        expected: HashMap<String, FileStamp>,
+        exclude: Vec<String>,
+    ) -> Result<BatchId> {
         if self.inner.lock().closed {
             return Err(CoreError::internal("transfer queue is closed"));
         }
@@ -252,6 +282,8 @@ impl TransferQueue {
                 file_mode: options.file_mode.map(|m| m & 0o7777),
                 retryable: options == EnqueueOptions::default(),
                 done_sent: false,
+                expected,
+                exclude,
             },
         );
         let mut jobs = Vec::new();
@@ -293,6 +325,7 @@ impl TransferQueue {
         } else {
             vec![id]
         };
+        let mut parts = Vec::new();
         for job_id in ids {
             if st.conflict_open == Some(job_id) {
                 st.conflict_open = None;
@@ -301,6 +334,11 @@ impl TransferQueue {
             entry.conflict = None;
             if decision == Decision::Skip {
                 entry.job.state = JobState::Skipped;
+                // A resumed job that now asks owns a part from before the pause.
+                if entry.resume_at > 0 {
+                    parts.push((entry.job.direction, format!("{}.filepart", entry.job.target)));
+                    entry.resume_at = 0;
+                }
             } else {
                 // `Newer` is checked by the worker against the target as it is now, not as it was
                 // when the dialog opened.
@@ -309,7 +347,7 @@ impl TransferQueue {
             }
             (self.inner.emit)(TransferEvent::Job { job: entry.job.clone() });
         }
-        self.inner.after_change(&mut st, batch_id, Vec::new());
+        self.inner.after_change(&mut st, batch_id, parts);
         Ok(())
     }
 
@@ -693,6 +731,7 @@ struct Snapshot {
     stamp: Option<FileStamp>,
     decision: Option<Decision>,
     file_mode: Option<u32>,
+    expected: Option<FileStamp>,
 }
 
 async fn run_job(inner: Arc<Inner>, id: JobId, remote: Arc<dyn Side>, cancel: CancellationToken) {
@@ -706,6 +745,7 @@ async fn run_job(inner: Arc<Inner>, id: JobId, remote: Arc<dyn Side>, cancel: Ca
             stamp: entry.stamp,
             decision: entry.decided.or(batch.and_then(|b| b.default)),
             file_mode: batch.and_then(|b| b.file_mode),
+            expected: batch.and_then(|b| b.expected.get(&entry.job.target).copied()),
         };
         if let Some(entry) = Inner::entry(&mut st, id) {
             entry.decided = None;
@@ -748,10 +788,12 @@ async fn run_dir(inner: &Inner, job: &Job, src: &dyn Side, dst: &dyn Side) -> Ou
         }
         Err(error) => return Outcome::Failed(error),
     }
-    let children = match src.children(&job.source).await {
+    let mut children = match src.children(&job.source).await {
         Ok(children) => children,
         Err(error) => return Outcome::Failed(error),
     };
+    let exclude = inner.lock().batches.get(&job.batch_id).map(|b| b.exclude.clone()).unwrap_or_default();
+    children.retain(|c| !exclude.iter().any(|pattern| matches(pattern, &c.name)));
     // ponytail: one stat per child; the SFTP readdir attrs would save the round trips for big dirs.
     let stats: Vec<_> = stream::iter(children)
         .map(|child| async move {
@@ -784,6 +826,14 @@ async fn run_dir(inner: &Inner, job: &Job, src: &dyn Side, dst: &dyn Side) -> Ou
     Outcome::Expanded(jobs)
 }
 
+/// Skipping a resumed job must not leave its part behind.
+async fn skip_with_part(dst: &dyn Side, part: &str, resume: u64) -> Outcome {
+    if resume > 0 {
+        let _ = dst.remove(part).await;
+    }
+    Outcome::Skipped(None)
+}
+
 async fn run_file(
     inner: &Inner,
     snap: &Snapshot,
@@ -810,20 +860,20 @@ async fn run_file(
             Err(error) => return Outcome::Failed(error),
         };
     }
-    if resume == 0 {
-        match dst.stat(&job.target).await {
-            Ok(Some(t)) if matches!(t.kind, NodeKind::Dir | NodeKind::DirLink) => {
-                return Outcome::Failed(CoreError::fs(FsKind::AlreadyExists, &job.target, "a directory exists"));
-            }
-            Ok(Some(t)) => match snap.decision {
-                None | Some(Decision::CancelBatch) => return Outcome::Conflict(now, stamp(&t)),
-                Some(Decision::Skip) => return Outcome::Skipped(None),
-                Some(Decision::Newer) if !is_newer(node.mtime, t.mtime) => return Outcome::Skipped(None),
-                Some(Decision::Newer | Decision::Overwrite) => {}
-            },
-            Ok(None) => {}
-            Err(error) => return Outcome::Failed(error),
+    // Also on resume: the target may have changed while the connection was gone (the part is a separate file).
+    match dst.stat(&job.target).await {
+        Ok(Some(t)) if matches!(t.kind, NodeKind::Dir | NodeKind::DirLink) => {
+            return Outcome::Failed(CoreError::fs(FsKind::AlreadyExists, &job.target, "a directory exists"));
         }
+        Ok(Some(t)) if snap.decision.is_none() && snap.expected == Some(stamp(&t)) => {}
+        Ok(Some(t)) => match snap.decision {
+            None | Some(Decision::CancelBatch) => return Outcome::Conflict(now, stamp(&t)),
+            Some(Decision::Skip) => return skip_with_part(dst, &part, resume).await,
+            Some(Decision::Newer) if !is_newer(node.mtime, t.mtime) => return skip_with_part(dst, &part, resume).await,
+            Some(Decision::Newer | Decision::Overwrite) => {}
+        },
+        Ok(None) => {}
+        Err(error) => return Outcome::Failed(error),
     }
     inner.set_size(job.id, node.size, now);
     let result = async {
@@ -1117,6 +1167,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn expected_targets_are_overwritten_without_asking_and_changed_ones_ask() {
+        let e = env(serial());
+        for name in ["a", "b"] {
+            std::fs::write(e.remote.join(name), b"old").unwrap();
+            std::fs::write(e.local.join(name), b"new!").unwrap();
+        }
+        // The compare saw a and b like this; b changes afterwards; c appears on the target after the compare.
+        let seen = |name: &str| {
+            let meta = std::fs::metadata(e.remote.join(name)).unwrap();
+            FileStamp { size: meta.len(), mtime: Some(std::os::unix::fs::MetadataExt::mtime(&meta)) }
+        };
+        let expected: HashMap<String, FileStamp> = ["a", "b"].iter().map(|n| (p(&e.remote.join(n)), seen(n))).collect();
+        std::fs::write(e.remote.join("b"), b"changed on the server").unwrap();
+        std::fs::write(e.local.join("c"), b"c").unwrap();
+        std::fs::write(e.remote.join("c"), b"appeared").unwrap();
+        let sources = ["a", "b", "c"].iter().map(|n| p(&e.local.join(n))).collect();
+        e.queue.enqueue_expecting(Direction::Upload, sources, p(&e.remote), expected, Vec::new()).await.unwrap();
+        e.rec
+            .wait("b and c ask", |r| r.jobs().values().filter(|j| j.state == JobState::WaitingDecision).count() == 2)
+            .await;
+        assert_eq!(e.rec.job_by_rel("a").state, JobState::Done);
+        assert_eq!(std::fs::read(e.remote.join("a")).unwrap(), b"new!");
+        assert_eq!(std::fs::read(e.remote.join("b")).unwrap(), b"changed on the server");
+        assert!(e.rec.job_by_rel("a").retryable, "sync batches can be retried");
+    }
+
+    #[tokio::test]
     async fn conflicts_open_one_at_a_time_and_others_keep_running() {
         let e = env(serial());
         two_conflicts(&e).await;
@@ -1305,6 +1382,34 @@ mod tests {
         assert_eq!(e.rec.job_by_rel("big").state, JobState::Done);
         assert_eq!(std::fs::read(e.remote.join("big")).unwrap(), data);
         assert!(!e.remote.join("big.filepart").exists());
+    }
+
+    #[tokio::test]
+    async fn a_resumed_sync_job_checks_its_target_again() {
+        let (e, faulty) = faulty_env(opts());
+        let data: Vec<u8> = (0..(10 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
+        std::fs::write(e.local.join("big"), &data).unwrap();
+        std::fs::write(e.remote.join("big"), b"old").unwrap();
+        let meta = std::fs::metadata(e.remote.join("big")).unwrap();
+        let seen = FileStamp { size: meta.len(), mtime: Some(std::os::unix::fs::MetadataExt::mtime(&meta)) };
+        let expected = HashMap::from([(p(&e.remote.join("big")), seen)]);
+        faulty.fail_writes_after(3 * 1024 * 1024);
+        e.queue
+            .enqueue_expecting(Direction::Upload, vec![p(&e.local.join("big"))], p(&e.remote), expected, Vec::new())
+            .await
+            .unwrap();
+        e.rec.wait("paused", |r| r.job_by_rel("big").state == JobState::Paused).await;
+        // Edited on the server while the connection was gone.
+        std::fs::write(e.remote.join("big"), b"edited while offline").unwrap();
+        e.queue.set_remote(None);
+        faulty.heal();
+        e.queue.set_remote(Some(FaultySide::new()));
+        e.rec.wait("asks", |r| r.job_by_rel("big").state == JobState::WaitingDecision).await;
+        assert_eq!(std::fs::read(e.remote.join("big")).unwrap(), b"edited while offline");
+        e.queue.resolve(e.rec.job_by_rel("big").id, Decision::Skip, false).unwrap();
+        e.rec.wait("skipped", |r| r.job_by_rel("big").state == JobState::Skipped).await;
+        let part = e.remote.join("big.filepart");
+        e.rec.wait("part removed", |_| !part.exists()).await;
     }
 
     #[tokio::test]

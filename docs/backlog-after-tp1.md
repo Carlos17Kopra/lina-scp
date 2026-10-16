@@ -118,3 +118,12 @@ fixed before the merge are not listed.
 - `PermissionsDialog` keeps its initial state after a partially failed apply while the pane reloads underneath.
 - An invalid `ModeChange` mask is `CoreError::Config`, not a dedicated validation error.
 - A selected symlink to a directory never offers "rekursiv" (unlike `chmod -R`, which follows links named on the command line).
+
+## TP4b review (deferred minors)
+
+- A late `sync_cancel` from a closed dialog can cancel the next compare of the same tab; closing the view without the dialog's cancel never cancels.
+- Compare checks cancel only between directories and stats every entry (readdir attributes unused); a 100k-entry flat dir is slow to cancel, and the preview table is not virtualized.
+- One failed `stat` aborts the whole compare (fail closed, but harsh for a single raced entry).
+- "Für alle übernehmen" in a sync conflict covers only one target directory (one batch per directory).
+- A remote edit in the same second with the same size still matches the expected stamp and is overwritten.
+- Missing tests: unchecked rows not sent, late compare result dropped, file link as delete target.

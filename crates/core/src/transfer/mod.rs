@@ -1,17 +1,21 @@
 //! File transfers between the local file system and an SFTP session (TP3b).
 
 mod chmod;
+mod compare;
 mod copy;
 mod local_side;
 mod queue;
 mod side;
+mod sync;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-pub use chmod::{ChmodFailure, ModeChange, chmod};
+pub use chmod::{ModeChange, PathFailure, chmod};
+pub use compare::{DiffStatus, Difference, DirContents, NodeInfo, TreeEntry, compare};
 pub use local_side::LocalSide;
 pub use queue::{TransferEmit, TransferQueue};
 pub use side::{Child, Node, NodeKind, Reader, Side, Writer};
+pub use sync::{SyncDeleteReport, SyncItem, delete_unchanged, enqueue_sync};
 
 use serde::{Deserialize, Serialize};
 

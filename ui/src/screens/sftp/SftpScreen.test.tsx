@@ -215,6 +215,17 @@ describe("SftpScreen", () => {
     expect(api.sftpList).toHaveBeenCalledWith("s1", "/srv");
   });
 
+  it("opens the sync dialog for both pane folders", async () => {
+    openTab();
+    vi.mocked(api.syncCompare).mockResolvedValue([]);
+    render(<SftpScreen />);
+    await vi.waitFor(() => expect(useSftpStore.getState().tabs[0]!.panes.local.path).toBe("/l"));
+    await userEvent.click(screen.getByRole("button", { name: "Synchronisieren" }));
+    const dialog = screen.getByRole("dialog", { name: "Synchronisieren" });
+    expect(await within(dialog).findByText("Beide Ordner sind gleich.")).toBeInTheDocument();
+    expect(api.syncCompare).toHaveBeenCalledWith("s1", "/l", "/srv", []);
+  });
+
   it("the toolbar edit button is off on the remote side while not connected", () => {
     openTab();
     useSftpStore.getState().onEvent("t1", "s1", { kind: "lost", error: { type: "cancelled" } });
