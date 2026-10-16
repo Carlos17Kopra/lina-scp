@@ -2987,6 +2987,7 @@ dependencies = [
  "libc",
  "md-5",
  "portable-pty",
+ "rand 0.10.3",
  "rusqlite",
  "russh",
  "russh-sftp",

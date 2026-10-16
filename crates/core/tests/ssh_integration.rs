@@ -392,6 +392,55 @@ async fn local_and_remote_forwards_run_over_the_terminal_connection() {
 
 #[tokio::test]
 #[ignore = "requires docker"]
+async fn copy_public_key_appends_once_with_private_modes() {
+    use linascp_core::connect::copy_public_key;
+    let c = Container::start(None);
+    let env = Env::new();
+    let h = host(c.port, "pwuser", AuthMethod::Password, None);
+    env.store_password(&h, "pwpass");
+    let p = prompter(trust_all);
+    let key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF1w1k1W6vnfRuRnMRhx9WheXyFs7vy1sTrQ47LcDBbV alice@laptop";
+    // An existing file without a final newline.
+    c.exec(&[
+        "sh",
+        "-c",
+        "mkdir -p ~pwuser/.ssh && printf other-key > ~pwuser/.ssh/authorized_keys && chown -R pwuser ~pwuser/.ssh",
+    ]);
+
+    let copy = || {
+        copy_public_key(
+            request(h.clone(), None),
+            env.deps(None),
+            p.broker.clone(),
+            p.emit.clone(),
+            CancellationToken::new(),
+            key,
+        )
+    };
+    assert!(copy().await.expect("first copy"), "added");
+    assert!(!copy().await.expect("second copy"), "already there");
+    let file = c.exec(&["cat", "/home/pwuser/.ssh/authorized_keys"]);
+    assert_eq!(file, format!("other-key\n{key}"));
+    assert!(matches!(
+        copy_public_key(
+            request(h.clone(), None),
+            env.deps(None),
+            p.broker.clone(),
+            p.emit.clone(),
+            CancellationToken::new(),
+            "nope"
+        )
+        .await,
+        Err(CoreError::Config { .. })
+    ));
+
+    c.exec(&["rm", "-rf", "/home/pwuser/.ssh"]);
+    assert!(copy().await.expect("copy into a fresh home"));
+    assert_eq!(c.exec(&["stat", "-c", "%a", "/home/pwuser/.ssh", "/home/pwuser/.ssh/authorized_keys"]), "700\n600");
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
 async fn refused_port_is_network_refused() {
     let env = Env::new();
     let h = host(free_port(), "pwuser", AuthMethod::Password, None);

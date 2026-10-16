@@ -619,6 +619,82 @@ pub async fn test_connection(
     }
 }
 
+/// Appends the key read from stdin to `~/.ssh/authorized_keys` unless that exact line is there (exit 3).
+/// Run through `exec sh -c '…'` so a non-POSIX login shell does not matter: the script holds no single quote.
+const COPY_ID_SCRIPT: &str = r#"umask 077
+mkdir -p "$HOME/.ssh" || exit 1
+f="$HOME/.ssh/authorized_keys"
+IFS= read -r k
+[ -n "$k" ] || exit 2
+touch "$f" || exit 1
+if grep -qxF -- "$k" "$f"; then exit 3; fi
+if [ -s "$f" ] && [ -n "$(tail -c1 "$f")" ]; then echo >> "$f" || exit 1; fi
+printf "%s\n" "$k" >> "$f" || exit 1"#;
+
+/// Remote error output shown to the user is capped.
+const COPY_ID_STDERR_MAX: usize = 500;
+
+/// "Auf Host eintragen" (ssh-copy-id): log in like a test, then append `public_key` to the server's
+/// `authorized_keys`. `true` = added, `false` = it was there already. The key goes over stdin only.
+pub async fn copy_public_key(
+    req: ConnectRequest,
+    deps: ConnectDeps,
+    broker: Arc<PromptBroker>,
+    emit: Arc<dyn Fn(ConnectEvent) + Send + Sync>,
+    cancel: CancellationToken,
+    public_key: &str,
+) -> Result<bool> {
+    let result = async {
+        let key =
+            crate::keys::parse_public_key(public_key)?.to_openssh().map_err(|e| CoreError::config(e.to_string()))?;
+        let mut steps: Vec<Step> = plan_steps(&req).into_iter().filter(|s| !matches!(s, Step::Shell)).collect();
+        steps.dedup();
+        emit(ConnectEvent::Steps { steps });
+        let pipeline = Pipeline::new(deps, broker, emit.clone(), cancel);
+        let est = pipeline.establish(&req).await?;
+        let added = pipeline
+            .step(Step::Channel, async {
+                pipeline.log("debug1: Appending the key to ~/.ssh/authorized_keys");
+                let mut channel = est.handle.channel_open_session().await.map_err(map_russh_error)?;
+                channel.exec(true, format!("exec sh -c '{COPY_ID_SCRIPT}'")).await.map_err(map_russh_error)?;
+                channel.data(format!("{key}\n").as_bytes()).await.map_err(map_russh_error)?;
+                channel.eof().await.map_err(map_russh_error)?;
+                let mut code = None;
+                let mut stderr = Vec::new();
+                while let Some(msg) = channel.wait().await {
+                    match msg {
+                        russh::ChannelMsg::ExitStatus { exit_status } => code = Some(exit_status),
+                        russh::ChannelMsg::ExtendedData { data, .. } if stderr.len() < COPY_ID_STDERR_MAX => {
+                            stderr.extend_from_slice(&data)
+                        }
+                        _ => {}
+                    }
+                }
+                match code {
+                    Some(0) => Ok(true),
+                    Some(3) => Ok(false),
+                    other => {
+                        let text =
+                            String::from_utf8_lossy(&stderr[..stderr.len().min(COPY_ID_STDERR_MAX)]).into_owned();
+                        let code = other.map_or_else(|| "kein Exit-Status".to_string(), |c| format!("Exit {c}"));
+                        Err(CoreError::config(format!(
+                            "Eintragen fehlgeschlagen ({code}): {}",
+                            sanitize_log_line(text.trim())
+                        )))
+                    }
+                }
+            })
+            .await;
+        disconnect(est).await;
+        added
+    }
+    .await;
+    if let Err(error) = &result {
+        emit(ConnectEvent::Failed { error: error.clone() });
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
