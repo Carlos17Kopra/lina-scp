@@ -8,6 +8,7 @@ pub mod reconnect;
 pub mod sftp_reconnect;
 mod sftp_session;
 pub mod ssh_session;
+mod tunnel_session;
 
 use std::future::Future;
 use std::path::PathBuf;
@@ -32,6 +33,7 @@ pub use reconnect::{BACKOFF_SECS, ConnectFuture, Connector, Enabled, MAX_ATTEMPT
 pub use sftp_reconnect::{ChangeFn, ConnConnector, ConnFuture, ConnStatus, Connection, Reconnecting, StatusFn};
 pub use sftp_session::{LostFn, SftpSession};
 pub use ssh_session::SshSession;
+pub use tunnel_session::TunnelSession;
 
 use crate::error::{CoreError, NetworkKind, Result};
 use crate::known_hosts::KnownHosts;
@@ -153,10 +155,16 @@ pub fn plan_steps(req: &ConnectRequest) -> Vec<Step> {
     steps
 }
 
-/// Steps of an SFTP connect: the SSH part, then subsystem and start directory.
-pub fn plan_sftp_steps(req: &ConnectRequest) -> Vec<Step> {
+/// Steps of a tunnel connect: the SSH part only, no channel or shell.
+pub fn plan_tunnel_steps(req: &ConnectRequest) -> Vec<Step> {
     let mut steps = plan_steps(req);
     steps.truncate(steps.len() - 2);
+    steps
+}
+
+/// Steps of an SFTP connect: the SSH part, then subsystem and start directory.
+pub fn plan_sftp_steps(req: &ConnectRequest) -> Vec<Step> {
+    let mut steps = plan_tunnel_steps(req);
     steps.extend([Step::Subsystem, Step::Directory]);
     steps
 }
@@ -471,6 +479,13 @@ impl Pipeline {
     }
 }
 
+impl Pipeline {
+    /// No steps of its own: the authenticated connection is the tunnel connection.
+    fn open_tunnel(&self, est: Established, on_lost: LostFn) -> TunnelSession {
+        TunnelSession::start(est.handle, est.jump, est.info, on_lost)
+    }
+}
+
 async fn disconnect(est: Established) {
     let _ = est.handle.disconnect(russh::Disconnect::ByApplication, "", "en").await;
     if let Some(jump) = est.jump {
@@ -567,6 +582,25 @@ pub async fn connect_sftp(
         pipeline.open_sftp(&req, est, on_lost).await
     }
     .await;
+    if let Err(error) = &result {
+        emit(ConnectEvent::Failed { error: error.clone() });
+    }
+    result
+}
+
+/// Run the pipeline up to an authenticated connection for port forwards (no shell).
+/// The caller registers the session and emits `ConnectEvent::Connected`.
+pub async fn connect_tunnel(
+    req: ConnectRequest,
+    deps: ConnectDeps,
+    broker: Arc<PromptBroker>,
+    emit: EmitFn,
+    on_lost: LostFn,
+    cancel: CancellationToken,
+) -> Result<TunnelSession> {
+    emit(ConnectEvent::Steps { steps: plan_tunnel_steps(&req) });
+    let pipeline = Pipeline::new(deps, broker, emit.clone(), cancel);
+    let result = pipeline.establish(&req).await.map(|est| pipeline.open_tunnel(est, on_lost));
     if let Err(error) = &result {
         emit(ConnectEvent::Failed { error: error.clone() });
     }
@@ -772,6 +806,12 @@ mod tests {
             vec![Step::JumpHost, Step::Tcp, Step::HostKey, Step::Auth, Step::Subsystem, Step::Directory]
         );
         assert_eq!(plan_sftp_steps(&request(false))[0], Step::Tcp);
+    }
+
+    #[test]
+    fn plan_tunnel_steps_skip_channel_and_shell() {
+        assert_eq!(plan_tunnel_steps(&request(false)), vec![Step::Tcp, Step::HostKey, Step::Auth]);
+        assert_eq!(plan_tunnel_steps(&request(true)), vec![Step::JumpHost, Step::Tcp, Step::HostKey, Step::Auth]);
     }
 
     #[test]

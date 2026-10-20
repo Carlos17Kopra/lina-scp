@@ -22,17 +22,21 @@ use crate::validate::validate_file_name;
 /// In-flight `stat` requests while resolving symlinks of one listing.
 const LINK_STAT_CONCURRENCY: usize = 32;
 
-/// Called at most once when the connection of an SFTP session is gone.
+/// Called at most once when the connection of an SFTP or tunnel session is gone.
 pub type LostFn = Arc<dyn Fn(CoreError) + Send + Sync>;
 
-struct Lost {
-    fired: AtomicBool,
+pub(crate) struct Lost {
+    pub(crate) fired: AtomicBool,
     on_lost: LostFn,
 }
 
 impl Lost {
+    pub(crate) fn new(on_lost: LostFn) -> Arc<Self> {
+        Arc::new(Self { fired: AtomicBool::new(false), on_lost })
+    }
+
     /// Reports `error` once; later calls (and calls after `close`) do nothing.
-    fn fire(&self, error: CoreError) {
+    pub(crate) fn fire(&self, error: CoreError) {
         if !self.fired.swap(true, Ordering::SeqCst) {
             (self.on_lost)(error);
         }
@@ -54,6 +58,22 @@ fn lost_error() -> CoreError {
     network_error(NetworkKind::Other, "connection lost")
 }
 
+/// Fires `lost` once the connection closes; abort the returned handle on `close`.
+pub(crate) fn watch_closed(handle: Arc<client::Handle<ClientHandler>>, lost: Arc<Lost>) -> AbortHandle {
+    // russh has no awaitable "closed": poll. Keepalive (host.keepalive_s) closes the handle on a dead link.
+    // ponytail: 1 s polling per session; a handler `disconnected` hook if this ever matters.
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            if handle.is_closed() {
+                lost.fire(lost_error());
+                break;
+            }
+        }
+    })
+    .abort_handle()
+}
+
 impl SftpSession {
     pub(crate) fn start(
         raw: RawSftpSession,
@@ -65,22 +85,8 @@ impl SftpSession {
         on_lost: LostFn,
     ) -> Self {
         let handle = Arc::new(handle);
-        let lost = Arc::new(Lost { fired: AtomicBool::new(false), on_lost });
-        // russh has no awaitable "closed": poll. Keepalive (host.keepalive_s) closes the handle on a dead link.
-        // ponytail: 1 s polling per session; a handler `disconnected` hook if this ever matters.
-        let watcher = {
-            let (handle, lost) = (handle.clone(), lost.clone());
-            tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                    if handle.is_closed() {
-                        lost.fire(lost_error());
-                        break;
-                    }
-                }
-            })
-            .abort_handle()
-        };
+        let lost = Lost::new(on_lost);
+        let watcher = watch_closed(handle.clone(), lost.clone());
         Self { raw: Arc::new(raw), posix_rename, handle, jump, info, version, lost, watcher }
     }
 
