@@ -7,8 +7,8 @@ pub mod state;
 mod util;
 
 use commands::{
-    bookmarks, connect, hosts, keys, profiles, secrets, sessions, settings, sftp, sftp_edit, sftp_sync, sftp_transfers,
-    snippets, transfer,
+    bookmarks, connect, hosts, keys, port_forwarding, profiles, secrets, sessions, settings, sftp, sftp_edit,
+    sftp_sync, sftp_transfers, snippets, transfer,
 };
 
 /// Where the generated TypeScript bindings live (committed to git).
@@ -60,6 +60,8 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             sftp_sync::keep_stop,
             sessions::tunnel_start,
             sessions::tunnel_stop,
+            port_forwarding::connect_tunnels,
+            port_forwarding::tunnels_close,
             keys::keys_list,
             keys::key_defaults_get,
             keys::key_generate,
