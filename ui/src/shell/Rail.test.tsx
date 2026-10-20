@@ -38,13 +38,12 @@ describe("Rail", () => {
     expect(useUiStore.getState().view).toBe("snippets");
   });
 
-  it("shows later features as disabled with a tooltip", async () => {
+  it("opens port forwarding", async () => {
     renderRail();
     const item = screen.getByRole("button", { name: "Port-Forwarding" });
-    expect(item).toHaveAttribute("aria-disabled", "true");
-    expect(item).toHaveAttribute("title", "Port-Forwarding – Folgt in einer späteren Version");
+    expect(item).not.toHaveAttribute("aria-disabled");
     await userEvent.click(item);
-    expect(useUiStore.getState()).toMatchObject({ view: "hosts", modal: null });
+    expect(useUiStore.getState().view).toBe("portForwarding");
   });
 
   it("opens the keychain", async () => {
