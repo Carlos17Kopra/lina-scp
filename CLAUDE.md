@@ -20,12 +20,15 @@ non-commercial open-source release later. Target platform is Linux only: Debian 
   - `session/`: local PTY and SSH sessions.
   - `keys.rs`: the user's SSH key files (TP5b): list, generate; `connect::copy_public_key` is ssh-copy-id.
   - `tunnel.rs`: port forwards L/R/D (TP5a) over a terminal session's connection, kept across reconnects.
+  - `connect/tunnel_session.rs`: shell-less connection that only carries port forwards (TP6b).
   - `transfer/`: transfer queue (TP3b) over the `Side` trait (local fs, `SftpSession`), bandwidth pacer, `chmod`
     (TP4a), `compare` and sync helpers (TP4b), `keep` (TP4c: polls the local tree, uploads what changed).
   - `edit/`: editing remote files (TP3c): private copy in `~/.cache/linascp/edit/`, polled and uploaded through the
     transfer queue; the editor is started by `src-tauri/src/editor.rs` (gio, `text/plain` default).
 - `src-tauri`: Tauri 2 app.
   - Commands in `commands/`, output pump with ack flow control in `output.rs`.
+  - `commands/port_forwarding.rs`: the port-forwarding screen's connections (TP6b); their `Tunnels` are also in
+    `state.tunnels`, so `tunnel_start`/`tunnel_stop` serve both.
   - specta bindings are exported to `ui/src/ipc/bindings.ts`. That file is generated, never edit it by hand. Regenerate
     with `cargo test -p linascp exports_bindings`.
 - `ui/`: React 19 + TypeScript (strict) + zustand + xterm.js.
@@ -53,8 +56,9 @@ non-commercial open-source release later. Target platform is Linux only: Debian 
 - `docs/superpowers/specs/2026-10-17-linascp-tp5b-keychain-design.md`: TP5b spec (keychain, keygen, ssh-copy-id).
 - `docs/superpowers/specs/2026-10-17-linascp-tp5c-settings-design.md`: TP5c spec (settings screen).
 - `docs/superpowers/specs/2026-10-17-linascp-tp6a-cleanup-design.md`: TP6a spec (backlog cleanup) and the TP6 split.
+- `docs/superpowers/specs/2026-10-20-linascp-tp6b-port-forwarding-design.md`: TP6b spec (port-forwarding screen).
 - `docs/acceptance-tp1.md`: manual acceptance checklist (`docs/acceptance-tp2a.md` … `docs/acceptance-tp2d.md` for
-  TP2a–TP2d, `docs/acceptance-tp3a.md` for TP3a, `docs/acceptance-tp3b.md` for TP3b, `docs/acceptance-tp3c.md` for TP3c, `docs/acceptance-tp4a.md` for TP4a, `docs/acceptance-tp4b.md` for TP4b, `docs/acceptance-tp4c.md` for TP4c, `docs/acceptance-tp5a.md` for TP5a, `docs/acceptance-tp5b.md` for TP5b, `docs/acceptance-tp5c.md` for TP5c, `docs/acceptance-tp6a.md` for TP6a).
+  TP2a–TP2d, `docs/acceptance-tp3a.md` for TP3a, `docs/acceptance-tp3b.md` for TP3b, `docs/acceptance-tp3c.md` for TP3c, `docs/acceptance-tp4a.md` for TP4a, `docs/acceptance-tp4b.md` for TP4b, `docs/acceptance-tp4c.md` for TP4c, `docs/acceptance-tp5a.md` for TP5a, `docs/acceptance-tp5b.md` for TP5b, `docs/acceptance-tp5c.md` for TP5c, `docs/acceptance-tp6a.md` for TP6a, `docs/acceptance-tp6b.md` for TP6b).
 - `docs/backlog-after-tp1.md`: deferred review findings. Start TP2 planning there.
 
 ## Commands (run from the repo root)
@@ -102,7 +106,8 @@ bun run tauri build               # .deb + .AppImage in target/release/bundle/
   overwritten; two jobs never write the same target; a file goes up only after one quiet poll.
 - **Tunnels (TP5a):** a `forwarded-tcpip` channel is accepted only for a forward this connection requested; without
   an address, local listeners bind to loopback only; the SOCKS proxy does `CONNECT` only and never asks for
-  credentials; tunnels never prompt and never outlive their session.
+  credentials; tunnels never prompt and never outlive their session (on the port-forwarding screen: their
+  connection; „Trennen“, giving up and leaving the list stop them).
 - **Keys (TP5b):** generated private keys are written 0600 and never overwrite a file; ssh-copy-id sends only the
   checked public key, over stdin.
 
@@ -128,5 +133,5 @@ bun run tauri build               # .deb + .AppImage in target/release/bundle/
 - TP3: SFTP (3a browse, 3b transfers, 3c bookmarks + edit: done).
 - TP4: advanced SFTP (4a permissions, bandwidth, server command; 4b compare + sync; 4c keep up to date: done).
 - TP5: tunnels, keychain, keygen/ssh-copy-id, full settings (5a–5c: done).
-- TP6: 6a backlog cleanup (done), 6b port-forwarding screen, 6c SSH agent identities.
+- TP6: 6a backlog cleanup (done), 6b port-forwarding screen (done), 6c SSH agent identities.
 - No sync between devices. Moving data to another device goes through export/import (`.linascp` files).
