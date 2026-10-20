@@ -479,13 +479,6 @@ impl Pipeline {
     }
 }
 
-impl Pipeline {
-    /// No steps of its own: the authenticated connection is the tunnel connection.
-    fn open_tunnel(&self, est: Established, on_lost: LostFn) -> TunnelSession {
-        TunnelSession::start(est.handle, est.jump, est.info, on_lost)
-    }
-}
-
 async fn disconnect(est: Established) {
     let _ = est.handle.disconnect(russh::Disconnect::ByApplication, "", "en").await;
     if let Some(jump) = est.jump {
@@ -494,6 +487,11 @@ async fn disconnect(est: Established) {
 }
 
 impl Pipeline {
+    /// No steps of its own: the authenticated connection is the tunnel connection.
+    fn open_tunnel(&self, est: Established, on_lost: LostFn) -> TunnelSession {
+        TunnelSession::start(est.handle, est.jump, est.info, on_lost)
+    }
+
     /// Steps Subsystem -> Directory; closes the connection again on failure.
     async fn open_sftp(
         &self,
@@ -936,6 +934,50 @@ mod pipeline_tests {
                 .iter()
                 .any(|e| matches!(e, ConnectEvent::StepFailed { step: Step::Tcp, error: CoreError::Cancelled }))
         );
+    }
+
+    async fn run_tunnel(
+        req: ConnectRequest,
+        cancel: CancellationToken,
+    ) -> (Result<TunnelSession>, Vec<ConnectEvent>, bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let rec = recorder();
+        let broker = Arc::new(PromptBroker::new(Arc::new(|_| {})));
+        let lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let on_lost: LostFn = {
+            let lost = lost.clone();
+            Arc::new(move |_| lost.store(true, std::sync::atomic::Ordering::SeqCst))
+        };
+        let result = connect_tunnel(req, deps(dir.path()), broker, rec.emit.clone(), on_lost, cancel).await;
+        let events = rec.events.lock().unwrap().clone();
+        (result, events, lost.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    fn failed_count(events: &[ConnectEvent]) -> usize {
+        events.iter().filter(|e| matches!(e, ConnectEvent::Failed { .. })).count()
+    }
+
+    #[tokio::test]
+    async fn a_failed_tunnel_connect_reports_its_steps_and_fails_once() {
+        let (result, events, lost) = run_tunnel(request("127.0.0.1", free_port()), CancellationToken::new()).await;
+        assert!(matches!(result, Err(CoreError::Network { kind: NetworkKind::Refused, .. })));
+        assert!(matches!(
+            &events[0],
+            ConnectEvent::Steps { steps } if steps == &vec![Step::Tcp, Step::HostKey, Step::Auth]
+        ));
+        assert_eq!(failed_count(&events), 1);
+        assert!(matches!(events.last(), Some(ConnectEvent::Failed { .. })));
+        assert!(!lost, "a connection that never existed is never lost");
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_tunnel_connect_fails_once_with_cancelled() {
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let (result, events, _) = run_tunnel(request("127.0.0.1", free_port()), cancel).await;
+        assert!(matches!(result, Err(CoreError::Cancelled)));
+        assert_eq!(failed_count(&events), 1);
+        assert!(matches!(events.last(), Some(ConnectEvent::Failed { error: CoreError::Cancelled })));
     }
 
     #[tokio::test]

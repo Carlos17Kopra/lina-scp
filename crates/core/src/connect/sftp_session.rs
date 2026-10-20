@@ -26,7 +26,7 @@ const LINK_STAT_CONCURRENCY: usize = 32;
 pub type LostFn = Arc<dyn Fn(CoreError) + Send + Sync>;
 
 pub(crate) struct Lost {
-    pub(crate) fired: AtomicBool,
+    fired: AtomicBool,
     on_lost: LostFn,
 }
 
@@ -40,6 +40,15 @@ impl Lost {
         if !self.fired.swap(true, Ordering::SeqCst) {
             (self.on_lost)(error);
         }
+    }
+
+    pub(crate) fn has_fired(&self) -> bool {
+        self.fired.load(Ordering::SeqCst)
+    }
+
+    /// The connection is closed on purpose: from now on nothing is reported.
+    pub(crate) fn silence(&self) {
+        self.fired.store(true, Ordering::SeqCst);
     }
 }
 
@@ -108,7 +117,7 @@ impl SftpSession {
     }
 
     fn ensure_alive(&self) -> Result<()> {
-        if self.lost.fired.load(Ordering::SeqCst) { Err(lost_error()) } else { Ok(()) }
+        if self.lost.has_fired() { Err(lost_error()) } else { Ok(()) }
     }
 
     pub async fn home(&self) -> Result<String> {
@@ -282,7 +291,7 @@ impl SftpSession {
 
     /// Ends the session without a `Lost` event.
     pub async fn close(&self) {
-        self.lost.fired.store(true, Ordering::SeqCst);
+        self.lost.silence();
         self.watcher.abort();
         let _ = self.raw.close_session();
         let _ = self.handle.disconnect(russh::Disconnect::ByApplication, "", "en").await;

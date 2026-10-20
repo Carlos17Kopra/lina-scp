@@ -1,7 +1,6 @@
 //! Shell-less SSH connection that only carries port forwards.
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use russh::client;
 use tokio::task::AbortHandle;
@@ -45,7 +44,7 @@ impl TunnelSession {
 
     /// Ends the connection without a `Lost` event.
     pub async fn close(&self) {
-        self.lost.fired.store(true, Ordering::SeqCst);
+        self.lost.silence();
         self.watcher.abort();
         let _ = self.handle.disconnect(russh::Disconnect::ByApplication, "", "en").await;
         if let Some(jump) = &self.jump {
