@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use linascp_core::connect::{
     ConnectDeps, ConnectEvent, ConnectRequest, ConnectTarget, HostKeyDecision, LostFn, Prompt, PromptAnswer,
-    SshSession, Step, connect_sftp, connect_ssh, test_connection,
+    SshSession, Step, connect_sftp, connect_ssh, connect_tunnel, test_connection,
 };
 use linascp_core::error::{CoreError, FsKind, NetworkKind, Result};
 use linascp_core::known_hosts::{HostKeyStatus, KnownHosts};
@@ -388,6 +388,52 @@ async fn local_and_remote_forwards_run_over_the_terminal_connection() {
     output.wait_for("got-ping-rf").await;
     tunnels.end();
     assert_shell(session, &output).await;
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn tunnel_connects_and_forwards_a_local_port() {
+    use linascp_core::model::{ForwardKind, PortForward};
+    use linascp_core::tunnel::Tunnels;
+    use tokio::io::AsyncReadExt;
+
+    let c = Container::start(None);
+    let env = Env::new();
+    let h = host(c.port, "pwuser", AuthMethod::Password, None);
+    env.store_password(&h, "pwpass");
+    let local_port = free_port();
+    let rule = PortForward {
+        id: uuid::Uuid::new_v4(),
+        kind: ForwardKind::Local,
+        bind: local_port.to_string(),
+        target: "127.0.0.1:22".into(),
+        autostart: true,
+    };
+    let tunnels = Tunnels::new(vec![rule], Arc::new(|_| {}));
+    let mut deps = env.deps(None);
+    let (epoch, routes) = tunnels.routes();
+    deps.forwarded = Some(routes);
+    let p = prompter(trust_all);
+    let session =
+        connect_tunnel(request(h, None), deps, p.broker.clone(), p.emit.clone(), no_lost(), CancellationToken::new())
+            .await
+            .expect("tunnel connected");
+    assert!(matches!(
+        &p.events()[0],
+        ConnectEvent::Steps { steps } if steps == &vec![Step::Tcp, Step::HostKey, Step::Auth]
+    ));
+    let link = session.link();
+    tunnels.attach(epoch, link.clone()).await;
+
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", local_port)).await.unwrap();
+    let mut banner = [0u8; 7];
+    s.read_exact(&mut banner).await.unwrap();
+    assert_eq!(&banner, b"SSH-2.0", "local forward reaches the server's own sshd");
+
+    tunnels.end();
+    session.close().await;
+    let origin = "127.0.0.1:1".parse().unwrap();
+    assert!(link.open_direct("127.0.0.1", 22, origin).await.is_err(), "a closed tunnel connection opens nothing");
 }
 
 #[tokio::test]

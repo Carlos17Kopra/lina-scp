@@ -4,10 +4,12 @@ import { makeHost, makeProfile, makeSessionInfo, withUsage } from "../test/fixtu
 import { MAX_ATTEMPTS, nextRetryDelay, useConnectStore } from "./connect";
 import { useHostsStore } from "./hosts";
 import { useNoticeStore } from "./notices";
+import { usePortForwardingStore } from "./portForwarding";
 import { pendingSessionEventCount, resetSessionEvents } from "./sessionEvents";
 import { useSessionsStore } from "./sessions";
 import { useSftpStore } from "./sftp";
 import { getStream } from "./streams";
+import { useTunnelsStore } from "./tunnels";
 import { useUiStore } from "./ui";
 
 vi.mock("../ipc/api");
@@ -273,6 +275,46 @@ describe("connect store", () => {
     resolve(connected);
     await settle();
     expect(api.sftpClose).not.toHaveBeenCalled();
+  });
+
+  describe("port forwarding (tunnel)", () => {
+    const connected: api.TunnelsConnected = { sessionId: "s-pf", forwards: [] };
+    const tunnelEvent: api.PortForwardEvent = { kind: "tunnel", event: { ruleId: "r-1", state: { kind: "active", port: 8080 } } };
+
+    beforeEach(() => {
+      usePortForwardingStore.setState(usePortForwardingStore.getInitialState(), true);
+      useTunnelsStore.setState({ states: {} });
+      vi.mocked(api.tunnelsClose).mockResolvedValue(undefined);
+    });
+
+    it("connects on the port-forwarding view and keeps events that come before the result", async () => {
+      let resolve!: (c: api.TunnelsConnected) => void;
+      vi.mocked(api.connectTunnels).mockReturnValue(new Promise((r) => { resolve = r; }));
+      void useConnectStore.getState().start(web.id, "tunnel");
+      expect(useUiStore.getState()).toMatchObject({ view: "portForwarding", modal: { type: "connect" } });
+      expect(api.connectTunnels).toHaveBeenCalledWith("id-1", web.id, { channel: 1 }, { channel: 2 });
+      // Autostart runs right after `Connected`, possibly before the invoke resolves.
+      (channels[1] as (event: api.PortForwardEvent) => void)(tunnelEvent);
+      resolve(connected);
+      await settle();
+      expect(flow()).toBeNull();
+      expect(useUiStore.getState()).toMatchObject({ view: "portForwarding", modal: null });
+      expect(usePortForwardingStore.getState().entries[web.id]).toMatchObject({ sessionId: "s-pf", status: { kind: "connected" } });
+      expect(useTunnelsStore.getState().states["s-pf"]).toEqual({ "r-1": { kind: "active", port: 8080 } });
+      expect(api.connectSsh).not.toHaveBeenCalled();
+    });
+
+    it("a cancel returns to the screen and closes the session that still comes back", async () => {
+      let resolve!: (c: api.TunnelsConnected) => void;
+      vi.mocked(api.connectTunnels).mockReturnValue(new Promise((r) => { resolve = r; }));
+      void useConnectStore.getState().start(web.id, "tunnel");
+      await useConnectStore.getState().cancel();
+      expect(useUiStore.getState().view).toBe("portForwarding");
+      resolve(connected);
+      await settle();
+      expect(api.tunnelsClose).toHaveBeenCalledWith("s-pf");
+      expect(usePortForwardingStore.getState().entries[web.id]).toBeUndefined();
+    });
   });
 
   it("reports unknown hosts", async () => {

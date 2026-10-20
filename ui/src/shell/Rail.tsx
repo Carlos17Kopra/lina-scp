@@ -23,10 +23,7 @@ const VIEW_ITEMS: ReadonlyArray<{ view: View; label: string; icon: LucideIcon }>
   { view: "sftp", label: t.rail.sftp, icon: FolderSync },
   { view: "snippets", label: t.rail.snippets, icon: CodeXml },
   { view: "keychain", label: t.rail.keychain, icon: KeyRound },
-];
-
-const LATER_ITEMS: ReadonlyArray<{ label: string; icon: LucideIcon }> = [
-  { label: t.rail.portForwarding, icon: ArrowRightLeft },
+  { view: "portForwarding", label: t.rail.portForwarding, icon: ArrowRightLeft },
 ];
 
 const ICON_PROPS = { size: 20, strokeWidth: 1.8, "aria-hidden": true } as const;
@@ -64,18 +61,6 @@ export function Rail() {
           title={label}
           aria-current={view === target ? "page" : undefined}
           onClick={() => setView(target)}
-        >
-          <Icon {...ICON_PROPS} />
-        </button>
-      ))}
-      {LATER_ITEMS.map(({ label, icon: Icon }) => (
-        <button
-          key={label}
-          type="button"
-          className={cx(styles.item, styles.disabled)}
-          aria-label={label}
-          aria-disabled="true"
-          title={`${label} – ${t.common.comingSoon}`}
         >
           <Icon {...ICON_PROPS} />
         </button>

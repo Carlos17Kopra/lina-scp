@@ -8,6 +8,7 @@ pub mod reconnect;
 pub mod sftp_reconnect;
 mod sftp_session;
 pub mod ssh_session;
+mod tunnel_session;
 
 use std::future::Future;
 use std::path::PathBuf;
@@ -32,6 +33,7 @@ pub use reconnect::{BACKOFF_SECS, ConnectFuture, Connector, Enabled, MAX_ATTEMPT
 pub use sftp_reconnect::{ChangeFn, ConnConnector, ConnFuture, ConnStatus, Connection, Reconnecting, StatusFn};
 pub use sftp_session::{LostFn, SftpSession};
 pub use ssh_session::SshSession;
+pub use tunnel_session::TunnelSession;
 
 use crate::error::{CoreError, NetworkKind, Result};
 use crate::known_hosts::KnownHosts;
@@ -153,10 +155,16 @@ pub fn plan_steps(req: &ConnectRequest) -> Vec<Step> {
     steps
 }
 
-/// Steps of an SFTP connect: the SSH part, then subsystem and start directory.
-pub fn plan_sftp_steps(req: &ConnectRequest) -> Vec<Step> {
+/// Steps of a tunnel connect: the SSH part only, no channel or shell.
+pub fn plan_tunnel_steps(req: &ConnectRequest) -> Vec<Step> {
     let mut steps = plan_steps(req);
     steps.truncate(steps.len() - 2);
+    steps
+}
+
+/// Steps of an SFTP connect: the SSH part, then subsystem and start directory.
+pub fn plan_sftp_steps(req: &ConnectRequest) -> Vec<Step> {
+    let mut steps = plan_tunnel_steps(req);
     steps.extend([Step::Subsystem, Step::Directory]);
     steps
 }
@@ -479,6 +487,11 @@ async fn disconnect(est: Established) {
 }
 
 impl Pipeline {
+    /// No steps of its own: the authenticated connection is the tunnel connection.
+    fn open_tunnel(&self, est: Established, on_lost: LostFn) -> TunnelSession {
+        TunnelSession::start(est.handle, est.jump, est.info, on_lost)
+    }
+
     /// Steps Subsystem -> Directory; closes the connection again on failure.
     async fn open_sftp(
         &self,
@@ -567,6 +580,25 @@ pub async fn connect_sftp(
         pipeline.open_sftp(&req, est, on_lost).await
     }
     .await;
+    if let Err(error) = &result {
+        emit(ConnectEvent::Failed { error: error.clone() });
+    }
+    result
+}
+
+/// Run the pipeline up to an authenticated connection for port forwards (no shell).
+/// The caller registers the session and emits `ConnectEvent::Connected`.
+pub async fn connect_tunnel(
+    req: ConnectRequest,
+    deps: ConnectDeps,
+    broker: Arc<PromptBroker>,
+    emit: EmitFn,
+    on_lost: LostFn,
+    cancel: CancellationToken,
+) -> Result<TunnelSession> {
+    emit(ConnectEvent::Steps { steps: plan_tunnel_steps(&req) });
+    let pipeline = Pipeline::new(deps, broker, emit.clone(), cancel);
+    let result = pipeline.establish(&req).await.map(|est| pipeline.open_tunnel(est, on_lost));
     if let Err(error) = &result {
         emit(ConnectEvent::Failed { error: error.clone() });
     }
@@ -775,6 +807,12 @@ mod tests {
     }
 
     #[test]
+    fn plan_tunnel_steps_skip_channel_and_shell() {
+        assert_eq!(plan_tunnel_steps(&request(false)), vec![Step::Tcp, Step::HostKey, Step::Auth]);
+        assert_eq!(plan_tunnel_steps(&request(true)), vec![Step::JumpHost, Step::Tcp, Step::HostKey, Step::Auth]);
+    }
+
+    #[test]
     fn plan_steps_without_jump() {
         assert_eq!(plan_steps(&request(false)), vec![Step::Tcp, Step::HostKey, Step::Auth, Step::Channel, Step::Shell]);
     }
@@ -896,6 +934,50 @@ mod pipeline_tests {
                 .iter()
                 .any(|e| matches!(e, ConnectEvent::StepFailed { step: Step::Tcp, error: CoreError::Cancelled }))
         );
+    }
+
+    async fn run_tunnel(
+        req: ConnectRequest,
+        cancel: CancellationToken,
+    ) -> (Result<TunnelSession>, Vec<ConnectEvent>, bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let rec = recorder();
+        let broker = Arc::new(PromptBroker::new(Arc::new(|_| {})));
+        let lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let on_lost: LostFn = {
+            let lost = lost.clone();
+            Arc::new(move |_| lost.store(true, std::sync::atomic::Ordering::SeqCst))
+        };
+        let result = connect_tunnel(req, deps(dir.path()), broker, rec.emit.clone(), on_lost, cancel).await;
+        let events = rec.events.lock().unwrap().clone();
+        (result, events, lost.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    fn failed_count(events: &[ConnectEvent]) -> usize {
+        events.iter().filter(|e| matches!(e, ConnectEvent::Failed { .. })).count()
+    }
+
+    #[tokio::test]
+    async fn a_failed_tunnel_connect_reports_its_steps_and_fails_once() {
+        let (result, events, lost) = run_tunnel(request("127.0.0.1", free_port()), CancellationToken::new()).await;
+        assert!(matches!(result, Err(CoreError::Network { kind: NetworkKind::Refused, .. })));
+        assert!(matches!(
+            &events[0],
+            ConnectEvent::Steps { steps } if steps == &vec![Step::Tcp, Step::HostKey, Step::Auth]
+        ));
+        assert_eq!(failed_count(&events), 1);
+        assert!(matches!(events.last(), Some(ConnectEvent::Failed { .. })));
+        assert!(!lost, "a connection that never existed is never lost");
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_tunnel_connect_fails_once_with_cancelled() {
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let (result, events, _) = run_tunnel(request("127.0.0.1", free_port()), cancel).await;
+        assert!(matches!(result, Err(CoreError::Cancelled)));
+        assert_eq!(failed_count(&events), 1);
+        assert!(matches!(events.last(), Some(ConnectEvent::Failed { error: CoreError::Cancelled })));
     }
 
     #[tokio::test]

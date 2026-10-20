@@ -41,6 +41,8 @@ import type {
   SftpConnected,
   SftpEvent,
   Snippet,
+  PortForwardEvent,
+  TunnelsConnected,
 } from "./bindings";
 
 export type {
@@ -50,6 +52,8 @@ export type {
   KeyKind,
   TunnelEvent,
   TunnelState,
+  PortForwardEvent,
+  TunnelsConnected,
   ChosenApp,
   OpenApp,
   Bookmark,
@@ -441,6 +445,19 @@ export function tunnelStart(sessionId: SessionId, ruleId: Id): Promise<void> {
 }
 export function tunnelStop(sessionId: SessionId, ruleId: Id): Promise<void> {
   return unwrapVoid(commands.tunnelStop(sessionId, ruleId));
+}
+
+// Port forwarding without a terminal (TP6b)
+export function connectTunnels(
+  connectId: string,
+  hostId: Id,
+  events: Channel<ConnectEvent>,
+  tunnelEvents: Channel<PortForwardEvent>,
+): Promise<TunnelsConnected> {
+  return unwrap(commands.connectTunnels(connectId, hostId, events, tunnelEvents));
+}
+export function tunnelsClose(sessionId: SessionId): Promise<void> {
+  return unwrapVoid(commands.tunnelsClose(sessionId));
 }
 
 // Keychain (TP5b)

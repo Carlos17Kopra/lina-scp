@@ -1,5 +1,5 @@
 import { t } from "../../../i18n/de";
-import { type ForwardKind, type PortForward, type TunnelState, tunnelStart, tunnelStop } from "../../../ipc/api";
+import { type ForwardKind, type Id, type PortForward, type SessionId, type TunnelState, tunnelStart, tunnelStop } from "../../../ipc/api";
 import { errorMessage } from "../../../ipc/errors";
 import { fireAndForget } from "../../../stores/connectProgress";
 import { useHostsStore } from "../../../stores/hosts";
@@ -62,13 +62,31 @@ export function TunnelPanel({ tab }: { tab: Tab }) {
     );
   }
 
+  return <TunnelRules rules={rules} states={ended ? undefined : states} ready={ready} sessionId={tab.sessionId} />;
+}
+
+/**
+ * The rule rows with state and start/stop switch; shared by the terminal tab "Tunnel" and the port-forwarding
+ * screen. `ready`: the connection is up (the switches are off otherwise).
+ */
+export function TunnelRules({
+  rules,
+  states,
+  ready,
+  sessionId,
+}: {
+  rules: PortForward[];
+  states: Record<Id, TunnelState> | undefined;
+  ready: boolean;
+  sessionId: SessionId | undefined;
+}) {
+  const texts = t.terminal.tunnels;
   return (
     <ul className={styles.tunnels}>
       {rules.map((rule) => {
-        const state = (!ended && states?.[rule.id]) || OFF;
+        const state = states?.[rule.id] ?? OFF;
         const on = state.kind === "active" || state.kind === "starting";
         const toggle = () => {
-          const sessionId = tab.sessionId;
           if (sessionId === undefined) return;
           // A failed start comes back as a "failed" event; nothing to add here.
           fireAndForget(() => (on ? tunnelStop(sessionId, rule.id) : tunnelStart(sessionId, rule.id)));

@@ -52,13 +52,6 @@
   color: var(--accent);
 }
 
-.disabled,
-.disabled:hover {
-  background: transparent;
-  color: var(--dim);
-  cursor: not-allowed;
-}
-
 .spacer {
   flex: 1;
 }

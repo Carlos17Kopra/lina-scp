@@ -8,12 +8,14 @@ import {
   connectCancel,
   connectSftp,
   connectSsh,
+  connectTunnels,
   createEventChannel,
   createOutputStream,
   type Host,
   type Id,
   newId,
   type OutputStream,
+  type PortForwardEvent,
   type Prompt,
   type PromptAnswer,
   type SecretOwner,
@@ -23,11 +25,13 @@ import {
   type SftpEvent,
   sftpClose,
   type Step,
+  tunnelsClose,
 } from "../ipc/api";
 import { hostProfile } from "../model/hostFormat";
 import { applyConnectEvent, asCoreError, fireAndForget, type StepProgress } from "./connectProgress";
 import { useHostsStore } from "./hosts";
 import { pushNotice } from "./notices";
+import { usePortForwardingStore } from "./portForwarding";
 import { discardEarlySessionEvent, sessionEventHandler } from "./sessionEvents";
 import { useSessionsStore } from "./sessions";
 import { useSettingsStore } from "./settings";
@@ -36,7 +40,7 @@ import { dropStream, registerStream } from "./streams";
 import { estimateTerminalSize } from "./terminalSize";
 import { useUiStore, type View } from "./ui";
 
-export type ConnectProtocol = "ssh" | "sftp";
+export type ConnectProtocol = "ssh" | "sftp" | "tunnel";
 
 /** "Versuch n von 3"; also the number of automatic retries. */
 export const MAX_ATTEMPTS = 3;
@@ -106,6 +110,7 @@ export function authFailureHost(flow: ConnectFlow, hosts: readonly Host[]): { ho
 
 /** Where a cancelled/rejected flow returns to. */
 function homeView(flow: ConnectFlow | null): View {
+  if (flow?.protocol === "tunnel") return "portForwarding";
   if (flow?.paneId) return "terminal";
   if (flow?.sftpTabId) return "sftp";
   return "hosts";
@@ -239,6 +244,28 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
     close("sftp");
   };
 
+  const runTunnel = async (flow: ConnectFlow) => {
+    const { connectId, hostId } = flow;
+    let bound: string | null = null;
+    // Autostart events can come before the invoke resolves: hold them until the entry exists.
+    const early: PortForwardEvent[] = [];
+    const events = createEventChannel<ConnectEvent>((event) => onEvent(connectId, event));
+    const tunnelEvents = createEventChannel<PortForwardEvent>((event) => {
+      if (bound === null) early.push(event);
+      else usePortForwardingStore.getState().onEvent(hostId, bound, event);
+    });
+    const connected = await connectTunnels(connectId, hostId, events, tunnelEvents);
+    if (!isCurrent(connectId)) {
+      fireAndForget(() => tunnelsClose(connected.sessionId));
+      return;
+    }
+    const store = usePortForwardingStore.getState();
+    store.connected(hostId, connected);
+    bound = connected.sessionId;
+    for (const event of early.splice(0)) store.onEvent(hostId, bound, event);
+    close("portForwarding");
+  };
+
   const run = async (flow: ConnectFlow) => {
     const { connectId } = flow;
     // Everything that can throw (setup and invoke) lives inside the try: callers fire `start`/`retry`
@@ -246,6 +273,7 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
     let tabId: string | null = null;
     try {
       if (flow.protocol === "sftp") return await runSftp(flow);
+      if (flow.protocol === "tunnel") return await runTunnel(flow);
       tabId = newId();
       const stream = createOutputStream();
       const events = createEventChannel<ConnectEvent>((event) => onEvent(connectId, event));
@@ -293,7 +321,7 @@ export const useConnectStore = create<ConnectState>()((set, get) => {
       };
       set({ active: flow });
       const ui = useUiStore.getState();
-      ui.setView(protocol === "ssh" ? "terminal" : "sftp");
+      ui.setView(protocol === "ssh" ? "terminal" : protocol === "sftp" ? "sftp" : "portForwarding");
       ui.openModal({ type: "connect" });
       await run(flow);
     },

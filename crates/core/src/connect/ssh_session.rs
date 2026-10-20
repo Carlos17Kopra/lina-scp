@@ -49,13 +49,18 @@ impl SshSession {
 
     /// This connection for port forwards. It does not keep the connection alive.
     pub fn link(&self) -> Arc<dyn TunnelLink> {
-        Arc::new(SshLink { handle: Arc::downgrade(&self.handle) })
+        ssh_link(&self.handle)
     }
 
     /// Negotiated algorithms, host key and auth methods of this connection.
     pub fn info(&self) -> &SessionInfo {
         &self.info
     }
+}
+
+/// Port-forward access to `handle`; holds it weakly, so it never keeps the connection alive.
+pub(crate) fn ssh_link(handle: &Arc<client::Handle<ClientHandler>>) -> Arc<dyn TunnelLink> {
+    Arc::new(SshLink { handle: Arc::downgrade(handle) })
 }
 
 struct SshLink {

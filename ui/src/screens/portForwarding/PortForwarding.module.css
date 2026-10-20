@@ -1,0 +1,83 @@
+.screen {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  padding: 24px;
+  overflow-y: auto;
+}
+.header {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+}
+.title {
+  margin: 0 auto 0 0;
+  color: var(--text);
+  font-size: 20px;
+  font-weight: 600;
+}
+.empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.error {
+  margin: 0;
+  color: var(--red);
+  font-size: 13px;
+}
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--bd);
+  border-radius: 10px;
+  background: var(--s1);
+  font-size: 13px;
+}
+.name {
+  margin: 0;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+}
+.meta {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.titles {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.link {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}

@@ -58,6 +58,8 @@ export const commands = {
 	keepStop: (sessionId: string) => typedError<null, CoreError>(__TAURI_INVOKE("keep_stop", { sessionId })),
 	tunnelStart: (sessionId: string, ruleId: string) => typedError<null, CoreError>(__TAURI_INVOKE("tunnel_start", { sessionId, ruleId })),
 	tunnelStop: (sessionId: string, ruleId: string) => typedError<null, CoreError>(__TAURI_INVOKE("tunnel_stop", { sessionId, ruleId })),
+	connectTunnels: (connectId: string, hostId: string, events: Channel<ConnectEvent>, tunnelEvents: Channel<PortForwardEvent>) => typedError<TunnelsConnected, CoreError>(__TAURI_INVOKE("connect_tunnels", { connectId, hostId, events, tunnelEvents })),
+	tunnelsClose: (sessionId: string) => typedError<null, CoreError>(__TAURI_INVOKE("tunnels_close", { sessionId })),
 	keysList: () => typedError<KeyInfo[], CoreError>(__TAURI_INVOKE("keys_list")),
 	keyDefaultsGet: (kind: KeyKind) => typedError<KeyDefaults, CoreError>(__TAURI_INVOKE("key_defaults_get", { kind })),
 	/**  Writes `~/.ssh/<name>` and `<name>.pub`; never overwrites. */
@@ -450,6 +452,10 @@ export type PortForward = {
 	autostart: boolean,
 };
 
+export type PortForwardEvent = { kind: "reconnecting"; attempt: number; maxAttempts: number; retryInMs: number; reason: CoreError } | { kind: "reconnected" } | 
+/**  Reconnecting gave up (or is off); every tunnel is off. */
+{ kind: "lost"; error: CoreError } | { kind: "tunnel"; event: TunnelEvent };
+
 export type ProfileWithUsage = {
 	profile: LoginProfile,
 	usedBy: number,
@@ -605,6 +611,12 @@ export type TunnelEvent = {
 export type TunnelState = { kind: "off" } | { kind: "starting" } | 
 /**  `port` is the listening port (for a remote forward with port 0: the one the server picked). */
 { kind: "active"; port: number } | { kind: "failed"; error: CoreError };
+
+export type TunnelsConnected = {
+	sessionId: string,
+	/**  The rules as they were stored at connect time; they apply until the next connect. */
+	forwards: PortForward[],
+};
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

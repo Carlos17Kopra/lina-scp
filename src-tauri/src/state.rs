@@ -40,6 +40,8 @@ pub struct AppState {
     pub tunnels: Arc<Mutex<HashMap<SessionId, Arc<Tunnels>>>>,
     /// Open SFTP sessions; separate from terminal sessions.
     pub sftp: Arc<Mutex<HashMap<SessionId, Arc<crate::commands::sftp::SftpEntry>>>>,
+    /// Shell-less connections of the port-forwarding screen (TP6b); their tunnels are also in `tunnels`.
+    pub port_forwards: Arc<Mutex<HashMap<SessionId, Arc<crate::commands::port_forwarding::PortForwardEntry>>>>,
     /// Shell of local terminals instead of `$SHELL`; set by tests so the developer's rc files never run.
     pub local_shell: Option<String>,
 }
@@ -57,6 +59,7 @@ impl AppState {
             outputs: Arc::new(Mutex::new(HashMap::new())),
             sftp: Arc::new(Mutex::new(HashMap::new())),
             tunnels: Arc::new(Mutex::new(HashMap::new())),
+            port_forwards: Arc::new(Mutex::new(HashMap::new())),
             local_shell: None,
         }
     }
