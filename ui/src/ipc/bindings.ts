@@ -61,6 +61,8 @@ export const commands = {
 	connectTunnels: (connectId: string, hostId: string, events: Channel<ConnectEvent>, tunnelEvents: Channel<PortForwardEvent>) => typedError<TunnelsConnected, CoreError>(__TAURI_INVOKE("connect_tunnels", { connectId, hostId, events, tunnelEvents })),
 	tunnelsClose: (sessionId: string) => typedError<null, CoreError>(__TAURI_INVOKE("tunnels_close", { sessionId })),
 	keysList: () => typedError<KeyInfo[], CoreError>(__TAURI_INVOKE("keys_list")),
+	/**  Identities of the agent at `SSH_AUTH_SOCK` (TP6c); the same socket the connect flow uses. */
+	agentIdentities: () => typedError<AgentStatus, CoreError>(__TAURI_INVOKE("agent_identities")),
 	keyDefaultsGet: (kind: KeyKind) => typedError<KeyDefaults, CoreError>(__TAURI_INVOKE("key_defaults_get", { kind })),
 	/**  Writes `~/.ssh/<name>` and `<name>.pub`; never overwrites. */
 	keyGenerate: (kind: KeyKind, name: string, comment: string, passphrase: string | null) => typedError<KeyInfo, CoreError>(__TAURI_INVOKE("key_generate", { kind, name, comment, passphrase })),
@@ -106,6 +108,23 @@ export const commands = {
 };
 
 /* Types */
+export type AgentIdentity = {
+	/**  E.g. `ssh-ed25519`, `ssh-rsa`. */
+	algorithm: string,
+	/**  `SHA256:…` */
+	fingerprint: string,
+	comment: string,
+	/**  The OpenSSH line of the public key. */
+	publicKey: string,
+};
+
+export type AgentStatus = {
+	/**  `None` when `SSH_AUTH_SOCK` is not set; then there are no identities. */
+	socket: string | null,
+	/**  In the agent's order. */
+	identities: AgentIdentity[],
+};
+
 export type AuthConfig = {
 	method: AuthMethod,
 	keyPath: string | null,

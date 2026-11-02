@@ -24,6 +24,7 @@ import type {
   Host,
   ImportPreview,
   ImportReport,
+  AgentStatus,
   KeyDefaults,
   KeyInfo,
   KeyKind,
@@ -46,6 +47,8 @@ import type {
 } from "./bindings";
 
 export type {
+  AgentIdentity,
+  AgentStatus,
   KeepEvent,
   KeyDefaults,
   KeyInfo,
@@ -463,6 +466,10 @@ export function tunnelsClose(sessionId: SessionId): Promise<void> {
 // Keychain (TP5b)
 export function keysList(): Promise<KeyInfo[]> {
   return unwrap(commands.keysList());
+}
+/** Identities of the agent at SSH_AUTH_SOCK (TP6c); `socket: null` = no agent. */
+export function agentIdentities(): Promise<AgentStatus> {
+  return unwrap(commands.agentIdentities());
 }
 export function keyDefaults(kind: KeyKind): Promise<KeyDefaults> {
   return unwrap(commands.keyDefaultsGet(kind));

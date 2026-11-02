@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "../../components";
 import { t } from "../../i18n/de";
-import { type KeyInfo, keysList } from "../../ipc/api";
+import { type AgentStatus, type KeyInfo, agentIdentities, keysList } from "../../ipc/api";
 import { errorMessage } from "../../ipc/errors";
 import { useHostsStore } from "../../stores/hosts";
 import { pushNotice } from "../../stores/notices";
@@ -25,7 +25,9 @@ export function KeychainScreen() {
   const [keys, setKeys] = useState<KeyInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
-  const [copying, setCopying] = useState<KeyInfo | null>(null);
+  const [copying, setCopying] = useState<Pick<KeyInfo, "name" | "publicKey"> | null>(null);
+  const [agent, setAgent] = useState<AgentStatus | null>(null);
+  const [agentError, setAgentError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -35,15 +37,25 @@ export function KeychainScreen() {
       setError(errorMessage(e));
     }
   }, []);
+  const loadAgent = useCallback(async () => {
+    try {
+      setAgent(await agentIdentities());
+      setAgentError(null);
+    } catch (e) {
+      setAgentError(errorMessage(e));
+    }
+  }, []);
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadAgent();
+  }, [load, loadAgent]);
+  const inAgent = new Set(agent?.identities.map((identity) => identity.fingerprint));
 
   const users = (key: KeyInfo) => [
     ...hosts.filter((h) => h.auth.kind === "custom" && pointsTo(h.auth.auth.keyPath, key.path)).map((h) => h.name),
     ...profiles.filter(({ profile }) => pointsTo(profile.auth.keyPath, key.path)).map(({ profile }) => texts.profile(profile.name)),
   ];
-  const copy = async (key: KeyInfo) => {
+  const copy = async (key: { publicKey: string }) => {
     if (await copyText(key.publicKey)) pushNotice({ tone: "green", message: texts.copied });
     else pushNotice({ tone: "red", message: texts.copyFailed });
   };
@@ -77,6 +89,7 @@ export function KeychainScreen() {
                 </span>
                 <span className={styles.mono}>{key.path}</span>
                 <span className={styles.meta}>{usedBy.length > 0 ? texts.usedBy(usedBy.join(", ")) : texts.unused}</span>
+                {inAgent.has(key.fingerprint) ? <span className={styles.meta}>{texts.inAgent}</span> : null}
                 <div className={styles.actions}>
                   <Button size="sm" onClick={() => void copy(key)}>
                     {texts.copy}
@@ -90,6 +103,47 @@ export function KeychainScreen() {
           })}
         </ul>
       ) : null}
+      <section aria-labelledby="keychain-agent" className={styles.section}>
+        <header className={styles.header}>
+          <h2 id="keychain-agent" className={styles.sectionTitle}>
+            {texts.agent.title}
+          </h2>
+          <Button size="sm" onClick={() => void loadAgent()}>
+            {texts.agent.reload}
+          </Button>
+        </header>
+        {agentError ? (
+          <p role="alert" className={styles.error}>
+            {texts.agent.loadFailed(agentError)}
+          </p>
+        ) : agent && agent.socket === null ? (
+          <p className={styles.empty}>{texts.agent.none}</p>
+        ) : agent && agent.identities.length === 0 ? (
+          <p className={styles.empty}>{texts.agent.empty}</p>
+        ) : null}
+        {!agentError && agent && agent.identities.length > 0 ? (
+          <ul className={styles.cards}>
+            {agent.identities.map((identity) => {
+              const name = identity.comment || identity.fingerprint;
+              return (
+                <li key={identity.fingerprint} className={styles.card}>
+                  <h3 className={styles.name}>{name}</h3>
+                  <span className={styles.meta}>{identity.algorithm}</span>
+                  <span className={styles.mono}>{identity.fingerprint}</span>
+                  <div className={styles.actions}>
+                    <Button size="sm" onClick={() => void copy(identity)}>
+                      {texts.copy}
+                    </Button>
+                    <Button size="sm" onClick={() => setCopying({ name, publicKey: identity.publicKey })}>
+                      {texts.copyId}
+                    </Button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        ) : null}
+      </section>
       {generating ? (
         <GenerateKeyDialog
           onClose={() => setGenerating(false)}

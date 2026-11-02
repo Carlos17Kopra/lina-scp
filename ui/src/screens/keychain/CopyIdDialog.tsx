@@ -9,7 +9,7 @@ import { useConnectionTest } from "../editor/useConnectionTest";
 import styles from "./Keychain.module.css";
 
 /** "Auf Host eintragen" (ssh-copy-id) with the host's own login; prompts show inline like "Verbindung testen". */
-export function CopyIdDialog({ keyInfo, onClose }: { keyInfo: KeyInfo; onClose: () => void }) {
+export function CopyIdDialog({ keyInfo, onClose }: { keyInfo: Pick<KeyInfo, "name" | "publicKey">; onClose: () => void }) {
   const texts = t.keychain.copyIdDialog;
   const hosts = useHostsStore((state) => state.hosts);
   const [hostId, setHostId] = useState(hosts[0]?.id ?? "");
