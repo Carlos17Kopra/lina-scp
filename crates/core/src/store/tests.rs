@@ -96,6 +96,21 @@ fn save_host_upserts_and_replaces_children() {
 }
 
 #[test]
+fn mirror_pending_roundtrips_and_is_cleared_by_confirm() {
+    let store = Store::open_in_memory().unwrap();
+    let mut pending = Host::new("a", "h");
+    pending.mirror_pending = true;
+    let mut other = Host::new("b", "h");
+    other.mirror_pending = true;
+    store.save_host(&pending).unwrap();
+    store.save_host(&other).unwrap();
+    assert!(store.get_host(pending.id).unwrap().unwrap().mirror_pending);
+    store.confirm_mirror(&[pending.id]).unwrap();
+    assert!(!store.get_host(pending.id).unwrap().unwrap().mirror_pending);
+    assert!(store.get_host(other.id).unwrap().unwrap().mirror_pending, "only the given hosts");
+}
+
+#[test]
 fn list_hosts_sorted_by_name_case_insensitive() {
     let store = Store::open_in_memory().unwrap();
     for name in ["beta", "Alpha", "gamma"] {

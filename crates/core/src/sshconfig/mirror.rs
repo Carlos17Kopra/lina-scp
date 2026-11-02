@@ -180,6 +180,9 @@ fn skip_reason(host: &Host, profile: Option<&LoginProfile>) -> Option<&'static s
     if profile.is_some_and(|p| validate_profile(p).is_err()) {
         return Some("invalid login profile field");
     }
+    if host.mirror_pending {
+        return Some("imported host not confirmed yet");
+    }
     let alias = host_alias(&host.name);
     if alias.is_empty() {
         return Some("name yields an empty ssh_config alias");
@@ -505,6 +508,16 @@ mod injection_tests {
         let mut host = with_id(Host::new(name, &format!("{name}.example")));
         host.jump_host_id = Some(jump.id);
         host
+    }
+
+    #[test]
+    fn imported_host_is_only_written_once_confirmed() {
+        // An undotted alias can still shadow a real name (`gitlab`, `localhost`): imports wait for the user.
+        let mut imported = Host::new("gitlab", "attacker.example");
+        imported.mirror_pending = true;
+        assert!(!Mirror::render(std::slice::from_ref(&imported), &[]).contains("attacker"));
+        imported.mirror_pending = false;
+        assert!(Mirror::render(&[imported], &[]).contains("Host gitlab\n    HostName attacker.example\n"));
     }
 
     #[test]

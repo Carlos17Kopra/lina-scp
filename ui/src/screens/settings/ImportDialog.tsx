@@ -2,7 +2,15 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
 import { Button, Dialog, Segmented, TextField, useToast } from "../../components";
 import { t } from "../../i18n/de";
-import { type Id, type ImportPreview, importApply, importPreview, type Resolution } from "../../ipc/api";
+import {
+  hostsConfirmMirror,
+  type Id,
+  type ImportPreview,
+  importApply,
+  importPreview,
+  type PendingMirrorHost,
+  type Resolution,
+} from "../../ipc/api";
 import { errorDetails } from "../../ipc/errors";
 import { useHostsStore } from "../../stores/hosts";
 import { useSettingsStore } from "../../stores/settings";
@@ -11,7 +19,10 @@ import { useUiStore } from "../../stores/ui";
 import styles from "./Settings.module.css";
 import { defaultResolutions, isWrongPassphrase, LINASCP_FILTER, reportMessage } from "./transfer";
 
-type Stage = { step: "pick" } | { step: "review"; path: string; preview: ImportPreview };
+type Stage =
+  | { step: "pick" }
+  | { step: "review"; path: string; preview: ImportPreview }
+  | { step: "mirror"; pending: PendingMirrorHost[] };
 
 const RESOLUTION_OPTIONS: ReadonlyArray<{ value: Resolution; label: string }> = [
   { value: "skip", label: t.settings.import.resolutions.skip },
@@ -66,7 +77,8 @@ export function ImportDialog() {
       } catch (error) {
         toast.show({ tone: "red", message: t.shell.loadFailed, details: errorDetails(error) });
       }
-      closeModal();
+      if (report.mirrorPending.length > 0) setStage({ step: "mirror", pending: report.mirrorPending });
+      else closeModal();
     } catch (error) {
       if (isWrongPassphrase(error)) setPassphraseError(texts.wrongPassphrase);
       else toast.show({ tone: "red", message: texts.failed, details: errorDetails(error) });
@@ -75,8 +87,30 @@ export function ImportDialog() {
     }
   };
 
+  const confirmMirror = async () => {
+    if (stage.step !== "mirror") return;
+    setBusy(true);
+    try {
+      await hostsConfirmMirror(stage.pending.map((host) => host.id));
+      closeModal();
+    } catch (error) {
+      toast.show({ tone: "red", message: texts.mirrorFailed, details: errorDetails(error) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const footer =
-    stage.step === "pick" ? (
+    stage.step === "mirror" ? (
+      <>
+        <Button variant="ghost" onClick={closeModal}>
+          {texts.mirrorLater}
+        </Button>
+        <Button variant="primary" disabled={busy} onClick={() => void confirmMirror()}>
+          {texts.mirrorConfirm}
+        </Button>
+      </>
+    ) : stage.step === "pick" ? (
       <>
         <Button variant="ghost" onClick={closeModal}>
           {t.common.cancel}
@@ -100,6 +134,18 @@ export function ImportDialog() {
     <Dialog open size="md" title={texts.title} onClose={closeModal} footer={footer}>
       {stage.step === "pick" ? (
         <p className={styles.hint}>{texts.intro}</p>
+      ) : stage.step === "mirror" ? (
+        <div className={styles.sections}>
+          <h3 className={styles.itemName}>{texts.mirrorTitle}</h3>
+          <p className={styles.hint}>{texts.mirrorIntro}</p>
+          <ul className={styles.items}>
+            {stage.pending.map((host) => (
+              <li key={host.id} className={`${styles.item} mono`}>
+                {texts.mirrorEntry(host.alias, host.address)}
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : (
         <div className={styles.sections}>
           <p className="mono">{stage.path}</p>

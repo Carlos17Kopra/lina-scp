@@ -33,7 +33,7 @@ beforeEach(() => {
   useUiStore.setState(useUiStore.getInitialState(), true);
   vi.mocked(dialog.open).mockResolvedValue("/home/u/backup.linascp");
   vi.mocked(api.importPreview).mockResolvedValue(preview);
-  vi.mocked(api.importApply).mockResolvedValue({ imported: 2, skipped: 1, secretsRestored: 3, invalid: 0 });
+  vi.mocked(api.importApply).mockResolvedValue({ imported: 2, skipped: 1, secretsRestored: 3, invalid: 0, mirrorPending: [] });
   vi.mocked(api.hostsList).mockResolvedValue([]);
   vi.mocked(api.snippetsList).mockResolvedValue([]);
   vi.mocked(api.groupsList).mockResolvedValue([]);
@@ -42,6 +42,31 @@ beforeEach(() => {
 });
 
 describe("ImportDialog", () => {
+  it("asks before imported hosts go into ~/.ssh/config, showing alias and address", async () => {
+    const pending = [{ id: "h2", alias: "gitlab", address: "203.0.113.9" }];
+    vi.mocked(api.importApply).mockResolvedValue({ imported: 1, skipped: 0, secretsRestored: 0, invalid: 0, mirrorPending: pending });
+    vi.mocked(api.hostsConfirmMirror).mockResolvedValue(undefined);
+    renderDialog();
+    await userEvent.click(screen.getByRole("button", { name: "Datei wählen …" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Importieren" }));
+    expect(await screen.findByText("gitlab → 203.0.113.9")).toBeInTheDocument();
+    expect(useUiStore.getState().modal).not.toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "In ~/.ssh/config übernehmen" }));
+    expect(api.hostsConfirmMirror).toHaveBeenCalledWith(["h2"]);
+    await waitFor(() => expect(useUiStore.getState().modal).toBeNull());
+  });
+
+  it("leaves imported hosts out of ~/.ssh/config on „Später“", async () => {
+    const pending = [{ id: "h2", alias: "gitlab", address: "203.0.113.9" }];
+    vi.mocked(api.importApply).mockResolvedValue({ imported: 1, skipped: 0, secretsRestored: 0, invalid: 0, mirrorPending: pending });
+    renderDialog();
+    await userEvent.click(screen.getByRole("button", { name: "Datei wählen …" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Importieren" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Später" }));
+    expect(api.hostsConfirmMirror).not.toHaveBeenCalled();
+    expect(useUiStore.getState().modal).toBeNull();
+  });
+
   it("previews conflicts, applies the chosen resolutions and reloads", async () => {
     renderDialog();
     expect(screen.getByRole("dialog", { name: "Importieren" })).toBeInTheDocument();

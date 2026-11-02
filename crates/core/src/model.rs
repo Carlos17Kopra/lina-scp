@@ -121,6 +121,9 @@ pub struct Host {
     /// Terminal font size override in px; `None` = global setting.
     #[serde(default)]
     pub terminal_font_size: Option<u16>,
+    /// Imported and not yet confirmed: the ssh mirror skips it, since its alias could shadow a real host name.
+    #[serde(default)]
+    pub mirror_pending: bool,
     pub source: HostSource,
     pub created_at: i64,
     pub updated_at: i64,
@@ -159,6 +162,7 @@ impl Host {
             forwards: Vec::new(),
             terminal_scheme: None,
             terminal_font_size: None,
+            mirror_pending: false,
             source: HostSource::Linascp,
             created_at: now,
             updated_at: now,

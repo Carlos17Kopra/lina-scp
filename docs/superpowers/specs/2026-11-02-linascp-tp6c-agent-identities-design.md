@@ -56,6 +56,20 @@ Nicht enthalten:
 - Eine Schlüsseldatei, deren Fingerprint im Agenten ist, zeigt zusätzlich „Im SSH-Agent geladen“.
 - Beide Listen laden beim Öffnen, „Neu laden“ im Abschnitt lädt den Agenten neu.
 
+## 4. Mirror: importierte Hosts bestätigen (Backlog, Sicherheit)
+
+Ein präparierter Import konnte einen Alias ohne Punkt (`gitlab`, `localhost`) mit fremdem `HostName` anlegen. Der
+Mirror wird vor `~/.ssh/config` eingebunden und hätte damit `ssh gitlab` umgeleitet.
+
+- Hosts bekommen `mirror_pending` (DB-Spalte, Schema V5, Standard 0). Ein Import setzt es für jeden geschriebenen
+  Host, auch beim Ersetzen.
+- Der Mirror überspringt solche Hosts. Hosts, die über sie springen, fallen mit weg (bestehende Regel).
+- Nach dem Import zeigt der Dialog jeden betroffenen Host als „alias → adresse“ mit „In ~/.ssh/config übernehmen“
+  und „Später“. Bestätigen ruft `hosts_confirm_mirror`. Gezeigt wird das in beiden ssh-Modi, damit ein späteres
+  Einschalten von „Spiegeln“ keine unbestätigten Hosts schreibt.
+- Speichern im Host-Editor bestätigt den Host, weil dort Name und Adresse sichtbar sind. Andere Speicherwege (z. B.
+  das Terminal-Design) behalten das Merkmal.
+
 ## Tests
 
 - Core: `list_agent_identities` gegen einen echten `ssh-agent` (in der Docker-Suite, weil das Fixture dort entsteht),

@@ -32,13 +32,13 @@ describe("import helpers", () => {
   });
 
   it("summarises the import report", () => {
-    expect(reportMessage({ imported: 3, skipped: 1, secretsRestored: 0, invalid: 0 })).toBe(
+    expect(reportMessage({ imported: 3, skipped: 1, secretsRestored: 0, invalid: 0, mirrorPending: [] })).toBe(
       "Import abgeschlossen: 3 importiert, 1 übersprungen",
     );
-    expect(reportMessage({ imported: 1, skipped: 0, secretsRestored: 2, invalid: 0 })).toBe(
+    expect(reportMessage({ imported: 1, skipped: 0, secretsRestored: 2, invalid: 0, mirrorPending: [] })).toBe(
       "Import abgeschlossen: 1 importiert, 0 übersprungen, 2 Geheimnisse wiederhergestellt",
     );
-    expect(reportMessage({ imported: 1, skipped: 0, secretsRestored: 0, invalid: 2 })).toBe(
+    expect(reportMessage({ imported: 1, skipped: 0, secretsRestored: 0, invalid: 2, mirrorPending: [] })).toBe(
       "Import abgeschlossen: 1 importiert, 0 übersprungen, 2 ungültige Einträge nicht importiert",
     );
   });

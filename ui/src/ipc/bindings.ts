@@ -7,6 +7,7 @@ export const commands = {
 	hostsList: () => typedError<Host[], CoreError>(__TAURI_INVOKE("hosts_list")),
 	hostSave: (host: Host) => typedError<Host, CoreError>(__TAURI_INVOKE("host_save", { host })),
 	hostDelete: (id: string) => typedError<null, CoreError>(__TAURI_INVOKE("host_delete", { id })),
+	hostsConfirmMirror: (ids: string[]) => typedError<null, CoreError>(__TAURI_INVOKE("hosts_confirm_mirror", { ids })),
 	groupsList: () => typedError<Group[], CoreError>(__TAURI_INVOKE("groups_list")),
 	groupSave: (group: Group) => typedError<Group, CoreError>(__TAURI_INVOKE("group_save", { group })),
 	groupDelete: (id: string) => typedError<null, CoreError>(__TAURI_INVOKE("group_delete", { id })),
@@ -306,6 +307,8 @@ export type Host = {
 	terminalScheme?: string | null,
 	/**  Terminal font size override in px; `None` = global setting. */
 	terminalFontSize?: number | null,
+	/**  Imported and not yet confirmed: the ssh mirror skips it, since its alias could shadow a real host name. */
+	mirrorPending?: boolean,
 	source: HostSource,
 	createdAt: number,
 	updatedAt: number,
@@ -347,6 +350,8 @@ export type ImportReport = {
 	 *  would inject ssh_config directives), including hosts using such a profile.
 	 */
 	invalid: number,
+	/**  Written hosts the ssh mirror skips until the user confirms them (their alias could shadow a real name). */
+	mirrorPending: PendingMirrorHost[],
 };
 
 export type ItemKind = "host" | "profile" | "group" | "snippet";
@@ -461,6 +466,13 @@ export type PaneSide = "local" | "remote";
 export type PathFailure = {
 	path: string,
 	error: CoreError,
+};
+
+export type PendingMirrorHost = {
+	id: string,
+	/**  The `Host` line the mirror would write. */
+	alias: string,
+	address: string,
 };
 
 export type PortForward = {

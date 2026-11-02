@@ -3,6 +3,7 @@ name = "linascp"
 version = "0.2.1"
 description = "LinaSCP – SSH/SFTP client for Linux"
 edition = "2024"
+license = "GPL-3.0-or-later"
 publish = false
 
 [lib]

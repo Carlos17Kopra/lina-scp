@@ -29,6 +29,12 @@ pub(crate) async fn delete_host(state: &AppState, id: Id) -> Result<()> {
     Ok(())
 }
 
+/// Lets the ssh mirror write imported hosts (the user saw their alias and address).
+pub(crate) fn confirm_mirror(state: &AppState, ids: Vec<Id>) -> Result<()> {
+    state.store.confirm_mirror(&ids)?;
+    sync_mirror(state)
+}
+
 pub(crate) fn save_group(state: &AppState, group: Group) -> Result<Group> {
     state.store.save_group(&group)?;
     Ok(group)
@@ -44,6 +50,12 @@ pub async fn hosts_list(state: State<'_, AppState>) -> Result<Vec<Host>> {
 #[specta::specta]
 pub async fn host_save(state: State<'_, AppState>, host: Host) -> Result<Host> {
     save_host(&state, host)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn hosts_confirm_mirror(state: State<'_, AppState>, ids: Vec<Id>) -> Result<()> {
+    confirm_mirror(&state, ids)
 }
 
 #[tauri::command]
@@ -142,6 +154,20 @@ mod tests {
         save_host(&state, Host::new("mirrored-01", "192.0.2.50")).unwrap();
         let content = std::fs::read_to_string(state.paths.ssh_dir.join("config.d").join("linascp.conf")).unwrap();
         assert!(content.contains("mirrored-01"));
+    }
+
+    #[test]
+    fn confirming_an_imported_host_writes_it_to_the_mirror() {
+        let (_dir, state) = setup();
+        save_settings(&state, Settings { ssh_mode: SshMode::Mirror, ..Settings::default() }).unwrap();
+        let mut imported = Host::new("gitlab", "192.0.2.70");
+        imported.mirror_pending = true;
+        let saved = save_host(&state, imported).unwrap();
+        let conf = || std::fs::read_to_string(state.paths.ssh_dir.join("config.d").join("linascp.conf")).unwrap();
+        assert!(saved.mirror_pending, "saving keeps the flag: only the editor or the import confirm clears it");
+        assert!(!conf().contains("192.0.2.70"));
+        confirm_mirror(&state, vec![saved.id]).unwrap();
+        assert!(conf().contains("Host gitlab\n    HostName 192.0.2.70\n"), "{}", conf());
     }
 
     #[tokio::test]

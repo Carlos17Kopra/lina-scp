@@ -103,6 +103,7 @@ export type {
   ImportItem,
   ImportPreview,
   ImportReport,
+  PendingMirrorHost,
   ItemKind,
   KbdPrompt,
   LinkTarget,
@@ -160,6 +161,10 @@ export function hostsList(): Promise<Host[]> {
 }
 export function hostSave(host: Host): Promise<Host> {
   return unwrap(commands.hostSave(host));
+}
+/** Lets the ssh mirror write imported hosts (TP6c). */
+export function hostsConfirmMirror(ids: Id[]): Promise<void> {
+  return unwrapVoid(commands.hostsConfirmMirror(ids));
 }
 export function hostDelete(id: Id): Promise<void> {
   return unwrapVoid(commands.hostDelete(id));
