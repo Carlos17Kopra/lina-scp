@@ -1,12 +1,12 @@
 //! Execution of the configured SSH authentication method.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use russh::MethodSet;
 use russh::client::{self, KeyboardInteractiveAuthResponse};
 use russh::keys::agent::client::AgentClient;
-use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg};
+use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey};
 use secrecy::zeroize::Zeroizing;
 use secrecy::{ExposeSecret, SecretString};
 use tokio_util::sync::CancellationToken;
@@ -94,7 +94,8 @@ fn next_method(remaining: &[String], configured: AuthMethod, used: &[AuthMethod]
 pub trait Authenticator: Send {
     async fn password(&mut self, user: &str, password: &SecretString) -> Result<AuthOutcome>;
     async fn publickey(&mut self, user: &str, key: PrivateKey) -> Result<AuthOutcome>;
-    async fn agent(&mut self, user: &str, socket: &Path) -> Result<AuthOutcome>;
+    /// Offers every agent identity; returns the outcome and the identities offered.
+    async fn agent(&mut self, user: &str, socket: &Path) -> Result<(AuthOutcome, Vec<PublicKey>)>;
     async fn kbd_start(&mut self, user: &str) -> Result<KbdStep>;
     async fn kbd_respond(&mut self, responses: Vec<String>) -> Result<KbdStep>;
 }
@@ -107,6 +108,8 @@ pub struct AuthContext<'a> {
     pub owner: SecretOwner,
     pub secrets: Arc<dyn SecretStore>,
     pub agent_sock: Option<&'a Path>,
+    /// `~/.ssh`, for the default keys after the agent.
+    pub ssh_dir: PathBuf,
     pub broker: &'a PromptBroker,
     pub emit: &'a EmitFn,
     pub cancel: &'a CancellationToken,
@@ -354,17 +357,67 @@ async fn key_flow(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -> Result
     Ok(outcome)
 }
 
-async fn agent_flow(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -> Result<MethodOutcome> {
-    let socket = ctx.agent_sock.ok_or_else(|| CoreError::Auth {
-        rejected_methods: vec!["publickey".to_string()],
-        message: "no ssh-agent available (SSH_AUTH_SOCK not set)".to_string(),
-    })?;
-    match auth.agent(&ctx.user, socket).await? {
-        AuthOutcome::Success => Ok(MethodOutcome::Done),
-        AuthOutcome::Partial { remaining } => Ok(MethodOutcome::Partial(remaining)),
-        AuthOutcome::Rejected { remaining } => {
-            Err(auth_error(remaining, "publickey", "no agent identity was accepted"))
+/// Default identity files tried after the agent, in OpenSSH's order (no `_sk`: russh cannot sign with them).
+const DEFAULT_KEYS: [&str; 3] = ["id_rsa", "id_ecdsa", "id_ed25519"];
+
+/// An unencrypted default key not yet offered by the agent. Encrypted ones are skipped: there is no place to
+/// store their passphrase, and automatic reconnects must never prompt.
+async fn default_key(ctx: &AuthContext<'_>, path: &Path, offered: &[PublicKey]) -> Option<PrivateKey> {
+    let text = Zeroizing::new(tokio::fs::read_to_string(path).await.ok()?);
+    match decode_key(&text, None) {
+        Ok(key) if offered.iter().any(|o| o.key_data() == key.public_key().key_data()) => {
+            ctx.log(format!("debug1: Skipping {}: already offered by the agent", path.display()));
+            None
         }
+        Ok(key) => Some(key),
+        Err(russh::keys::Error::KeyIsEncrypted) => {
+            ctx.log(format!("debug1: Skipping encrypted key {} (not in the agent)", path.display()));
+            None
+        }
+        Err(e) => {
+            ctx.log(format!("debug1: Skipping invalid key {}: {e}", path.display()));
+            None
+        }
+    }
+}
+
+/// Agent identities first, then the default key files (like OpenSSH without `IdentityFile`).
+async fn agent_flow(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -> Result<MethodOutcome> {
+    let mut offered = Vec::new();
+    let mut remaining = Vec::new();
+    let agent_failure = match ctx.agent_sock {
+        None => Some(CoreError::Auth {
+            rejected_methods: vec!["publickey".to_string()],
+            message: "no ssh-agent available (SSH_AUTH_SOCK not set)".to_string(),
+        }),
+        Some(socket) => match auth.agent(&ctx.user, socket).await {
+            Ok((AuthOutcome::Success, _)) => return Ok(MethodOutcome::Done),
+            Ok((AuthOutcome::Partial { remaining }, _)) => return Ok(MethodOutcome::Partial(remaining)),
+            Ok((AuthOutcome::Rejected { remaining: rest }, keys)) => {
+                (offered, remaining) = (keys, rest);
+                None
+            }
+            Err(e) => {
+                ctx.log(format!("debug1: {e}"));
+                Some(e)
+            }
+        },
+    };
+    let mut tried_file = false;
+    for name in DEFAULT_KEYS {
+        let path = ctx.ssh_dir.join(name);
+        let Some(key) = default_key(ctx, &path, &offered).await else { continue };
+        tried_file = true;
+        ctx.log(format!("debug1: Offering public key: {}", path.display()));
+        match auth.publickey(&ctx.user, key).await? {
+            AuthOutcome::Success => return Ok(MethodOutcome::Done),
+            AuthOutcome::Partial { remaining } => return Ok(MethodOutcome::Partial(remaining)),
+            AuthOutcome::Rejected { remaining: rest } => remaining = rest,
+        }
+    }
+    match agent_failure {
+        Some(e) if !tried_file => Err(e),
+        _ => Err(auth_error(remaining, "publickey", "no agent identity or default key was accepted")),
     }
 }
 
@@ -469,7 +522,7 @@ impl Authenticator for HandleAuthenticator<'_> {
         self.handle.authenticate_publickey(user, key).await.map(outcome).map_err(map_russh_error)
     }
 
-    async fn agent(&mut self, user: &str, socket: &Path) -> Result<AuthOutcome> {
+    async fn agent(&mut self, user: &str, socket: &Path) -> Result<(AuthOutcome, Vec<PublicKey>)> {
         let agent_error = |e: russh::keys::Error| CoreError::Auth {
             rejected_methods: vec!["publickey".to_string()],
             message: format!("ssh-agent: {e}"),
@@ -477,8 +530,10 @@ impl Authenticator for HandleAuthenticator<'_> {
         let mut agent = AgentClient::connect_uds(socket).await.map_err(agent_error)?;
         let identities = agent.request_identities().await.map_err(agent_error)?;
         let mut last = AuthOutcome::Rejected { remaining: Vec::new() };
+        let mut offered = Vec::new();
         for identity in identities {
             let public = identity.public_key().into_owned();
+            offered.push(public.clone());
             let hash = if public.algorithm().is_rsa() { self.rsa_hash().await? } else { None };
             let result =
                 self.handle.authenticate_publickey_with(user, public, hash, &mut agent).await.map_err(|e| {
@@ -493,7 +548,7 @@ impl Authenticator for HandleAuthenticator<'_> {
                 break;
             }
         }
-        Ok(last)
+        Ok((last, offered))
     }
 
     async fn kbd_start(&mut self, user: &str) -> Result<KbdStep> {
@@ -540,6 +595,8 @@ NKGOvMLy4gKjk9jA==
         calls: Vec<&'static str>,
         kbd_steps: VecDeque<KbdStep>,
         kbd_responses: Vec<Vec<String>>,
+        /// Scripted agent result; `None` = rejected without offering anything.
+        agent_result: Option<Result<(AuthOutcome, Vec<PublicKey>)>>,
     }
 
     #[async_trait::async_trait]
@@ -554,8 +611,9 @@ NKGOvMLy4gKjk9jA==
             self.publickey_calls += 1;
             Ok(self.publickey_results.pop_front().unwrap_or(AuthOutcome::Success))
         }
-        async fn agent(&mut self, _user: &str, _socket: &Path) -> Result<AuthOutcome> {
-            Ok(AuthOutcome::Rejected { remaining: vec!["publickey".into()] })
+        async fn agent(&mut self, _user: &str, _socket: &Path) -> Result<(AuthOutcome, Vec<PublicKey>)> {
+            self.calls.push("agent");
+            self.agent_result.take().unwrap_or_else(|| Ok((rejected(&["publickey"]), Vec::new())))
         }
         async fn kbd_start(&mut self, _user: &str) -> Result<KbdStep> {
             self.calls.push("keyboard-interactive");
@@ -575,6 +633,7 @@ NKGOvMLy4gKjk9jA==
         secrets: Arc<MemorySecretStore>,
         cancel: CancellationToken,
         owner: SecretOwner,
+        ssh_dir: tempfile::TempDir,
     }
 
     impl Harness {
@@ -597,6 +656,7 @@ NKGOvMLy4gKjk9jA==
                 secrets: Arc::new(MemorySecretStore::new()),
                 cancel: CancellationToken::new(),
                 owner: SecretOwner::Host(uuid::Uuid::new_v4()),
+                ssh_dir: tempfile::tempdir().unwrap(),
             }
         }
 
@@ -608,6 +668,7 @@ NKGOvMLy4gKjk9jA==
                 owner: self.owner,
                 secrets: self.secrets.clone(),
                 agent_sock: None,
+                ssh_dir: self.ssh_dir.path().to_path_buf(),
                 broker: &self.broker,
                 emit: &self.emit,
                 cancel: &self.cancel,
@@ -806,11 +867,73 @@ NKGOvMLy4gKjk9jA==
     }
 
     #[tokio::test]
-    async fn agent_without_socket_fails() {
+    async fn agent_without_socket_or_default_keys_fails() {
         let h = Harness::new(vec![]);
         let mut fake = FakeAuth::default();
         let err = authenticate(&mut fake, &h.ctx(AuthMethod::Agent, None)).await.unwrap_err();
-        assert!(matches!(err, CoreError::Auth { .. }));
+        assert!(matches!(&err, CoreError::Auth { message, .. } if message.contains("SSH_AUTH_SOCK")), "{err}");
+        assert_eq!(fake.publickey_calls, 0);
+    }
+
+    /// Writes an unencrypted Ed25519 key `<ssh_dir>/<name>` and returns its public key.
+    fn plain_key(h: &Harness, name: &str) -> PublicKey {
+        let info = crate::keys::generate_key(h.ssh_dir.path(), crate::keys::KeyKind::Ed25519, name, "t", None).unwrap();
+        PublicKey::from_openssh(&info.public_key).unwrap()
+    }
+
+    fn agent_ctx(h: &Harness) -> AuthContext<'_> {
+        AuthContext { agent_sock: Some(Path::new("/agent.sock")), ..h.ctx(AuthMethod::Agent, None) }
+    }
+
+    #[tokio::test]
+    async fn agent_without_socket_falls_back_to_default_key() {
+        let h = Harness::new(vec![]);
+        plain_key(&h, "id_ed25519");
+        let mut fake = FakeAuth::default();
+        authenticate(&mut fake, &h.ctx(AuthMethod::Agent, None)).await.unwrap();
+        assert_eq!(fake.calls, ["publickey"]);
+    }
+
+    #[tokio::test]
+    async fn rejected_agent_falls_back_in_openssh_order_skipping_encrypted() {
+        let h = Harness::new(vec![]);
+        plain_key(&h, "id_ed25519");
+        plain_key(&h, "id_ecdsa"); // name only; the order is by file name
+        std::fs::write(h.ssh_dir.path().join("id_rsa"), ENCRYPTED_KEY).unwrap();
+        let mut fake = FakeAuth { publickey_results: VecDeque::from([rejected(&["publickey"])]), ..Default::default() };
+        authenticate(&mut fake, &agent_ctx(&h)).await.unwrap();
+        assert_eq!(fake.calls, ["agent", "publickey", "publickey"]);
+        assert!(h.prompts().is_empty(), "never asks for a default key's passphrase");
+    }
+
+    #[tokio::test]
+    async fn default_key_already_offered_by_the_agent_is_skipped() {
+        let h = Harness::new(vec![]);
+        let public = plain_key(&h, "id_ed25519");
+        let mut fake =
+            FakeAuth { agent_result: Some(Ok((rejected(&["publickey"]), vec![public]))), ..Default::default() };
+        let err = authenticate(&mut fake, &agent_ctx(&h)).await.unwrap_err();
+        assert!(matches!(&err, CoreError::Auth { message, .. } if message.contains("default key")), "{err}");
+        assert_eq!(fake.calls, ["agent"]);
+    }
+
+    #[tokio::test]
+    async fn unreachable_agent_falls_back_to_default_key() {
+        let h = Harness::new(vec![]);
+        plain_key(&h, "id_ed25519");
+        let mut fake =
+            FakeAuth { agent_result: Some(Err(CoreError::config("ssh-agent: refused"))), ..Default::default() };
+        authenticate(&mut fake, &agent_ctx(&h)).await.unwrap();
+        assert_eq!(fake.calls, ["agent", "publickey"]);
+    }
+
+    #[tokio::test]
+    async fn unreachable_agent_without_default_keys_reports_the_agent_error() {
+        let h = Harness::new(vec![]);
+        let mut fake =
+            FakeAuth { agent_result: Some(Err(CoreError::config("ssh-agent: refused"))), ..Default::default() };
+        let err = authenticate(&mut fake, &agent_ctx(&h)).await.unwrap_err();
+        assert!(err.to_string().contains("refused"), "{err}");
     }
 
     #[tokio::test]

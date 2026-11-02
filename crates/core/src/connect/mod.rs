@@ -374,6 +374,7 @@ impl Pipeline {
             owner,
             secrets: self.secrets.clone(),
             agent_sock: self.agent_sock.as_deref(),
+            ssh_dir: PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".ssh"),
             broker: &self.broker,
             emit: &self.emit,
             cancel: &self.cancel,
