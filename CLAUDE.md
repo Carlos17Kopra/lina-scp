@@ -19,6 +19,8 @@ non-commercial open-source release later. Target platform is Linux only: Debian 
   - `connect/`: russh pipeline (jump host, auth, prompts, timeouts).
   - `session/`: local PTY and SSH sessions.
   - `keys.rs`: the user's SSH key files (TP5b): list, generate; `connect::copy_public_key` is ssh-copy-id.
+  - `agent.rs`: read-only list of the ssh-agent's identities (TP6c). Auth method „agent“ then tries the unencrypted
+    default keys `~/.ssh/id_{rsa,ecdsa,ed25519}` (`connect/auth.rs`).
   - `tunnel.rs`: port forwards L/R/D (TP5a) over a terminal session's connection, kept across reconnects.
   - `connect/tunnel_session.rs`: shell-less connection that only carries port forwards (TP6b).
   - `transfer/`: transfer queue (TP3b) over the `Side` trait (local fs, `SftpSession`), bandwidth pacer, `chmod`
@@ -57,8 +59,10 @@ non-commercial open-source release later. Target platform is Linux only: Debian 
 - `docs/superpowers/specs/2026-10-17-linascp-tp5c-settings-design.md`: TP5c spec (settings screen).
 - `docs/superpowers/specs/2026-10-17-linascp-tp6a-cleanup-design.md`: TP6a spec (backlog cleanup) and the TP6 split.
 - `docs/superpowers/specs/2026-10-20-linascp-tp6b-port-forwarding-design.md`: TP6b spec (port-forwarding screen).
+- `docs/superpowers/specs/2026-11-02-linascp-tp6c-agent-identities-design.md`: TP6c spec (agent identities, default
+  keys after the agent).
 - `docs/acceptance-tp1.md`: manual acceptance checklist (`docs/acceptance-tp2a.md` … `docs/acceptance-tp2d.md` for
-  TP2a–TP2d, `docs/acceptance-tp3a.md` for TP3a, `docs/acceptance-tp3b.md` for TP3b, `docs/acceptance-tp3c.md` for TP3c, `docs/acceptance-tp4a.md` for TP4a, `docs/acceptance-tp4b.md` for TP4b, `docs/acceptance-tp4c.md` for TP4c, `docs/acceptance-tp5a.md` for TP5a, `docs/acceptance-tp5b.md` for TP5b, `docs/acceptance-tp5c.md` for TP5c, `docs/acceptance-tp6a.md` for TP6a, `docs/acceptance-tp6b.md` for TP6b).
+  TP2a–TP2d, `docs/acceptance-tp3a.md` for TP3a, `docs/acceptance-tp3b.md` for TP3b, `docs/acceptance-tp3c.md` for TP3c, `docs/acceptance-tp4a.md` for TP4a, `docs/acceptance-tp4b.md` for TP4b, `docs/acceptance-tp4c.md` for TP4c, `docs/acceptance-tp5a.md` for TP5a, `docs/acceptance-tp5b.md` for TP5b, `docs/acceptance-tp5c.md` for TP5c, `docs/acceptance-tp6a.md` for TP6a, `docs/acceptance-tp6b.md` for TP6b, `docs/acceptance-tp6c.md` for TP6c).
 - `docs/backlog-after-tp1.md`: deferred review findings. Start TP2 planning there.
 
 ## Commands (run from the repo root)
@@ -110,6 +114,8 @@ bun run tauri build               # .deb + .AppImage in target/release/bundle/
   connection; „Trennen“, giving up and leaving the list stop them).
 - **Keys (TP5b):** generated private keys are written 0600 and never overwrite a file; ssh-copy-id sends only the
   checked public key, over stdin.
+- **Agent (TP6c):** the agent is only read, never changed; default keys after the agent never prompt (encrypted ones
+  are skipped).
 
 ## Workflow
 
@@ -133,5 +139,5 @@ bun run tauri build               # .deb + .AppImage in target/release/bundle/
 - TP3: SFTP (3a browse, 3b transfers, 3c bookmarks + edit: done).
 - TP4: advanced SFTP (4a permissions, bandwidth, server command; 4b compare + sync; 4c keep up to date: done).
 - TP5: tunnels, keychain, keygen/ssh-copy-id, full settings (5a–5c: done).
-- TP6: 6a backlog cleanup (done), 6b port-forwarding screen (done), 6c SSH agent identities.
+- TP6: 6a backlog cleanup, 6b port-forwarding screen, 6c SSH agent identities (done).
 - No sync between devices. Moving data to another device goes through export/import (`.linascp` files).

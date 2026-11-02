@@ -11,7 +11,6 @@ fixed before the merge are not listed.
 
 ## Behaviour / UX
 
-- Hosts imported from ssh-config without `IdentityFile` only try the agent; OpenSSH also tries the default `~/.ssh/id_*` files.
 - `has_secret` is not updated when a secret is saved from (or a stale password removed after) a connect prompt; it
   only drives the editor's „gespeichert“ placeholder.
 - A startup failure (e.g. the DB schema is newer than the build) only goes to stderr.
