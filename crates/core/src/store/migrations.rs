@@ -107,7 +107,12 @@ CREATE TABLE bookmarks (
 CREATE INDEX bookmarks_host_id ON bookmarks(host_id);
 "#;
 
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4];
+/// TP6c: imported hosts wait for confirmation before the ssh mirror writes them.
+const V5: &str = r#"
+ALTER TABLE hosts ADD COLUMN mirror_pending INTEGER NOT NULL DEFAULT 0;
+"#;
+
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5];
 
 /// Latest schema version known to this build.
 pub(crate) const LATEST_VERSION: i64 = MIGRATIONS.len() as i64;
@@ -173,7 +178,26 @@ mod tests {
         )
         .unwrap();
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(version, 4);
-        assert_eq!(LATEST_VERSION, 4);
+        assert_eq!(version, LATEST_VERSION);
+    }
+
+    #[test]
+    fn v5_keeps_existing_hosts_in_the_mirror() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for v in [V1, V2, V3, V4] {
+            conn.execute_batch(v).unwrap();
+        }
+        conn.execute_batch("PRAGMA user_version = 4").unwrap();
+        conn.execute(
+            "INSERT INTO hosts (id, name, address, auth_method, created_at, updated_at) \
+             VALUES ('a', 'n', 'h', 'password', 0, 0)",
+            [],
+        )
+        .unwrap();
+        run(&mut conn).unwrap();
+        let pending: bool =
+            conn.query_row("SELECT mirror_pending FROM hosts WHERE id = 'a'", [], |r| r.get(0)).unwrap();
+        assert!(!pending, "hosts from before TP6c were never imported unconfirmed");
+        assert_eq!(LATEST_VERSION, 5);
     }
 }

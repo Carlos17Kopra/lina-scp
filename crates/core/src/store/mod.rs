@@ -51,7 +51,7 @@ pub const FIRST_RUN_DONE: &str = "first_run_done";
 
 const HOST_COLUMNS: &str = "id, name, address, port, user, group_id, color, notes, protocol_ssh, protocol_sftp, \
     login_profile_id, auth_method, key_path, has_secret, jump_host_id, keepalive_s, timeout_s, start_command, \
-    env, sftp_settings, source, created_at, updated_at, terminal_scheme, terminal_font_size";
+    env, sftp_settings, source, created_at, updated_at, terminal_scheme, terminal_font_size, mirror_pending";
 
 const PROFILE_COLUMNS: &str = "id, name, user, method, key_path, has_secret, created_at, updated_at";
 
@@ -117,6 +117,17 @@ impl Store {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         upsert_host(&tx, host)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Confirms imported hosts for the ssh mirror.
+    pub fn confirm_mirror(&self, ids: &[Id]) -> Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        for id in ids {
+            tx.execute("UPDATE hosts SET mirror_pending = 0 WHERE id = ?1", [id.to_string()])?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -408,7 +419,7 @@ fn upsert_host(tx: &Transaction<'_>, host: &Host) -> Result<()> {
     let sftp = serde_json::to_string(&host.sftp).map_err(|e| CoreError::internal(e.to_string()))?;
     let sql = format!(
         "INSERT INTO hosts ({HOST_COLUMNS}) VALUES \
-         (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25) \
+         (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26) \
          ON CONFLICT(id) DO UPDATE SET name = excluded.name, address = excluded.address, port = excluded.port, \
          user = excluded.user, group_id = excluded.group_id, color = excluded.color, notes = excluded.notes, \
          protocol_ssh = excluded.protocol_ssh, protocol_sftp = excluded.protocol_sftp, \
@@ -417,7 +428,8 @@ fn upsert_host(tx: &Transaction<'_>, host: &Host) -> Result<()> {
          keepalive_s = excluded.keepalive_s, timeout_s = excluded.timeout_s, \
          start_command = excluded.start_command, env = excluded.env, sftp_settings = excluded.sftp_settings, \
          source = excluded.source, updated_at = excluded.updated_at, \
-         terminal_scheme = excluded.terminal_scheme, terminal_font_size = excluded.terminal_font_size"
+         terminal_scheme = excluded.terminal_scheme, terminal_font_size = excluded.terminal_font_size, \
+         mirror_pending = excluded.mirror_pending"
     );
     tx.execute(
         &sql,
@@ -447,6 +459,7 @@ fn upsert_host(tx: &Transaction<'_>, host: &Host) -> Result<()> {
             now_unix(),
             host.terminal_scheme,
             host.terminal_font_size,
+            host.mirror_pending,
         ],
     )?;
 
@@ -540,6 +553,7 @@ fn host_from_row(row: &Row<'_>) -> rusqlite::Result<Host> {
         forwards: Vec::new(),
         terminal_scheme: row.get(23)?,
         terminal_font_size: row.get(24)?,
+        mirror_pending: row.get(25)?,
         source: source_from_db(&source).map_err(|e| conv_err(20, e))?,
         created_at: row.get(21)?,
         updated_at: row.get(22)?,

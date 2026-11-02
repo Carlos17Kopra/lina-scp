@@ -21,6 +21,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             hosts::hosts_list,
             hosts::host_save,
             hosts::host_delete,
+            hosts::hosts_confirm_mirror,
             hosts::groups_list,
             hosts::group_save,
             hosts::group_delete,

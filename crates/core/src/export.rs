@@ -137,6 +137,17 @@ pub struct ImportReport {
     /// Hosts/profiles not imported because a field failed validation (e.g. a line break that
     /// would inject ssh_config directives), including hosts using such a profile.
     pub invalid: u32,
+    /// Written hosts the ssh mirror skips until the user confirms them (their alias could shadow a real name).
+    pub mirror_pending: Vec<PendingMirrorHost>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingMirrorHost {
+    pub id: Id,
+    /// The `Host` line the mirror would write.
+    pub alias: String,
+    pub address: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -265,7 +276,8 @@ pub fn import_apply(
         clear_has_secret(&mut doc);
     }
 
-    let mut report = ImportReport { imported: 0, skipped: 0, secrets_restored: 0, invalid: 0 };
+    let mut report =
+        ImportReport { imported: 0, skipped: 0, secrets_restored: 0, invalid: 0, mirror_pending: Vec::new() };
     let existing = Existing::load(store)?;
     let mut plan = Plan::default();
     for g in &doc.groups {
@@ -342,6 +354,12 @@ pub fn import_apply(
                 if let HostAuth::Profile { profile_id } = &mut host.auth {
                     *profile_id = plan.map_id(*profile_id);
                 }
+                host.mirror_pending = true;
+                report.mirror_pending.push(PendingMirrorHost {
+                    id: host.id,
+                    alias: crate::sshconfig::mirror::host_alias(&host.name),
+                    address: host.address.clone(),
+                });
                 hosts.push(host);
             }
             Action::Skip if plan.is_rejected(h.id) => report.invalid += 1,

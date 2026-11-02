@@ -846,6 +846,13 @@ export const t = {
       report: (imported: number, skipped: number, secrets: number, invalid = 0) =>
         `Import abgeschlossen: ${imported} importiert, ${skipped} übersprungen${secrets > 0 ? `, ${secrets} Geheimnisse wiederhergestellt` : ""}${invalid > 0 ? `, ${invalid === 1 ? "1 ungültiger Eintrag" : `${invalid} ungültige Einträge`} nicht importiert` : ""}`,
       failed: "Import fehlgeschlagen",
+      mirrorTitle: "Importierte Hosts für ~/.ssh/config",
+      mirrorIntro:
+        "Im Modus „Spiegeln“ schreibt LinaSCP Hosts nach ~/.ssh/config, wo sie gleichnamige Einträge überdecken. Importierte Hosts kommen erst nach deiner Bestätigung hinein, oder wenn du sie im Editor speicherst.",
+      mirrorEntry: (alias: string, address: string) => `${alias} → ${address}`,
+      mirrorConfirm: "In ~/.ssh/config übernehmen",
+      mirrorLater: "Später",
+      mirrorFailed: "Übernehmen fehlgeschlagen",
     },
   },
 } as const;

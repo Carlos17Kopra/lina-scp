@@ -97,9 +97,15 @@ fn roundtrip_without_secrets_into_empty_store() {
 
     let tmp = tempfile::tempdir().unwrap();
     let report = import_apply(&bytes, None, &HashMap::new(), &dst, &dst_secrets, tmp.path()).unwrap();
-    assert_eq!(report, ImportReport { imported: 3, skipped: 0, secrets_restored: 0, invalid: 0 });
+    let alias = crate::sshconfig::mirror::host_alias(&src.host.name);
+    let pending = vec![PendingMirrorHost { id: src.host.id, alias, address: src.host.address.clone() }];
+    assert_eq!(
+        report,
+        ImportReport { imported: 3, skipped: 0, secrets_restored: 0, invalid: 0, mirror_pending: pending }
+    );
 
     let host = dst.get_host(src.host.id).unwrap().unwrap();
+    assert!(host.mirror_pending, "imported hosts reach ~/.ssh/config only once the user confirms them");
     assert_eq!(host.group_id, Some(src.group.id));
     assert_eq!(host.auth, HostAuth::Profile { profile_id: src.profile.id });
     assert_eq!(host.forwards, src.host.forwards);
@@ -143,7 +149,16 @@ fn roundtrip_with_secrets_and_key_files() {
     let key_dir = tmp.path().join("imported");
     let report =
         import_apply(&bytes, Some(&pass("correct horse")), &HashMap::new(), &dst, &dst_secrets, &key_dir).unwrap();
-    assert_eq!(report, ImportReport { imported: 4, skipped: 0, secrets_restored: 2, invalid: 0 });
+    assert_eq!(
+        report,
+        ImportReport {
+            imported: 4,
+            skipped: 0,
+            secrets_restored: 2,
+            invalid: 0,
+            mirror_pending: report.mirror_pending.clone()
+        }
+    );
 
     let restored = dst_secrets.get(SecretOwner::Profile(src.profile.id), SecretKind::Password).unwrap().unwrap();
     assert_eq!(restored.expose_secret(), "s3cret");
@@ -207,7 +222,16 @@ fn conflicts_default_to_skip() {
 
     let report = import_apply(&bytes, None, &HashMap::new(), &src.store, &src.secrets, tmp.path()).unwrap();
 
-    assert_eq!(report, ImportReport { imported: 0, skipped: 3, secrets_restored: 0, invalid: 0 });
+    assert_eq!(
+        report,
+        ImportReport {
+            imported: 0,
+            skipped: 3,
+            secrets_restored: 0,
+            invalid: 0,
+            mirror_pending: report.mirror_pending.clone()
+        }
+    );
     assert_eq!(src.store.get_host(src.host.id).unwrap().unwrap().address, "changed");
 }
 
@@ -223,7 +247,16 @@ fn replace_same_id_overwrites() {
 
     let report = import_apply(&bytes, None, &resolutions, &src.store, &src.secrets, tmp.path()).unwrap();
 
-    assert_eq!(report, ImportReport { imported: 1, skipped: 2, secrets_restored: 0, invalid: 0 });
+    assert_eq!(
+        report,
+        ImportReport {
+            imported: 1,
+            skipped: 2,
+            secrets_restored: 0,
+            invalid: 0,
+            mirror_pending: report.mirror_pending.clone()
+        }
+    );
     assert_eq!(src.store.get_host(src.host.id).unwrap().unwrap().address, "10.0.0.5");
 }
 
@@ -255,7 +288,16 @@ fn duplicate_gets_new_ids_suffix_and_remapped_secrets() {
 
     let report = import_apply(&bytes, Some(&pass("pw")), &resolutions, &src.store, &src.secrets, tmp.path()).unwrap();
 
-    assert_eq!(report, ImportReport { imported: 2, skipped: 1, secrets_restored: 1, invalid: 0 });
+    assert_eq!(
+        report,
+        ImportReport {
+            imported: 2,
+            skipped: 1,
+            secrets_restored: 1,
+            invalid: 0,
+            mirror_pending: report.mirror_pending.clone()
+        }
+    );
     let profiles = src.store.list_profiles().unwrap();
     let dup_profile = profiles.iter().find(|p| p.name == "admin (Import)").unwrap();
     assert_ne!(dup_profile.id, src.profile.id);
@@ -411,6 +453,8 @@ fn import_rejects_hosts_that_would_inject_ssh_config_directives() {
 
     let ssh_dir = tmp.path().join(".ssh");
     let mirror = crate::sshconfig::Mirror::new(ssh_dir.clone());
+    let ids: Vec<Id> = report.mirror_pending.iter().map(|p| p.id).collect();
+    dst.confirm_mirror(&ids).unwrap(); // even a confirmed host never smuggles directives
     mirror.enable(&dst.list_hosts().unwrap(), &dst.list_profiles().unwrap()).unwrap();
     let conf = fs::read_to_string(ssh_dir.join("config.d/linascp.conf")).unwrap();
     assert!(conf.contains("Host good\n"), "{conf}");
@@ -633,7 +677,16 @@ fn snippets_roundtrip_with_their_host() {
     assert_eq!(preview.items.iter().filter(|i| i.kind == ItemKind::Snippet).count(), 2);
     let report = import_into(&dst, &bytes, &HashMap::new());
 
-    assert_eq!(report, ImportReport { imported: 3, skipped: 0, secrets_restored: 0, invalid: 0 });
+    assert_eq!(
+        report,
+        ImportReport {
+            imported: 3,
+            skipped: 0,
+            secrets_restored: 0,
+            invalid: 0,
+            mirror_pending: report.mirror_pending.clone()
+        }
+    );
     let loaded = dst.get_snippet(bound.id).unwrap().unwrap();
     assert_eq!((loaded.command.as_str(), loaded.host_id), (bound.command.as_str(), Some(host.id)));
     assert_eq!(dst.get_snippet(global.id).unwrap().unwrap().host_id, None);

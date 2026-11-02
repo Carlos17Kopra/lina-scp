@@ -1,7 +1,7 @@
 # LinaSCP
 
-Linux desktop SSH/SFTP client: SSH like Termius, SFTP like WinSCP. Built for personal use first, with a possible
-non-commercial open-source release later. Target platform is Linux only: Debian 13, GNOME Wayland, NVIDIA.
+Linux desktop SSH/SFTP client: SSH like Termius, SFTP like WinSCP. Built for personal use first; open source under
+GPL-3.0-or-later (`LICENSE`). Target platform is Linux only: Debian 13, GNOME Wayland, NVIDIA.
 
 ## Communication & naming
 
@@ -94,6 +94,8 @@ bun run tauri build               # .deb + .AppImage in target/release/bundle/
   - The user's config is never rewritten otherwise.
   - Every value written to the mirror is validated in core (`validate.rs`), so one bad entry must never break
     the user's `ssh`.
+  - Imported hosts (`mirror_pending`) reach the mirror only after the user confirms them (import dialog) or saves
+    them in the editor; their alias could shadow a real host name.
 - **Terminal output:**
   - Raw bytes over `Channel<RawChunk>` with ack flow control: pause above 1 MiB unacked, resume below 256 KiB.
   - The WebGL renderer is the default, with a DOM fallback on context loss.
