@@ -40,6 +40,8 @@ impl Env {
             known_hosts: KnownHosts::new(self.known_hosts_path()),
             secrets: self.secrets.clone(),
             agent_sock,
+            // Never the developer's real ~/.ssh: default keys after the agent come from here.
+            ssh_dir: self.dir.path().join("ssh"),
             forwarded: None,
         }
     }

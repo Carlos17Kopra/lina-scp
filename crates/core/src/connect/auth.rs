@@ -94,8 +94,8 @@ fn next_method(remaining: &[String], configured: AuthMethod, used: &[AuthMethod]
 pub trait Authenticator: Send {
     async fn password(&mut self, user: &str, password: &SecretString) -> Result<AuthOutcome>;
     async fn publickey(&mut self, user: &str, key: PrivateKey) -> Result<AuthOutcome>;
-    /// Offers every agent identity; returns the outcome and the identities offered.
-    async fn agent(&mut self, user: &str, socket: &Path) -> Result<(AuthOutcome, Vec<PublicKey>)>;
+    /// Offers every agent identity, pushing each to `offered` (kept on error too).
+    async fn agent(&mut self, user: &str, socket: &Path, offered: &mut Vec<PublicKey>) -> Result<AuthOutcome>;
     async fn kbd_start(&mut self, user: &str) -> Result<KbdStep>;
     async fn kbd_respond(&mut self, responses: Vec<String>) -> Result<KbdStep>;
 }
@@ -371,7 +371,7 @@ async fn default_key(ctx: &AuthContext<'_>, path: &Path, offered: &[PublicKey]) 
         }
         Ok(key) => Some(key),
         Err(russh::keys::Error::KeyIsEncrypted) => {
-            ctx.log(format!("debug1: Skipping encrypted key {} (not in the agent)", path.display()));
+            ctx.log(format!("debug1: Skipping encrypted key {} (load it into the agent to use it)", path.display()));
             None
         }
         Err(e) => {
@@ -390,11 +390,11 @@ async fn agent_flow(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -> Resu
             rejected_methods: vec!["publickey".to_string()],
             message: "no ssh-agent available (SSH_AUTH_SOCK not set)".to_string(),
         }),
-        Some(socket) => match auth.agent(&ctx.user, socket).await {
-            Ok((AuthOutcome::Success, _)) => return Ok(MethodOutcome::Done),
-            Ok((AuthOutcome::Partial { remaining }, _)) => return Ok(MethodOutcome::Partial(remaining)),
-            Ok((AuthOutcome::Rejected { remaining: rest }, keys)) => {
-                (offered, remaining) = (keys, rest);
+        Some(socket) => match auth.agent(&ctx.user, socket, &mut offered).await {
+            Ok(AuthOutcome::Success) => return Ok(MethodOutcome::Done),
+            Ok(AuthOutcome::Partial { remaining }) => return Ok(MethodOutcome::Partial(remaining)),
+            Ok(AuthOutcome::Rejected { remaining: rest }) => {
+                remaining = rest;
                 None
             }
             Err(e) => {
@@ -407,9 +407,22 @@ async fn agent_flow(auth: &mut dyn Authenticator, ctx: &AuthContext<'_>) -> Resu
     for name in DEFAULT_KEYS {
         let path = ctx.ssh_dir.join(name);
         let Some(key) = default_key(ctx, &path, &offered).await else { continue };
+        let earlier_attempts = tried_file || !offered.is_empty();
         tried_file = true;
         ctx.log(format!("debug1: Offering public key: {}", path.display()));
-        match auth.publickey(&ctx.user, key).await? {
+        let result = match auth.publickey(&ctx.user, key).await {
+            // ponytail: OpenSSH disconnects once MaxAuthTries is exceeded; a real network loss at exactly this point
+            // is also reported as auth. Without this, auto-reconnect would retry a permanent failure forever.
+            Err(CoreError::Network { message, .. }) if earlier_attempts => {
+                return Err(auth_error(
+                    remaining,
+                    "publickey",
+                    &format!("the server closed the connection after too many authentication attempts ({message})"),
+                ));
+            }
+            other => other?,
+        };
+        match result {
             AuthOutcome::Success => return Ok(MethodOutcome::Done),
             AuthOutcome::Partial { remaining } => return Ok(MethodOutcome::Partial(remaining)),
             AuthOutcome::Rejected { remaining: rest } => remaining = rest,
@@ -522,7 +535,7 @@ impl Authenticator for HandleAuthenticator<'_> {
         self.handle.authenticate_publickey(user, key).await.map(outcome).map_err(map_russh_error)
     }
 
-    async fn agent(&mut self, user: &str, socket: &Path) -> Result<(AuthOutcome, Vec<PublicKey>)> {
+    async fn agent(&mut self, user: &str, socket: &Path, offered: &mut Vec<PublicKey>) -> Result<AuthOutcome> {
         let agent_error = |e: russh::keys::Error| CoreError::Auth {
             rejected_methods: vec!["publickey".to_string()],
             message: format!("ssh-agent: {e}"),
@@ -530,7 +543,6 @@ impl Authenticator for HandleAuthenticator<'_> {
         let mut agent = AgentClient::connect_uds(socket).await.map_err(agent_error)?;
         let identities = agent.request_identities().await.map_err(agent_error)?;
         let mut last = AuthOutcome::Rejected { remaining: Vec::new() };
-        let mut offered = Vec::new();
         for identity in identities {
             let public = identity.public_key().into_owned();
             offered.push(public.clone());
@@ -548,7 +560,7 @@ impl Authenticator for HandleAuthenticator<'_> {
                 break;
             }
         }
-        Ok((last, offered))
+        Ok(last)
     }
 
     async fn kbd_start(&mut self, user: &str) -> Result<KbdStep> {
@@ -595,8 +607,10 @@ NKGOvMLy4gKjk9jA==
         calls: Vec<&'static str>,
         kbd_steps: VecDeque<KbdStep>,
         kbd_responses: Vec<Vec<String>>,
-        /// Scripted agent result; `None` = rejected without offering anything.
-        agent_result: Option<Result<(AuthOutcome, Vec<PublicKey>)>>,
+        /// Scripted agent result and the identities it offered; `None` = rejected without offering anything.
+        agent_result: Option<(Result<AuthOutcome>, Vec<PublicKey>)>,
+        /// Returned by `publickey` once the scripted results are used up.
+        publickey_error: Option<CoreError>,
     }
 
     #[async_trait::async_trait]
@@ -609,11 +623,16 @@ NKGOvMLy4gKjk9jA==
         async fn publickey(&mut self, _user: &str, _key: PrivateKey) -> Result<AuthOutcome> {
             self.calls.push("publickey");
             self.publickey_calls += 1;
-            Ok(self.publickey_results.pop_front().unwrap_or(AuthOutcome::Success))
+            match self.publickey_results.pop_front() {
+                Some(result) => Ok(result),
+                None => self.publickey_error.take().map_or(Ok(AuthOutcome::Success), Err),
+            }
         }
-        async fn agent(&mut self, _user: &str, _socket: &Path) -> Result<(AuthOutcome, Vec<PublicKey>)> {
+        async fn agent(&mut self, _user: &str, _socket: &Path, offered: &mut Vec<PublicKey>) -> Result<AuthOutcome> {
             self.calls.push("agent");
-            self.agent_result.take().unwrap_or_else(|| Ok((rejected(&["publickey"]), Vec::new())))
+            let (result, keys) = self.agent_result.take().unwrap_or_else(|| (Ok(rejected(&["publickey"])), Vec::new()));
+            offered.extend(keys);
+            result
         }
         async fn kbd_start(&mut self, _user: &str) -> Result<KbdStep> {
             self.calls.push("keyboard-interactive");
@@ -911,7 +930,7 @@ NKGOvMLy4gKjk9jA==
         let h = Harness::new(vec![]);
         let public = plain_key(&h, "id_ed25519");
         let mut fake =
-            FakeAuth { agent_result: Some(Ok((rejected(&["publickey"]), vec![public]))), ..Default::default() };
+            FakeAuth { agent_result: Some((Ok(rejected(&["publickey"])), vec![public])), ..Default::default() };
         let err = authenticate(&mut fake, &agent_ctx(&h)).await.unwrap_err();
         assert!(matches!(&err, CoreError::Auth { message, .. } if message.contains("default key")), "{err}");
         assert_eq!(fake.calls, ["agent"]);
@@ -921,17 +940,62 @@ NKGOvMLy4gKjk9jA==
     async fn unreachable_agent_falls_back_to_default_key() {
         let h = Harness::new(vec![]);
         plain_key(&h, "id_ed25519");
-        let mut fake =
-            FakeAuth { agent_result: Some(Err(CoreError::config("ssh-agent: refused"))), ..Default::default() };
+        let mut fake = FakeAuth {
+            agent_result: Some((Err(CoreError::config("ssh-agent: refused")), vec![])),
+            ..Default::default()
+        };
         authenticate(&mut fake, &agent_ctx(&h)).await.unwrap();
         assert_eq!(fake.calls, ["agent", "publickey"]);
     }
 
     #[tokio::test]
+    async fn identities_offered_before_an_agent_error_are_still_skipped() {
+        let h = Harness::new(vec![]);
+        let public = plain_key(&h, "id_ed25519");
+        let mut fake = FakeAuth {
+            agent_result: Some((Err(CoreError::config("ssh-agent: sign refused")), vec![public])),
+            ..Default::default()
+        };
+        authenticate(&mut fake, &agent_ctx(&h)).await.unwrap_err();
+        assert_eq!(fake.calls, ["agent"], "id_ed25519 was offered by the agent already");
+    }
+
+    #[tokio::test]
+    async fn disconnect_after_too_many_attempts_is_an_auth_error() {
+        // OpenSSH drops the connection once MaxAuthTries is exceeded; that must not look like a network loss
+        // (auto-reconnect would retry forever).
+        let h = Harness::new(vec![]);
+        plain_key(&h, "id_ed25519");
+        let mut fake = FakeAuth {
+            agent_result: Some((Ok(rejected(&["publickey"])), vec![plain_key(&h, "other")])),
+            publickey_error: Some(map_russh_error(russh::Error::Disconnect)),
+            ..Default::default()
+        };
+        let err = authenticate(&mut fake, &agent_ctx(&h)).await.unwrap_err();
+        assert!(matches!(&err, CoreError::Auth { message, .. } if message.contains("too many")), "{err}");
+    }
+
+    #[tokio::test]
+    async fn encrypted_default_key_is_skipped_without_claiming_it_is_not_in_the_agent() {
+        let h = Harness::new(vec![]);
+        std::fs::write(h.ssh_dir.path().join("id_ed25519"), ENCRYPTED_KEY).unwrap();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let seen = events.clone();
+        let emit: EmitFn = Arc::new(move |e| seen.lock().unwrap().push(format!("{e:?}")));
+        let mut fake = FakeAuth::default();
+        authenticate(&mut fake, &AuthContext { emit: &emit, ..agent_ctx(&h) }).await.unwrap_err();
+        let log = events.lock().unwrap().join("\n");
+        assert!(log.contains("Skipping encrypted key"), "{log}");
+        assert!(!log.contains("not in the agent"), "{log}");
+    }
+
+    #[tokio::test]
     async fn unreachable_agent_without_default_keys_reports_the_agent_error() {
         let h = Harness::new(vec![]);
-        let mut fake =
-            FakeAuth { agent_result: Some(Err(CoreError::config("ssh-agent: refused"))), ..Default::default() };
+        let mut fake = FakeAuth {
+            agent_result: Some((Err(CoreError::config("ssh-agent: refused")), vec![])),
+            ..Default::default()
+        };
         let err = authenticate(&mut fake, &agent_ctx(&h)).await.unwrap_err();
         assert!(err.to_string().contains("refused"), "{err}");
     }

@@ -42,6 +42,7 @@ export function KeychainScreen() {
       setAgent(await agentIdentities());
       setAgentError(null);
     } catch (e) {
+      setAgent(null);
       setAgentError(errorMessage(e));
     }
   }, []);
@@ -123,10 +124,11 @@ export function KeychainScreen() {
         ) : null}
         {!agentError && agent && agent.identities.length > 0 ? (
           <ul className={styles.cards}>
-            {agent.identities.map((identity) => {
+            {agent.identities.map((identity, index) => {
               const name = identity.comment || identity.fingerprint;
               return (
-                <li key={identity.fingerprint} className={styles.card}>
+                // A key and its certificate share the fingerprint.
+                <li key={`${index}:${identity.fingerprint}`} className={styles.card}>
                   <h3 className={styles.name}>{name}</h3>
                   <span className={styles.meta}>{identity.algorithm}</span>
                   <span className={styles.mono}>{identity.fingerprint}</span>

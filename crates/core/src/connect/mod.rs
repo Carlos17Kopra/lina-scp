@@ -141,6 +141,8 @@ pub struct ConnectDeps {
     pub known_hosts: KnownHosts,
     pub secrets: Arc<dyn SecretStore>,
     pub agent_sock: Option<PathBuf>,
+    /// `~/.ssh`: default keys tried after the agent.
+    pub ssh_dir: PathBuf,
     /// Routes for remote port forwards (terminal sessions with tunnels); `None` rejects every forwarded channel.
     pub forwarded: Option<ForwardRoutes>,
 }
@@ -209,6 +211,7 @@ struct Pipeline {
     known_hosts: Arc<KnownHosts>,
     secrets: Arc<dyn SecretStore>,
     agent_sock: Option<PathBuf>,
+    ssh_dir: PathBuf,
     broker: Arc<PromptBroker>,
     emit: EmitFn,
     cancel: CancellationToken,
@@ -228,6 +231,7 @@ impl Pipeline {
             known_hosts: Arc::new(deps.known_hosts),
             secrets: deps.secrets,
             agent_sock: deps.agent_sock,
+            ssh_dir: deps.ssh_dir,
             forwarded: deps.forwarded,
             broker,
             emit,
@@ -374,7 +378,7 @@ impl Pipeline {
             owner,
             secrets: self.secrets.clone(),
             agent_sock: self.agent_sock.as_deref(),
-            ssh_dir: PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".ssh"),
+            ssh_dir: self.ssh_dir.clone(),
             broker: &self.broker,
             emit: &self.emit,
             cancel: &self.cancel,
@@ -876,6 +880,7 @@ mod pipeline_tests {
             known_hosts: KnownHosts::new(dir.join("known_hosts")),
             secrets: Arc::new(MemorySecretStore::new()),
             agent_sock: None,
+            ssh_dir: dir.join("ssh"),
             forwarded: None,
         }
     }

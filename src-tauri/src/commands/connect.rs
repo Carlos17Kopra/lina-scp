@@ -143,6 +143,7 @@ pub(crate) fn connect_deps_in(env: &ConnectEnv) -> ConnectDeps {
         known_hosts: KnownHosts::new(env.paths.known_hosts()),
         secrets: env.secrets.clone(),
         agent_sock: std::env::var_os("SSH_AUTH_SOCK").map(PathBuf::from),
+        ssh_dir: env.paths.ssh_dir.clone(),
         forwarded: None,
     }
 }
@@ -380,6 +381,12 @@ mod tests {
     use linascp_core::connect::Prompt;
     use std::sync::Mutex;
     use std::time::Duration;
+
+    #[test]
+    fn default_keys_come_from_the_app_ssh_dir() {
+        let (_dir, state) = setup();
+        assert_eq!(connect_deps(&state).ssh_dir, state.paths.ssh_dir);
+    }
 
     fn setup() -> (tempfile::TempDir, AppState) {
         let dir = tempfile::tempdir().unwrap();

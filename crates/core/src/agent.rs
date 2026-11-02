@@ -1,6 +1,7 @@
 //! Identities of the running SSH agent (TP6c), read-only.
 
 use std::path::Path;
+use std::time::Duration;
 
 use russh::keys::HashAlg;
 use russh::keys::agent::client::AgentClient;
@@ -33,11 +34,22 @@ fn agent_error(e: russh::keys::Error) -> CoreError {
     CoreError::config(format!("ssh-agent: {e}"))
 }
 
-/// Asks the agent at `socket` for its identities. No socket is not an error; an unreachable one is.
+/// A local agent answers at once; a stale forwarded socket may accept and never answer.
+const AGENT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Asks the agent at `socket` for its identities. No socket is not an error; an unreachable or silent one is.
 pub async fn list_agent_identities(socket: Option<&Path>) -> Result<AgentStatus> {
+    list_within(socket, AGENT_TIMEOUT).await
+}
+
+async fn list_within(socket: Option<&Path>, timeout: Duration) -> Result<AgentStatus> {
     let Some(socket) = socket else { return Ok(AgentStatus { socket: None, identities: Vec::new() }) };
-    let mut agent = AgentClient::connect_uds(socket).await.map_err(agent_error)?;
-    let identities = agent.request_identities().await.map_err(agent_error)?;
+    let request = async {
+        let mut agent = AgentClient::connect_uds(socket).await.map_err(agent_error)?;
+        agent.request_identities().await.map_err(agent_error)
+    };
+    let identities =
+        tokio::time::timeout(timeout, request).await.map_err(|_| CoreError::config("ssh-agent: no answer"))??;
     let identities = identities
         .iter()
         .map(|identity| {
@@ -60,6 +72,20 @@ mod tests {
     #[tokio::test]
     async fn no_socket_means_no_agent_and_no_error() {
         assert_eq!(list_agent_identities(None).await.unwrap(), AgentStatus { socket: None, identities: vec![] });
+    }
+
+    #[tokio::test]
+    async fn silent_agent_times_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("silent.sock");
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let _held = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            std::future::pending::<()>().await;
+            drop(stream);
+        });
+        let err = list_within(Some(&path), Duration::from_millis(100)).await.unwrap_err();
+        assert!(err.to_string().contains("no answer"), "{err}");
     }
 
     #[tokio::test]

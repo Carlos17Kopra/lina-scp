@@ -23,7 +23,7 @@ Nicht enthalten:
   `SSH_AUTH_SOCK` nicht gesetzt ist; dann ist die Liste leer und es gibt keinen Fehler.
 - `AgentIdentity { algorithm, fingerprint (SHA256), comment, public_key (OpenSSH-Zeile) }`, in der Reihenfolge des
   Agenten.
-- Ist der Socket gesetzt, aber nicht erreichbar oder antwortet der Agent nicht, ist das ein Fehler mit Grund.
+- Ist der Socket gesetzt, aber nicht erreichbar oder antwortet der Agent nicht binnen 5 s, ist das ein Fehler mit Grund.
 - Command `agent_identities` (in `src-tauri/src/commands/keys.rs`), Socket aus `SSH_AUTH_SOCK` wie beim Verbinden.
 
 ## 2. Standardschlüssel nach dem Agenten (Core, `connect/auth.rs`)
@@ -40,6 +40,9 @@ Nicht enthalten:
 - Wird eine Datei angenommen, ist die Methode erfolgreich (oder teilweise, wie bisher). Sonst bleibt der Fehler
   „no agent identity or default key was accepted“; fehlte der Agent und gibt es keine Datei, bleibt die bisherige
   Meldung über den fehlenden Agenten.
+- Trennt der Server während der Standardschlüssel die Verbindung (OpenSSH bei überschrittenem `MaxAuthTries`), ist
+  das ein Anmeldefehler, kein Netzwerkfehler. So wiederholt der Auto-Reconnect keinen dauerhaften Fehler.
+- `~/.ssh` kommt aus den App-Pfaden (`ConnectDeps.ssh_dir`), nicht direkt aus `HOME`.
 - Der Hinweis im Editor lautet: „Schlüssel werden vom laufenden SSH-Agent bezogen (SSH_AUTH_SOCK), danach aus
   ~/.ssh/id_* ohne Passphrase.“
 

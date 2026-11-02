@@ -160,43 +160,68 @@ describe("GenerateKeyDialog", () => {
     finish(key("deploy"));
     await vi.waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
-  describe("SSH-Agent", () => {
-    const agentSection = () => screen.getByRole("region", { name: "SSH-Agent" });
+});
 
-    it("lists the agent's identities, marks key files it holds and copies or enters them", async () => {
-      vi.mocked(api.agentIdentities).mockResolvedValue({
-        socket: "/run/agent.sock",
-        identities: [
-          { algorithm: "ssh-ed25519", fingerprint: "SHA256:id_ed25519", comment: "me@box", publicKey: "ssh-ed25519 AAAAagent me@box" },
-          { algorithm: "ssh-rsa", fingerprint: "SHA256:card", comment: "", publicKey: "ssh-rsa AAAAcard" },
-        ],
-      });
-      render(<KeychainScreen />);
-      const section = agentSection();
-      const agentCard = (await within(section).findByRole("heading", { name: "me@box" })).closest("li") as HTMLElement;
-      expect(within(section).getByRole("heading", { name: "SHA256:card" })).toBeInTheDocument();
-      expect(within(card("id_ed25519")).getByText("Im SSH-Agent geladen")).toBeInTheDocument();
-      expect(within(card("old")).queryByText("Im SSH-Agent geladen")).not.toBeInTheDocument();
+describe("KeychainScreen: SSH-Agent", () => {
+  const agentSection = () => screen.getByRole("region", { name: "SSH-Agent" });
 
-      await userEvent.click(within(agentCard).getByRole("button", { name: "Öffentlichen Schlüssel kopieren" }));
-      expect(clipboard.writeText).toHaveBeenCalledWith("ssh-ed25519 AAAAagent me@box");
-      await userEvent.click(within(agentCard).getByRole("button", { name: "Auf Host eintragen …" }));
-      await userEvent.click(await screen.findByRole("button", { name: "Eintragen" }));
-      expect(api.keyCopyId).toHaveBeenCalledWith("cid", "h-web", "ssh-ed25519 AAAAagent me@box", expect.anything());
+  it("lists the agent's identities, marks key files it holds and copies or enters them", async () => {
+    vi.mocked(api.agentIdentities).mockResolvedValue({
+      socket: "/run/agent.sock",
+      identities: [
+        { algorithm: "ssh-ed25519", fingerprint: "SHA256:id_ed25519", comment: "me@box", publicKey: "ssh-ed25519 AAAAagent me@box" },
+        { algorithm: "ssh-rsa", fingerprint: "SHA256:card", comment: "", publicKey: "ssh-rsa AAAAcard" },
+      ],
     });
+    render(<KeychainScreen />);
+    const section = agentSection();
+    const agentCard = (await within(section).findByRole("heading", { name: "me@box" })).closest("li") as HTMLElement;
+    expect(within(section).getByRole("heading", { name: "SHA256:card" })).toBeInTheDocument();
+    expect(within(card("id_ed25519")).getByText("Im SSH-Agent geladen")).toBeInTheDocument();
+    expect(within(card("old")).queryByText("Im SSH-Agent geladen")).not.toBeInTheDocument();
 
-    it("says when there is no agent, when it is empty, and when it fails; reloads on request", async () => {
-      vi.mocked(api.agentIdentities).mockResolvedValueOnce({ socket: null, identities: [] });
-      const { unmount } = render(<KeychainScreen />);
-      expect(await within(agentSection()).findByText("Kein SSH-Agent gefunden (SSH_AUTH_SOCK ist nicht gesetzt).")).toBeInTheDocument();
-      unmount();
+    await userEvent.click(within(agentCard).getByRole("button", { name: "Öffentlichen Schlüssel kopieren" }));
+    expect(clipboard.writeText).toHaveBeenCalledWith("ssh-ed25519 AAAAagent me@box");
+    await userEvent.click(within(agentCard).getByRole("button", { name: "Auf Host eintragen …" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Eintragen" }));
+    expect(api.keyCopyId).toHaveBeenCalledWith("cid", "h-web", "ssh-ed25519 AAAAagent me@box", expect.anything());
+  });
 
-      vi.mocked(api.agentIdentities).mockRejectedValueOnce({ type: "config", message: "ssh-agent: refused" });
-      render(<KeychainScreen />);
-      expect(await within(agentSection()).findByRole("alert")).toHaveTextContent("ssh-agent: refused");
-      await userEvent.click(within(agentSection()).getByRole("button", { name: "Neu laden" }));
-      expect(await within(agentSection()).findByText("Der SSH-Agent hat keine Schlüssel geladen.")).toBeInTheDocument();
-      expect(within(agentSection()).queryByRole("alert")).not.toBeInTheDocument();
+  it("says when there is no agent, when it is empty, and when it fails; reloads on request", async () => {
+    vi.mocked(api.agentIdentities).mockResolvedValueOnce({ socket: null, identities: [] });
+    const { unmount } = render(<KeychainScreen />);
+    expect(await within(agentSection()).findByText("Kein SSH-Agent gefunden (SSH_AUTH_SOCK ist nicht gesetzt).")).toBeInTheDocument();
+    unmount();
+
+    vi.mocked(api.agentIdentities).mockRejectedValueOnce({ type: "config", message: "ssh-agent: refused" });
+    render(<KeychainScreen />);
+    expect(await within(agentSection()).findByRole("alert")).toHaveTextContent("ssh-agent: refused");
+    await userEvent.click(within(agentSection()).getByRole("button", { name: "Neu laden" }));
+    expect(await within(agentSection()).findByText("Der SSH-Agent hat keine Schlüssel geladen.")).toBeInTheDocument();
+    expect(within(agentSection()).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("drops the in-agent marks when a reload fails", async () => {
+    vi.mocked(api.agentIdentities).mockResolvedValueOnce({
+      socket: "/run/agent.sock",
+      identities: [{ algorithm: "ssh-ed25519", fingerprint: "SHA256:id_ed25519", comment: "me@box", publicKey: "ssh-ed25519 AAAAagent" }],
     });
+    render(<KeychainScreen />);
+    await screen.findByRole("heading", { name: "id_ed25519" });
+    expect(await within(card("id_ed25519")).findByText("Im SSH-Agent geladen")).toBeInTheDocument();
+    vi.mocked(api.agentIdentities).mockRejectedValueOnce({ type: "config", message: "ssh-agent: refused" });
+    await userEvent.click(within(agentSection()).getByRole("button", { name: "Neu laden" }));
+    expect(await within(agentSection()).findByRole("alert")).toBeInTheDocument();
+    expect(within(card("id_ed25519")).queryByText("Im SSH-Agent geladen")).not.toBeInTheDocument();
+  });
+
+  it("shows a key and its certificate (same fingerprint) as two cards without key warnings", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const same = { algorithm: "ssh-ed25519", fingerprint: "SHA256:same", comment: "me@box", publicKey: "ssh-ed25519 AAAAsame" };
+    vi.mocked(api.agentIdentities).mockResolvedValueOnce({ socket: "/run/agent.sock", identities: [same, same] });
+    render(<KeychainScreen />);
+    expect(await within(agentSection()).findAllByRole("heading", { name: "me@box" })).toHaveLength(2);
+    expect(errors).not.toHaveBeenCalled();
+    errors.mockRestore();
   });
 });
