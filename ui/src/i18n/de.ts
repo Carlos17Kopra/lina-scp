@@ -193,7 +193,7 @@ export const t = {
     pickKeyTitle: "Privaten Schlüssel wählen",
     passphrase: "Passphrase",
     passphrasePlaceholder: "Optional",
-    agentInfo: "Schlüssel werden vom laufenden SSH-Agent bezogen (SSH_AUTH_SOCK).",
+    agentInfo: "Schlüssel werden vom laufenden SSH-Agent bezogen (SSH_AUTH_SOCK), danach aus ~/.ssh/id_* ohne Passphrase.",
     kbdInfo: "Der Server fragt beim Verbinden nach Eingaben, etwa Passwort und Einmalcode (2FA).",
     jumpHost: "Jump-Host (ProxyJump)",
     noJump: "Keiner",
@@ -683,6 +683,14 @@ export const t = {
     copied: "Öffentlicher Schlüssel kopiert",
     copyFailed: "Kopieren fehlgeschlagen: Zwischenablage nicht verfügbar",
     copyId: "Auf Host eintragen …",
+    inAgent: "Im SSH-Agent geladen",
+    agent: {
+      title: "SSH-Agent",
+      reload: "Neu laden",
+      none: "Kein SSH-Agent gefunden (SSH_AUTH_SOCK ist nicht gesetzt).",
+      empty: "Der SSH-Agent hat keine Schlüssel geladen.",
+      loadFailed: (message: string) => `SSH-Agent konnte nicht gelesen werden: ${message}`,
+    },
     generate: {
       title: "Neuer Schlüssel",
       kind: "Typ",

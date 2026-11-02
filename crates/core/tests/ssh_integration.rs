@@ -40,6 +40,8 @@ impl Env {
             known_hosts: KnownHosts::new(self.known_hosts_path()),
             secrets: self.secrets.clone(),
             agent_sock,
+            // Never the developer's real ~/.ssh: default keys after the agent come from here.
+            ssh_dir: self.dir.path().join("ssh"),
             forwarded: None,
         }
     }
@@ -1236,4 +1238,18 @@ mod transfers {
         queue.close().await;
         session.close().await;
     }
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn agent_identities_lists_loaded_key() {
+    let key = &support::fixture().agent_key;
+    let agent = Agent::start(key);
+    let status = linascp_core::agent::list_agent_identities(Some(&agent.socket)).await.unwrap();
+    assert_eq!(status.socket.as_deref(), Some(agent.socket.to_str().unwrap()));
+    let public = std::fs::read_to_string(key.with_extension("pub")).unwrap();
+    let [identity] = status.identities.as_slice() else { panic!("one identity: {status:?}") };
+    assert_eq!(identity.algorithm, "ssh-ed25519");
+    assert!(identity.fingerprint.starts_with("SHA256:"));
+    assert!(public.starts_with(&identity.public_key), "{public} vs {}", identity.public_key);
 }

@@ -1,5 +1,6 @@
 //! LinaSCP core: storage, secrets, known_hosts, ssh-config, export and sessions.
 
+pub mod agent;
 pub mod connect;
 pub mod edit;
 pub mod error;

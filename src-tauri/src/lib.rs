@@ -63,6 +63,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             port_forwarding::connect_tunnels,
             port_forwarding::tunnels_close,
             keys::keys_list,
+            keys::agent_identities,
             keys::key_defaults_get,
             keys::key_generate,
             keys::key_copy_id,

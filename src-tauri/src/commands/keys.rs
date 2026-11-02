@@ -1,5 +1,6 @@
 //! Schlüsselbund (TP5b): the user's SSH key files and ssh-copy-id.
 
+use linascp_core::agent::{AgentStatus, list_agent_identities};
 use linascp_core::connect::{ConnectEvent, EmitFn, copy_public_key};
 use linascp_core::error::{CoreError, Result};
 use linascp_core::keys::{KeyDefaults, KeyInfo, KeyKind, generate_key, key_defaults, list_keys};
@@ -18,6 +19,14 @@ use crate::state::AppState;
 pub async fn keys_list(state: State<'_, AppState>) -> Result<Vec<KeyInfo>> {
     let dir = state.paths.ssh_dir.clone();
     blocking(move || list_keys(&dir)).await
+}
+
+/// Identities of the agent at `SSH_AUTH_SOCK` (TP6c); the same socket the connect flow uses.
+#[tauri::command]
+#[specta::specta]
+pub async fn agent_identities() -> Result<AgentStatus> {
+    let socket = std::env::var_os("SSH_AUTH_SOCK").map(std::path::PathBuf::from);
+    list_agent_identities(socket.as_deref()).await
 }
 
 #[tauri::command]
