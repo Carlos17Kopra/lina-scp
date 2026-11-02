@@ -89,7 +89,8 @@ als Ref ein Tag gewählt wurde. Ein erneuter Lauf für denselben Tag kann einen 
 | Gespiegelte Hosts (Modus „Spiegeln“) | `~/.ssh/config.d/linascp.conf` + `Include`-Zeile in `~/.ssh/config` (Sicherung `~/.ssh/config.linascp.bak`) |
 
 - **Integrieren** (Standard): `~/.ssh/config` wird nur gelesen; diese Hosts tragen den Hinweis „aus ssh-config“.
-- **Spiegeln:** zusätzlich werden LinaSCP-Hosts für `ssh` nutzbar gemacht.
+- **Spiegeln:** zusätzlich werden LinaSCP-Hosts für `ssh` nutzbar gemacht. Importierte Hosts kommen erst hinein,
+  wenn du sie nach dem Import bestätigst oder im Editor speicherst.
 - **Kompatibilitäts-Rendering** (Einstellungen): setzt beim nächsten Start
   `WEBKIT_DISABLE_DMABUF_RENDERER=1` – nur bei Darstellungsfehlern einschalten.
 - **Export/Import:** `.linascp`-Datei; Geheimnisse optional mit Passphrase (age) verschlüsselt.
@@ -98,3 +99,8 @@ als Ref ein Tag gewählt wurde. Ein erneuter Lauf für denselben Tag kann einen 
 
 `Ctrl+K` Suche · `Ctrl+N` neuer Host · `Ctrl+Shift+T` lokales Terminal · `Ctrl+,` Einstellungen ·
 im Terminal `Ctrl+Shift+C`/`Ctrl+Shift+V` kopieren/einfügen, Markieren kopiert, Mittelklick fügt ein.
+
+## Lizenz
+
+LinaSCP ist freie Software unter der [GNU General Public License v3.0 oder später](LICENSE)
+(`GPL-3.0-or-later`).
